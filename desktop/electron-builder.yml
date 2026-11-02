@@ -1,0 +1,52 @@
+# Configuration electron-builder — DESKTOP.md §12.
+appId: com.etskiese.kiese
+productName: KIESE
+
+directories:
+  output: dist-installer
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - resources/icon.ico
+  - resources/splash.html
+  - resources/firstRun.html
+  - package.json
+
+# Backend (PyInstaller --onedir) et frontend (build Vite) produits par
+# `scripts/build-backend.ps1`/`build-frontend.ps1` avant `build-all.ps1`.
+extraResources:
+  - from: resources/backend
+    to: backend
+  - from: resources/frontend
+    to: frontend
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.ico
+  # Signature de code recommandée (DESKTOP.md §12) : certificat Authenticode
+  # fourni via les variables d'environnement CSC_LINK / CSC_KEY_PASSWORD au
+  # moment du build — electron-builder signe automatiquement s'il les
+  # trouve, aucune configuration supplémentaire requise ici. Sans
+  # certificat, le build reste possible (non signé) : SmartScreen et
+  # certains antivirus afficheront alors un avertissement, comme documenté.
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: KIESE
+  # La désinstallation ne doit JAMAIS supprimer %APPDATA%\KIESE\
+  # (DESKTOP.md §8) : NSIS ne touche par défaut qu'au dossier
+  # d'installation du programme, jamais à %APPDATA%\<autre dossier> — on le
+  # rend explicite ici pour que ce choix ne soit jamais remis en cause par
+  # une future option mal choisie.
+  deleteAppDataOnUninstall: false
+
+publish:
+  - provider: generic
+    url: https://update.etskiese.com/kiese/
+    channel: latest

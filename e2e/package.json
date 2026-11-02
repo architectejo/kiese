@@ -1,0 +1,15 @@
+{
+  "name": "kiese-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Parcours E2E Playwright pour la plateforme ETS. KIESE",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0"
+  }
+}

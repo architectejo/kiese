@@ -1,0 +1,46 @@
+# Données réelles du client — jamais committées (CLAUDE.md §4)
+data_kiese/
+
+# Secrets et environnements
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Bases de données locales
+*.sqlite3
+*.sqlite3-journal
+db.sqlite3
+
+# Environnements virtuels Python
+.venv/
+.venv-build/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Node / build frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Archives
+*.zip
+
+# Electron / desktop packaging
+desktop/dist/
+desktop/out/
+desktop/node_modules/
+
+# Divers éditeurs / OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Playwright
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

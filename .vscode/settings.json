@@ -1,0 +1,6 @@
+{
+    "workbench.editor.autoLockGroups": {
+        "agentSessionsWelcomePage": true,
+        "vscode.markdown.editor": true
+    }
+}

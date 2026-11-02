@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.env/Scripts/python.exe manage.py makemigrations clients sales production commissions treasury finance blockchain)"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+PassengerEnabled On
+PassengerAppType wsgi
+PassengerStartupFile passenger_wsgi.py
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # 1. Laisser Apache servir directement les fichiers physiques (media/, staticfiles/)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 2. Tout le reste (routes API /api/...) → Passenger → Django
+    RewriteRule ^(.*)$ passenger_wsgi.py/$1 [QSA,L]
+</IfModule>
+
+# Autoriser l'affichage des fichiers média (images, PDF, etc.)
+<FilesMatch "\.(jpg|jpeg|png|gif|webp|svg|pdf|ico)$">
+    Header set X-Content-Type-Options "nosniff"
+    Satisfy Any
+    Allow from all
+</FilesMatch>
+
+# Sécurité : bloquer l'accès aux fichiers sensibles
+<FilesMatch "\.(env|py|pyc|sqlite3|cfg|ini)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
