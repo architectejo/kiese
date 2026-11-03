@@ -30,9 +30,11 @@ build/
 # Archives
 *.zip
 
-# Electron / desktop packaging
+# Electron / desktop packaging (artefacts de build, pas du code source)
 desktop/dist/
+desktop/dist-installer/
 desktop/out/
+desktop/resources/
 desktop/node_modules/
 
 # Divers éditeurs / OS

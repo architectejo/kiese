@@ -202,7 +202,7 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         commission.compute(float(config.annual_bonus_rate))
         commission.save(update_fields=[
             'commission_gross', 'annual_bonus',
-            'deduction_carte', 'deduction_remise', 'total_deductions',
+            'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
 
@@ -212,7 +212,7 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         commission.compute(float(config.annual_bonus_rate))
         commission.save(update_fields=[
             'commission_gross', 'annual_bonus',
-            'deduction_carte', 'deduction_remise', 'total_deductions',
+            'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
 
@@ -251,7 +251,7 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         commission.compute(float(config.annual_bonus_rate))
         commission.save(update_fields=[
             'commission_gross', 'annual_bonus',
-            'deduction_carte', 'deduction_remise', 'total_deductions',
+            'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
             'manuel_adjustment', 'manuel_notes',
         ])

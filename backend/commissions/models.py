@@ -60,6 +60,20 @@ class ClientCommission(SyncableModel):
     deduction_remise  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Remise 0.1% (FC)"))
     total_deductions  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Total Retenues (FC)"))
 
+    # BUG-122 (Q-002) : report de dette entre périodes — si `net_payable` est
+    # négatif (retenues > CM) à la clôture d'une période, le découvert N'EST
+    # JAMAIS remis à zéro ni réclamé immédiatement : il est repris comme
+    # déduction supplémentaire sur la commission du MÊME client à la période
+    # suivante, cumulatif, même logique que BP_client (CLAUDE.md §5.2).
+    # Recalculé automatiquement par `compute()` à partir de la commission la
+    # plus récente du même client sur le même nœud, précédant la période
+    # courante (peu importe un trou, cf. CLAUDE.md §5.2 appliqué par analogie :
+    # jamais remis à zéro).
+    carried_debt_in = models.DecimalField(
+        max_digits=14, decimal_places=2, default='0.00',
+        verbose_name=_("Dette report de la période précédente (FC)"),
+    )
+
     # Intermediate net values
     net_ordi  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("NET/ORDI (CM − BP)"))
     net_carte = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("NET/CARTE (NET/ORDI − CARTE)"))
@@ -119,8 +133,18 @@ class ClientCommission(SyncableModel):
             CARTE     = commission_gross × 1%
             NET/CARTE = NET/ORDI - CARTE
             REMISE    = commission_gross × 0.1%  (calculée, affichée, NON déduite)
-            NET_PAYABLE = NET/CARTE - social - prints - other
-                          (or manuel_adjustment if set)
+            NET_PAYABLE = NET/CARTE - social - prints - other - carried_debt_in
+                          (or manuel_adjustment if set — le report n'est alors
+                          PAS réappliqué : un ajustement manuel de la DIRECTION
+                          est une décision explicite qui prévaut)
+
+        BUG-122 (Q-002) : `carried_debt_in` est recalculé à chaque appel à
+        partir de la commission la plus récente du même client sur le même
+        nœud précédant strictement cette période (peu importe un éventuel
+        trou de génération) : si son `net_payable` était négatif, la valeur
+        absolue est reprise ici comme déduction supplémentaire — jamais
+        remise à 0, jamais réclamée immédiatement au client (CLAUDE.md §5.2,
+        même principe que BP_client appliqué par analogie).
         """
         order_value      = Decimal(str(self.order_value))
         commission_rate  = Decimal(str(self.commission_rate))
@@ -138,6 +162,9 @@ class ClientCommission(SyncableModel):
         self.net_ordi  = self.commission_gross - deduction_debt
         self.net_carte = self.net_ordi - self.deduction_carte
 
+        self.carried_debt_in = self._compute_carried_debt_in()
+        carried_debt_in = Decimal(str(self.carried_debt_in))
+
         # BUG-058 : REMISE est calculée et affichée (`deduction_remise`,
         # conservée ci-dessus pour l'affichage) mais n'est plus déduite du
         # Net à Payer — ni dans `total_deductions`, ni dans `net_payable` —
@@ -145,7 +172,7 @@ class ClientCommission(SyncableModel):
         # (décision client 2026-10-23). CARTE reste déduite.
         self.total_deductions = (
             deduction_debt + deduction_social + deduction_prints + deduction_other
-            + self.deduction_carte
+            + self.deduction_carte + carried_debt_in
         )
 
         bonus = self.annual_bonus if self.annual_bonus_incorporated else Decimal('0')
@@ -154,8 +181,36 @@ class ClientCommission(SyncableModel):
         else:
             self.net_payable = (
                 self.net_carte - deduction_social - deduction_prints - deduction_other
+                - carried_debt_in
                 + bonus
             )
+
+    def _compute_carried_debt_in(self) -> Decimal:
+        """
+        BUG-122 (Q-002) : montant de dette de commission reporté depuis la
+        période précédente (même client, même nœud), jamais remis à zéro.
+        Ignoré tant que `client_id`/`period_id` ne sont pas encore renseignés
+        (instance en cours de construction hors contexte réel).
+        """
+        if not self.client_id or not self.period_id:
+            return Decimal('0.00')
+        current_year, current_month = self.period.year, self.period.month
+        previous = (
+            ClientCommission.objects
+            .filter(client_id=self.client_id, period__node_id=self.period.node_id)
+            .filter(
+                models.Q(period__year__lt=current_year)
+                | models.Q(period__year=current_year, period__month__lt=current_month)
+            )
+            .order_by('-period__year', '-period__month')
+            .first()
+        )
+        if previous is None:
+            return Decimal('0.00')
+        previous_net = Decimal(str(previous.net_payable))
+        if previous_net < 0:
+            return -previous_net
+        return Decimal('0.00')
 
     def mark_paid(self, paid_by: str = ''):
         self.is_paid = True

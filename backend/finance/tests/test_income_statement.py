@@ -69,7 +69,14 @@ class IncomeStatementRevenueTests(TestCase):
 
 
 class IncomeStatementCostsAndResultTests(TestCase):
-    """Coûts matières (consommables achetés), dépenses locales, commissions payées, résultat net."""
+    """
+    Coûts matières = CONSOMMATION RÉELLE en production (mouvements EXIT),
+    pas les achats du mois (ENTRY) — Q-005 (docs/qa/QUESTIONS_CLIENT.md,
+    réponse du client du 2026-11-02, BUG-123). Chaque sortie est valorisée au
+    Coût Unitaire Moyen Pondéré (CUMP) du consommable, mis à jour par chaque
+    entrée (`ConsumableMovement.save()`), pas au prix saisi sur la sortie
+    elle-même (ignoré/figé, même logique que `InvoiceLine.unit_price`).
+    """
 
     def setUp(self):
         self.node = make_node(code='ZK2', name='Zone Test K2')
@@ -78,14 +85,34 @@ class IncomeStatementCostsAndResultTests(TestCase):
         self.cat = ExpenseCategory.objects.create(code='TESTCAT', label='Catégorie de test')
         self.gerant = make_user(role='GERANT', node=self.node)
 
-    def test_consumable_entry_cost_is_quantity_times_unit_price(self):
+    def test_entry_purchases_alone_do_not_affect_cogs(self):
+        """
+        BUG-123 : un simple approvisionnement (ENTRY), jamais consommé en
+        production (aucun EXIT), ne doit plus gonfler le coût matière du
+        Compte de Résultat — contrairement à l'ancienne méthode « achats du
+        mois ». C'est le scénario qui échouait avant correction : l'ancien
+        calcul comptait ce même ENTRY comme `cost_flour`.
+        """
         stock = ConsumableStock.objects.create(node=self.node, consumable_type='FLOUR', quantity=Decimal('0.000'), unit='sac')
         ConsumableMovement.objects.create(
             node=self.node, stock=stock, movement_type='ENTRY',
             quantity=Decimal('10.000'), unit_price=Decimal('200000.00'),
         )
         data = _income_statement_for_year(_current_year())
-        self.assertEqual(data['cost_flour'], Decimal('2000000.00'))  # 10 sacs x 200 000 FC
+        self.assertEqual(data['cost_flour'], Decimal('0.00'))
+
+    def test_exit_cost_is_valued_at_weighted_average_unit_cost(self):
+        stock = ConsumableStock.objects.create(node=self.node, consumable_type='FLOUR', quantity=Decimal('0.000'), unit='sac')
+        ConsumableMovement.objects.create(
+            node=self.node, stock=stock, movement_type='ENTRY',
+            quantity=Decimal('10.000'), unit_price=Decimal('200000.00'),
+        )
+        ConsumableMovement.objects.create(
+            node=self.node, stock=stock, movement_type='EXIT',
+            quantity=Decimal('4.000'),
+        )
+        data = _income_statement_for_year(_current_year())
+        self.assertEqual(data['cost_flour'], Decimal('800000.00'))  # 4 sacs consommés x 200 000 FC (CUMP)
 
     def test_local_expense_reduces_net_result(self):
         LocalExpense.objects.create(node=self.node, gerant=self.gerant, description='Test dépense',
@@ -115,10 +142,12 @@ class IncomeStatementCostsAndResultTests(TestCase):
         inv = Invoice.objects.create(node=self.node, client=self.client, status='DELIVERED',
                                       order_total=Decimal('100000.00'), payment_amount=Decimal('0.00'))
         InvoiceLine.objects.create(invoice=inv, bread_price=self.bp, quantity=200, unit_price=500, line_total=Decimal('100000.00'))
-        # Coût matière
+        # Coût matière = consommation réelle (EXIT), valorisée au CUMP posé par l'ENTRY.
         stock = ConsumableStock.objects.create(node=self.node, consumable_type='FLOUR', quantity=Decimal('0.000'), unit='sac')
         ConsumableMovement.objects.create(node=self.node, stock=stock, movement_type='ENTRY',
                                            quantity=Decimal('1.000'), unit_price=Decimal('30000.00'))
+        ConsumableMovement.objects.create(node=self.node, stock=stock, movement_type='EXIT',
+                                           quantity=Decimal('1.000'))
         # Dépense locale
         LocalExpense.objects.create(node=self.node, gerant=self.gerant, description='Test', amount=Decimal('5000.00'),
                                      category=self.cat, date=timezone.now().date())

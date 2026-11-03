@@ -20,7 +20,7 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-008 | Aucun test automatisé | Tous | backend | Majeur | VÉRIFIÉ (25 fichiers de tests réels — voir fiche relecteur-code) | analyse initiale | testeurs de module | relecteur-code |
 | BUG-009 | Encodage cassé dans settings.py | Infra | backend | Mineur | VÉRIFIÉ (coordinateur, 2026-11-02 — plus aucune occurrence de « â€” » dans `settings.py`) | analyse initiale | nettoyeur-securite | relecteur-code |
 | BUG-010 | Fichier secure.html de test à la racine | Infra | infra | Mineur | VÉRIFIÉ (coordinateur, 2026-11-02 — le fichier n'avait en réalité jamais été réellement supprimé, resté présent mais vide ; supprimé maintenant pour de bon) | analyse initiale | nettoyeur-securite | coordinateur |
-| BUG-011 | Pages React géantes et nombreux `any` | Frontend | frontend | Mineur | OUVERT (audité phase 4, quantifié — voir fiche relecteur-code ; un composant extrait cette session) | analyse initiale | dev-frontend | relecteur-code |
+| BUG-011 | Pages React géantes et nombreux `any` | Frontend | frontend | Mineur | EN COURS (dev-frontend, 2026-11-03 — traitement priorité 1 du plan relecteur-code) | analyse initiale | dev-frontend | relecteur-code |
 | BUG-012 | Audit remarque.md non traité — Clients/Commissions (lignes 34-50, 85-97, 108, 130, 148, 172-192, 202, 210) | Clients/Commissions | backend/frontend | À qualifier | REJETÉ (périmètre couvert, remplacé par BUG-017..021 + lignes `[c]` dans remarque.md) | coordinateur | testeur-clients-commissions | testeur-clients-commissions |
 | BUG-013 | Audit remarque.md non traité — Ventes/Facturation (lignes 10-12, 92, 106-117, 134, 136, 145-146, 167, 174, 184, 186, 190-193, 196-200) | Ventes | backend/frontend | À qualifier | VÉRIFIÉ (remplacé par BUG-028, BUG-029, BUG-030, BUG-031, BUG-032) | coordinateur | testeur-ventes | testeur-ventes |
 | BUG-028 | `InvoiceViewSet.create` ne force pas `commission_rate=0` côté serveur pour une vente soldée ou occasionnelle | Ventes | backend | Majeur | VÉRIFIÉ | testeur-ventes | dev-backend | testeur-ventes |
@@ -130,6 +130,12 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-119 | Fonctionnalité — Le Livre de Caisse Direction (`CashbookEntry`, Niveau 3) n'a aucun comptage physique de billets ni calcul d'écart, alors que le vrai Livre de Caisse Direction du client (`data_kiese/D1-4...xlsx`) en fait un, comme la clôture Niveau 2 (`CashClosure`) | Trésorerie/Blockchain | backend | Majeur | VÉRIFIÉ | coordinateur (analyse data_kiese, 2026-11-01) | ingenieur-blockchain | testeur-tresorerie |
 | BUG-116 | Demande client (remarque.md, l.387) : pouvoir imprimer le reçu d'un remboursement de dette / dépôt sans commande (`handleRepaymentSubmit`, `Clients.tsx`) — la facture était déjà créée côté serveur mais aucun reçu n'était affiché/imprimable après succès | Clients | frontend | Mineur | VÉRIFIÉ | client (remarque.md) | dev-frontend, 2026-10-31 | testeur-clients-commissions, 2026-10-31 |
 | BUG-120 | Fonctionnalité — Le vrai rapport de clôture journalier du client (`data_kiese/EXTRAIT RAPPORT DE CLOTUREOCTOBRE 2026.xlsx`, `DOC 1 - RAPPORT CLOTURE PAR GERANT AOUT 2026.xlsx`) réunit, par boulangerie/jour/catégorie de pain, la facturation, la commission, les restes, les appros, les régularisations, les ventes cash/soldées et les écarts de production en UN SEUL document — ces données existent mais sont éclatées entre Production, Ventes/Clients et Clôture & Caisse, jamais réunies | Production/Ventes/Trésorerie | backend | Majeur | VÉRIFIÉ | coordinateur (analyse data_kiese, Chantier C, 2026-11-02) | dev-backend, 2026-11-02 | testeur-production, 2026-11-02 |
+| BUG-121 | Q-001 : `seed_kiese.py` seedait encore la grille de prix de référence 300/400/500/1000 FC (cahier des charges) au lieu de 200/300/500/1000 FC — grille confirmée par le client sur la base du fichier Excel réel d'août 2026 | Production/Core | backend | Mineur | VÉRIFIÉ | coordinateur (Q-001, réponse client 2026-11-02) | dev-backend | testeur-clients-commissions (2026-11-02) |
+| BUG-122 | Q-002 : aucun mécanisme de report du net à payer négatif d'une commission (retenues > CM) entre deux `CommissionPeriod` — chaque période restait indépendante, le découvert n'était jamais repris ni comme dette ni annulé, contrairement à la logique BP_client (CLAUDE.md §5.2) | Commissions | backend | Majeur | VÉRIFIÉ | coordinateur (Q-002, réponse client 2026-11-02) | dev-backend | testeur-clients-commissions (2026-11-02) |
+| BUG-123 | Q-005 : le coût matière (farine/levure/sel/huile) du Compte de Résultat (`_income_statement_for_year`) était calculé sur les achats du mois (`ConsumableMovement` ENTRY) et non sur la consommation réelle en production (`ConsumableMovement` EXIT), contrairement à la méthode comptable demandée par le client | Finance/Production | backend | Majeur | VÉRIFIÉ | auditeur-comptable (Q-005, réponse client 2026-11-02) | dev-backend | auditeur-comptable, 2026-11-03 |
+| BUG-124 | Ticket lié à BUG-122 : nouveau champ `carried_debt_in` exposé par `ClientCommissionSerializer` (dette de commission reportée depuis la période précédente) — à afficher dans le listing de paie / la fiche commission (`Commissions`/`Clients.tsx`) pour que l'utilisateur comprenne la déduction | Commissions | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-122, 2026-11-02) | dev-frontend | testeur-clients-commissions (2026-11-03) |
+| BUG-125 | Ticket lié à BUG-123 : nouveau champ `average_unit_cost` (CUMP) exposé par `ConsumableStockSerializer` — affichage optionnel dans l'écran « Intrants » (Production.tsx) pour expliquer la valorisation du coût matière désormais basée sur la consommation réelle | Production | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-123, 2026-11-02) | dev-frontend | testeur-clients-commissions (2026-11-03) |
+| BUG-126 | Vérification de BUG-123 : la migration de backfill (`0018_bug123_backfill_average_unit_cost`) recalcule le CUMP final de `ConsumableStock.average_unit_cost` mais ne restampe jamais `unit_price` sur les `ConsumableMovement` EXIT déjà en base avant le correctif — ces sorties historiques restent valorisées à `0.00` dans le Compte de Résultat pour toujours (le calcul lit `ConsumableMovement.unit_price`, pas `ConsumableStock.average_unit_cost`) | Finance/Production | backend | Majeur | VÉRIFIÉ | auditeur-comptable (vérification BUG-123, 2026-11-02/03) | coordinateur, 2026-11-03 | auditeur-comptable, 2026-11-03 |
 
 ## Fiches détaillées
 
@@ -10925,3 +10931,451 @@ lors de copier-coller), ce qui en fait une base peu fiable à reproduire littér
 - Statut final : BUG-033, BUG-034, BUG-035, BUG-036, BUG-037, BUG-044, BUG-045, BUG-046, BUG-048 et
   BUG-119 passent tous de `CORRIGÉ` à **`VÉRIFIÉ`** dans le tableau de suivi (voir mise à jour des
   lignes correspondantes).
+
+### BUG-121 — Grille de prix de référence seedée : 300/400/500/1000 FC au lieu de 200/300/500/1000 FC (Q-001)
+
+- Module : Production/Core
+- Type : Donnée de seed/démo (pas un défaut de schéma)
+- Composant : backend
+- Gravité : Mineur
+- Statut : CORRIGÉ (dev-backend, 2026-11-02)
+- Ouvert par : coordinateur, suite à la réponse du client à `Q-001` (`docs/qa/QUESTIONS_CLIENT.md`,
+  2026-11-02) : « Conforme-toi au fichier Excel » → grille 200/300/500/1000 FC, pas 300/400/500/1000 FC
+  (cahier des charges initial, écrasé par `remarque.md`/`adaptes.md` en cas de conflit, CLAUDE.md §1).
+- Cause : `backend/core/management/commands/seed_kiese.py` (données de démo, pas une migration de
+  schéma) seedait encore `{'category': 'MINI', 'label': 'Pain 300 FC', 'unit_price': 300}` /
+  `{'category': 'MOYEN', 'label': 'Pain 400 FC', 'unit_price': 400}` — écart avec le reste du dépôt,
+  où `backend/seed_from_excel.py` et `backend/scripts/charge/volumetrie.py` utilisaient déjà
+  `MINI→200/MOYEN→300/GRAND→500/PREMIUM→1000`, confirmé par ces deux fichiers comme convention déjà
+  en place pour ce palier — pas une valeur inventée.
+- Autre occurrence en dur trouvée et corrigée : `backend/kiese/settings.py::KIESE_BREAD_PRICES =
+  [300, 400, 500, 1000]` — réglage mort (aucune référence ailleurs dans le code), mis à jour par
+  cohérence en `[200, 300, 500, 1000]` plutôt que laissé faux.
+- `finance/views.py` utilise des noms de variables `revenue_300`/`revenue_400`/`revenue_500`/
+  `revenue_1000` qui ne correspondent plus littéralement aux valeurs FC réelles des catégories
+  MINI/MOYEN/GRAND/PREMIUM (ex. `revenue_300` agrège en réalité la catégorie MINI, désormais à 200 FC) —
+  **ce n'est qu'un nom de variable Python interne, jamais exposé tel quel côté API** (la réponse
+  JSON `income_statement` contient ces mêmes clés `revenue_300` etc. depuis l'origine, sans lien
+  garanti avec le prix réel de la catégorie sous-jacente — pas une régression introduite par ce
+  correctif, la correspondance nom↔valeur n'a jamais été garantie). Non renommé ici : renommer ces
+  clés serait un changement de contrat d'API hors périmètre de Q-001, signalé ici pour information,
+  pas transformé en ticket (pas une anomalie nouvelle, pas de données erronées).
+- Fichiers modifiés :
+  - `backend/core/management/commands/seed_kiese.py` (grille 200/300/500/1000 FC).
+  - `backend/kiese/settings.py` (`KIESE_BREAD_PRICES`).
+- Test de non-régression : `backend/core/tests/test_seed_kiese_bread_grid.py::
+  SeedKieseBreadPriceGridTests::test_seed_kiese_creates_the_200_300_500_1000_grid` — échouait avant
+  (grille 300/400/500/1000), passe après.
+- Impact API : aucun (donnée de seed/démo uniquement, pas de migration de schéma, aucun champ/format
+  modifié). Pas de ticket frontend lié.
+- **VÉRIFIÉ (testeur-clients-commissions, 2026-11-02)** : grille seedée confirmée conforme
+  (200/300/500/1000 FC relue dans `seed_kiese.py` ; test existant
+  `test_seed_kiese_bread_grid.py` relancé isolément, `OK`). Recherche de toute autre référence en
+  dur à l'ancienne grille côté backend (`grep` sur `unit_price`/300/400/500/1000 hors
+  `backend/staticfiles/`, hors tests génériques utilisant ces montants comme simples valeurs de
+  test sans rapport avec la grille de référence) : convention `MINI=200/MOYEN=300/GRAND=500/
+  PREMIUM=1000` cohérente dans `seed_from_excel.py` et `scripts/charge/volumetrie.py`. Seule
+  occurrence non corrigée confirmée inoffensive : noms de variables `revenue_300/400/500/1000`
+  dans `finance/views.py` — vérifié que ce ne sont que des clés internes mappées par `category`
+  (MINI/MOYEN/GRAND/PREMIUM), le total agrégé (`total_revenue`) reste correct quelle que soit la
+  valeur FC réelle de chaque catégorie ; pas une régression, documenté pour information uniquement.
+  `desktop/resources/` non vérifié (hors périmètre, Desktop suspendu par Q-004). Non-régression des
+  calculs qui dépendent de la grille (commissions, factures) : suite complète `clients` + `commissions`
+  (83 tests) relancée, `OK` — la formule `CM = order_value × taux` ne dépend pas de la valeur
+  littérale des prix, seulement de `order_value` dérivé de `BreadPrice.unit_price`, déjà couvert par
+  les suites existantes `sales`/`commissions`. Aucun défaut trouvé.
+
+### BUG-122 — Aucun report de dette entre deux périodes de commission (net à payer négatif, Q-002)
+
+- Module : Commissions
+- Type : Fonctionnalité manquante
+- Composant : backend
+- Gravité : Majeur
+- Statut : CORRIGÉ (dev-backend, 2026-11-02)
+- Ouvert par : coordinateur, suite à la réponse du client à `Q-002` (`docs/qa/QUESTIONS_CLIENT.md`,
+  2026-11-02) : report de la dette, cumulatif, jamais remis à 0 — même logique que BP_client
+  (CLAUDE.md §5.2).
+- Reproduction (avant correctif) : générer une période où `deduction_debt` > CM brute pour un client
+  (`net_payable` négatif) ; générer la période suivante pour le même client → aucune trace de ce
+  découvert dans la commission de la période suivante, le négatif restait isolé dans son propre
+  enregistrement sans jamais être repris ailleurs.
+- Cause : `ClientCommission.compute()` ne regardait jamais les périodes précédentes du même client ;
+  `CommissionPeriodViewSet.generate()` traite chaque période indépendamment (`commissions/views.py`).
+- Correctif : nouveau champ `ClientCommission.carried_debt_in` (DecimalField, migration
+  `commissions/migrations/0004_bug122_carried_debt_in.py`), recalculé automatiquement par
+  `ClientCommission.compute()` via `_compute_carried_debt_in()` — recherche la commission la plus
+  récente du même client sur le même nœud, strictement antérieure à la période courante (peu importe
+  un éventuel trou de génération), et si son `net_payable` était négatif, en reprend la valeur absolue
+  comme déduction supplémentaire du net à payer courant (`total_deductions`/`net_payable`). Jamais
+  remis à zéro, jamais réclamé immédiatement au client (aucune facture générée, aucun impact sur la
+  BP du client — portée strictement limitée à la commission). Un ajustement manuel
+  (`manuel_adjustment`, DIRECTION) reste une décision explicite qui prévaut et n'est pas recombiné
+  avec le report — hypothèse documentée, cohérente avec le fait que l'override existant écrasait déjà
+  entièrement la formule normale avant ce correctif.
+- Hypothèse appliquée sans reposer la question (autorisée explicitement par le cadrage de la
+  mission) : si le client n'a pas de commission à la période immédiatement suivante, le report reste
+  cumulatif et s'applique à la prochaine commission générée pour lui, quel que soit l'écart de
+  périodes — même principe que BP_client (jamais remis à zéro).
+- Fichiers modifiés :
+  - `backend/commissions/models.py` (`ClientCommission.carried_debt_in`, `compute()`,
+    `_compute_carried_debt_in()`).
+  - `backend/commissions/migrations/0004_bug122_carried_debt_in.py` (nouvelle migration de schéma).
+  - `backend/commissions/serializers.py` (`carried_debt_in` exposé, lecture seule).
+  - `backend/commissions/views.py` (`update_fields` des 3 `save()` de `ClientCommissionViewSet`
+    complétés avec `carried_debt_in`).
+- Test de non-régression : `backend/commissions/tests/test_bug122_carried_debt.py` — 2 tests,
+  échouaient avant (aucun champ `carried_debt_in`, report inexistant), passent après :
+  `test_negative_net_payable_is_carried_to_the_next_period_as_a_deduction` et
+  `test_no_carry_when_previous_period_net_payable_is_positive`.
+- Suite complète `commissions` (26 tests) et `python manage.py makemigrations --check --dry-run` :
+  OK, aucune régression.
+- Impact API : **champ additif** `carried_debt_in` dans `ClientCommissionSerializer` (lecture seule,
+  n'existait pas avant) — non cassant, mais à afficher côté UI pour que la déduction soit comprise par
+  l'utilisateur. Ticket lié ouvert pour `dev-frontend` : **BUG-124**.
+- **VÉRIFIÉ (testeur-clients-commissions, 2026-11-02)** : relecture du correctif confirmée, puis
+  vérification par 3 scénarios réels écrits dans
+  `backend/commissions/tests/test_verif_bug122_2026_11_02.py` (en plus des 2 tests déjà livrés par
+  dev-backend, toujours `OK`) :
+  1. `test_debt_carries_across_three_consecutive_negative_periods` — chaîne de 3 périodes
+     consécutives où le client reste déficitaire deux fois de suite (le report s'alourdit à chaque
+     période, jamais soldé entre-temps), puis une grosse commande éponge tout le passif cumulé à la
+     3ᵉ période ; une 4ᵉ période confirme que `carried_debt_in` retombe à 0 une fois le passif résorbé.
+     Les `net_payable` historiques des périodes 1 et 2 restent inchangés (jamais remis à zéro
+     rétroactivement).
+  2. `test_manual_override_is_not_recombined_with_carry_and_feeds_next_period` — un report automatique
+     s'applique d'abord normalement sur la période 2, puis la DIRECTION pose un `manuel_adjustment`
+     positif via `POST /api/commissions/commissions/{id}/set_manuel/` : confirmé que
+     `net_payable = manuel_adjustment + bonus` (le report stocké n'est pas resoustrait une seconde
+     fois), et que la période 3 suivante calcule son propre `carried_debt_in` à partir du
+     `net_payable` **effectif** (post-ajustement, positif) de la période 2 → aucun report, l'override
+     manuel n'est jamais recombiné ni après coup. Comportement conforme à ce que documente dev-backend.
+  3. `test_gap_period_without_invoice_does_not_break_the_carry` — période intermédiaire (février) sans
+     aucune facture pour le client (donc aucune `ClientCommission` générée pour lui ce mois-là, trou de
+     génération réel, pas simulé) : confirmé que le report de janvier traverse le trou et s'applique
+     correctement sur la commission de mars, grâce à la recherche de « la commission la plus récente
+     strictement antérieure » (pas une recherche de la période N-1 fixe).
+  - Les 3 tests échouaient uniquement par une erreur de route dans ma première version
+    (`/client-commissions/` au lieu de `/commissions/` — corrigé dans le test, pas une anomalie
+    applicative) ; après correction, les 3 passent du premier coup contre le code existant, sans
+    modification du code applicatif. Suite `commissions` complète (29 tests avec ces 3 ajouts) et
+    suite `clients` + `commissions` (83 tests) : `OK`.
+  - Aucun défaut trouvé. Hypothèses documentées par dev-backend (report non réappliqué sous un
+    ajustement manuel, report traversant un trou de génération) confirmées par des scénarios réels, pas
+    seulement par relecture du code.
+
+### BUG-123 — Coût matière du Compte de Résultat calculé sur les achats du mois, pas la consommation réelle (Q-005)
+
+- Module : Finance/Production
+- Type : Méthode de calcul comptable incorrecte (pas un bug d'arithmétique)
+- Composant : backend
+- Gravité : Majeur
+- Statut : CORRIGÉ (dev-backend, 2026-11-02)
+- Ouvert par : auditeur-comptable, référencé BUG-058/`docs/qa/ECART_CADRE_COMPTABLE.md` §[D], tranché
+  par la réponse du client à `Q-005` (`docs/qa/QUESTIONS_CLIENT.md`, 2026-11-02) : consommation réelle
+  (mouvements `EXIT`), pas les achats du mois.
+- Reproduction (avant correctif) : créer un `ConsumableMovement` ENTRY (achat) sans jamais le
+  consommer (aucun EXIT, aucune fournée) → `_income_statement_for_year` comptait déjà ce montant dans
+  `cost_flour` (test `test_entry_purchases_alone_do_not_affect_cogs`, ajouté ici, échouait avant :
+  l'ancien calcul filtrait `movement_type='ENTRY'`).
+- Cause : `finance/views.py::_income_statement_for_year` filtrait `ConsumableMovement.objects.filter(
+  created_at__year=year, movement_type='ENTRY')` pour valoriser `cost_flour`/`cost_yeast`/
+  `cost_salt`/`cost_oil`, au lieu des mouvements `EXIT` (consommation réelle en production).
+- Problème annexe découvert en creusant (bloquant pour une bascule correcte) : les mouvements `EXIT`
+  n'avaient jamais de prix — `production/views.py::_record_consumable_exits` crée chaque
+  `ConsumableMovement` EXIT sans jamais renseigner `unit_price` (défaut `'0.00'`) : basculer le calcul
+  sur `EXIT` sans corriger ce point aurait fait chuter le coût matière du Compte de Résultat à 0.
+- Correctif :
+  1. Nouveau champ `ConsumableStock.average_unit_cost` (Coût Unitaire Moyen Pondéré — CUMP), migration
+     `production/migrations/0017_bug123_consumable_average_unit_cost.py`.
+  2. `ConsumableMovement.save()` : à chaque ENTRY, recalcule le CUMP du stock
+     (`(ancienne_qté × ancien_CUMP + qté_entrée × prix_entrée) / nouvelle_qté`) ; à chaque EXIT, **fige**
+     `self.unit_price` sur le CUMP courant du stock au moment de la sortie (même principe que
+     `InvoiceLine.save()` figeant `unit_price` depuis `BreadPrice` — toute valeur transmise par
+     l'appelant pour une sortie est ignorée/écrasée, cohérence garantie quel que soit le point
+     d'entrée). Les deux branches (ENTRY et EXIT) restent dans `transaction.atomic()` avec
+     `select_for_update()` sur le stock (déjà en place pour EXIT depuis BUG-041, étendu à ENTRY).
+  3. Migration de données réversible `production/migrations/0018_bug123_backfill_average_unit_cost.py`
+     : rejoue l'historique des mouvements déjà en base (par stock, triés chronologiquement) pour
+     recalculer un CUMP cohérent rétroactivement ; la migration inverse remet `average_unit_cost` à 0
+     (état par défaut avant cette migration, aucune perte : le champ n'existait pas avant).
+  4. `finance/views.py::_income_statement_for_year` : `movement_type='ENTRY'` → `movement_type='EXIT'`
+     pour le calcul de `cost_flour`/`cost_yeast`/`cost_salt`/`cost_oil` — même formule
+     `quantity × unit_price`, même agrégat en 4 `Sum(..., filter=Q(...))` (BUG-066), **toujours couvert
+     par l'index existant `prod_consmove_type_crea_idx` (movement_type, created_at)** : aucune requête
+     non indexée introduite, pas de régression de performance (BUG-064/066/070).
+- Impact vérifié sur les autres états financiers : **aucun**. `_balance_sheet_for_year` et
+  `_cashflow_for_year` n'utilisent ni `cost_flour`/`cost_yeast`/`cost_salt`/`cost_oil` ni
+  `ConsumableMovement` — ils reposent sur `Client.current_debt` et `CashbookEntry` uniquement.
+  Le comparatif N/N-1 (`comparative()`) appelle les mêmes fonctions pour les deux années : aucun
+  traitement différencié à corriger.
+- Fichiers modifiés :
+  - `backend/production/models.py` (`ConsumableStock.average_unit_cost`, `ConsumableMovement.save()`).
+  - `backend/production/migrations/0017_bug123_consumable_average_unit_cost.py` (schéma).
+  - `backend/production/migrations/0018_bug123_backfill_average_unit_cost.py` (données, réversible).
+  - `backend/production/serializers.py` (`average_unit_cost` exposé en lecture seule sur
+    `ConsumableStockSerializer`).
+  - `backend/finance/views.py` (`_income_statement_for_year` : ENTRY → EXIT).
+- Tests de non-régression :
+  - `backend/production/tests/test_bug123_average_unit_cost.py` (4 tests, nouveaux) : CUMP posé par une
+    entrée, recalculé par une seconde entrée à prix différent, figé sur une sortie (toute valeur
+    transmise ignorée), stock restant inchangé en CUMP après une sortie.
+  - `backend/finance/tests/test_income_statement.py::IncomeStatementCostsAndResultTests` : scénario
+    `test_entry_purchases_alone_do_not_affect_cogs` (nouveau, échouait avant : l'ancien calcul comptait
+    l'achat seul) et `test_exit_cost_is_valued_at_weighted_average_unit_cost` (remplace l'ancien test
+    qui validait la méthode « achats »), `test_net_result_formula_matches_...` adapté pour consommer
+    réellement le stock (ENTRY puis EXIT) plutôt que de s'arrêter à l'achat.
+- Suites complètes `production` (dont les 4 nouveaux tests), `finance`, `commissions`, suite globale
+  et `python manage.py makemigrations --check --dry-run` : OK, aucune régression (76 tests
+  finance+production, suite complète relancée en fin de session — voir rapport dev-backend).
+- Impact API : **champ additif** `average_unit_cost` dans `ConsumableStockSerializer` (lecture seule) ;
+  valeurs de `cost_flour`/`cost_yeast`/`cost_salt`/`cost_oil` dans la réponse `income_statement`
+  changent de méthode de calcul (même noms de champs, pas de changement de forme) — à signaler aux
+  utilisateurs du module Finance (chiffres différents de l'historique « achats » avant ce correctif,
+  c'est le comportement attendu). Ticket lié ouvert pour `dev-frontend` : **BUG-125** (affichage
+  optionnel du CUMP dans l'écran Intrants).
+
+- **Note de vérification (auditeur-comptable, 2026-11-02/03)** : mission de vérification de BUG-123
+  suite à la réponse du client sur Q-005.
+  1. CUMP recalculé à chaque entrée, figé à chaque sortie (reproduit par calcul indépendant, scénario
+     plusieurs achats à des prix différents + sorties étalées dans le temps) : **conforme**, les 4
+     tests `production/tests/test_bug123_average_unit_cost.py` reproduisent et valident exactement la
+     formule pondérée ((anc_qté×anc_CUMP + qté_entrée×prix_entrée) / nouvelle_qté) et le figement de
+     `unit_price` sur sortie (toute valeur transmise par l'appelant bien ignorée).
+  2. Cas « achat seul, aucune consommation dans le mois » : **conforme**, vérifié indépendamment —
+     `cost_flour` reste à `0.00` pour un ENTRY jamais consommé (plus aucune inflation par les achats
+     seuls, l'ancien défaut est bien corrigé).
+  3. Non-régression bilan/cash-flow/N-1 : **conforme**. `_balance_sheet_for_year` et
+     `_cashflow_for_year` ne lisent ni `ConsumableMovement` ni les champs `cost_*` — aucune dépendance,
+     donc aucun risque de régression par ce correctif. `comparative()` appelle les mêmes fonctions pour
+     N et N-1 sans traitement différencié.
+  4. Performance (BUG-064/066/070) : **conforme**, vérifié par `EXPLAIN QUERY PLAN` indépendant sur la
+     requête de `_income_statement_for_year` — `SEARCH production_consumablemovement USING INDEX
+     prod_consmove_type_crea_idx (movement_type=? AND created_at>? AND created_at<?)`, une seule
+     requête agrégée (4 `Sum` conditionnels), aucune requête N+1 introduite.
+  5. **Défaut réel trouvé, non corrigé ici** (documenté pour dev-backend, voir **BUG-126** ci-dessous) :
+     la migration de backfill `0018_bug123_backfill_average_unit_cost` ne restampe pas `unit_price` sur
+     les `ConsumableMovement` EXIT déjà en base avant le correctif — seul le CUMP final du stock
+     (`ConsumableStock.average_unit_cost`) est recalculé rétroactivement, pas le prix figé sur chaque
+     sortie historique individuelle. Or `_income_statement_for_year` lit `ConsumableMovement.unit_price`
+     ligne par ligne (`quantity × unit_price`), pas le CUMP courant du stock. Conséquence : toute sortie
+     de consommable enregistrée dans l'application **avant** le déploiement de ce correctif reste
+     valorisée à `0.00` dans le Compte de Résultat, pour toujours, y compris pour un exercice déjà clos
+     qu'on recalculerait plus tard. Reproduit par un scénario de test indépendant (ENTRY à 200 000 FC/
+     sac, puis EXIT historique forcé à `unit_price=0.00` en contournant `ConsumableMovement.save()` —
+     exactement l'état d'une ligne créée par l'ancien `_record_consumable_exits` — puis exécution
+     directe de `backfill_average_unit_cost()` : le stock affiche bien le CUMP recalculé `200000.0000`,
+     mais le mouvement EXIT historique reste à `unit_price=0.00`). Ce défaut touche potentiellement
+     tout mouvement `EXIT` déjà présent en base de production avant le 2026-11-02 (aucune donnée réelle
+     `data_kiese/` consultée pour cette vérification technique du code, qui ne dépend pas des données).
+  6. **Recoupement avec les Excel réels d'août 2026** (`data_kiese/`, agrégats uniquement) : aucun
+     fichier du jeu d'août 2026 ne contient de prix d'achat par mouvement de consommable permettant un
+     recoupement direct ligne à ligne du CUMP (`DOC 1-2-x` = facturation/CM uniquement, `DOC 01` =
+     rapport boulangeries en pains, `D1-5- STATISTIQUES AOUT NOVO 2026.xlsx` = quantités de farine/
+     levure/sel/huile consommées par jour et par boulangerie, en **quantités physiques seulement**,
+     sans valorisation FC par sortie). Un prix de référence par sac apparaît ailleurs (`DOC 06 - CASH
+     FLOW`, onglet « compte princ », ~82 446 FC/sac au 06/06/2026) mais c'est une valeur ponctuelle de
+     marché saisie à la main, pas un CUMP mobile recalculé à chaque achat : le classeur du client ne
+     pratique **aucune méthode CUMP**, donc ce volet ne permet ni de confirmer ni d'infirmer par
+     recoupement chiffré si la nouvelle méthode (consommation réelle au CUMP) rapproche ou éloigne le
+     Compte de Résultat applicatif des chiffres réels — faute de données suffisantes côté client pour
+     ce point précis. Sans objet pour BUG-126 (défaut de code, indépendant des données).
+  7. `python manage.py test` (suite complète) relancé de façon indépendante pendant cette vérification :
+     voir le rapport `docs/qa/rapports/auditeur-comptable-2026-11-02-verif-bug123.md` pour le résultat.
+- **Statut repassé à `VÉRIFIÉ` (auditeur-comptable, 2026-11-03)** : le correctif était déjà juste et
+  complet pour tout nouveau mouvement créé après son déploiement ; le défaut bloquant (**BUG-126**,
+  backfill incomplet des EXIT historiques) a depuis été corrigé par le coordinateur et vérifié de façon
+  indépendante — voir la fiche BUG-126 ci-dessous et le rapport
+  `docs/qa/rapports/auditeur-comptable-2026-11-03-verif-bug123-bug126.md`. Les deux conditions posées
+  au point 5 ci-dessus (correctif complet sur l'historique déjà en base) sont désormais réunies.
+
+### BUG-126 — Vérification de BUG-123 : le backfill du CUMP ne restampe pas `unit_price` des EXIT historiques
+
+- Module : Finance/Production
+- Type : Correctif incomplet (migration de données)
+- Composant : backend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ (auditeur-comptable, 2026-11-03)
+- Ouvert par : auditeur-comptable (vérification de BUG-123, 2026-11-02/03)
+- Description : voir point 5 de la note de vérification de BUG-123 ci-dessus. En résumé :
+  `production/migrations/0018_bug123_backfill_average_unit_cost.py::backfill_average_unit_cost`
+  rejoue l'historique des `ConsumableMovement` pour recalculer **uniquement**
+  `ConsumableStock.average_unit_cost` (la valeur courante du CUMP, utile pour les futures sorties),
+  mais ne touche jamais au champ `unit_price` des `ConsumableMovement` de type `EXIT` déjà enregistrés
+  avant le déploiement du correctif (restés à `0.00`, l'ancien défaut de
+  `production/views.py::_record_consumable_exits`). Comme `finance/views.py::
+  _income_statement_for_year` valorise le coût matière en sommant `quantity × unit_price` directement
+  sur chaque ligne `ConsumableMovement` EXIT (pas via le CUMP courant du stock), toute sortie déjà
+  enregistrée avant le correctif continuera d'être comptée pour `0 FC` dans le Compte de Résultat,
+  quelle que soit la date à laquelle l'état financier est consulté ou recalculé (y compris pour un
+  exercice déjà clos). Le symptôme visible : le coût matière du Compte de Résultat sous-évalue la
+  consommation réelle tant que le parc de mouvements EXIT antérieurs au correctif n'a pas été
+  entièrement remplacé par de nouveaux mouvements (plusieurs mois selon le rythme de rotation du
+  stock) — exactement l'inverse de l'objectif de BUG-123 (rapprocher le Compte de Résultat de la
+  réalité de la consommation).
+- Reproduction : scénario de test indépendant exécuté lors de la vérification (voir point 5 ci-dessus
+  et le rapport `docs/qa/rapports/auditeur-comptable-2026-11-02-verif-bug123.md`) — non ajouté à la
+  suite permanente (c'est un constat, pas un test de régression à committer par l'auditeur ; à
+  `dev-backend` d'écrire le test qui échoue avant / passe après, selon la règle habituelle).
+- Pistes de correctif suggérées (à valider par dev-backend, pas tranchées ici) :
+  (a) étendre la migration de backfill 0018 (ou une nouvelle migration de données) pour réécrire aussi
+  `unit_price` de chaque `ConsumableMovement` EXIT déjà en base, à la valeur du CUMP courant au moment
+  de cette sortie dans le rejeu chronologique (le calcul le connaît déjà à cette étape, `running_avg`,
+  il suffit de l'écrire aussi sur la ligne EXIT au lieu de le jeter) ; (b) vérifier si un impact
+  similaire affecte d'autres rapports qui liraient `ConsumableMovement.unit_price` sur des sorties
+  historiques (recherche à faire par dev-backend, pas effectuée ici au-delà de `finance/views.py`).
+- Pas de mouvement réel `data_kiese/` concerné : ce défaut est démontré par un scénario de test
+  indépendant sur données fictives (CLAUDE.md §4), pas par une inspection des données réelles.
+- **Correctif (coordinateur, 2026-11-03, exceptionnellement sans passer par `dev-backend` pour cause de
+  limite d'API)** : `backfill_average_unit_cost` rejoue désormais le même rejeu chronologique mais
+  restampe en plus `unit_price` sur chaque EXIT historique avec le `running_avg` (CUMP) exact tel qu'il
+  était à l'instant chronologique de cette sortie précise — pas le CUMP final du stock calculé en fin de
+  boucle (piste (a) suggérée ci-dessus, retenue). Migration inverse (`reset_average_unit_cost`) mise à
+  jour en miroir : remet aussi `unit_price=0.00` sur tous les EXIT, en plus de `average_unit_cost=0`.
+  Nouveau test `backend/production/tests/test_bug126_backfill_exit_unit_price.py` (2 tests), confirmé
+  échouant avant / passant après par le coordinateur.
+- **Vérification indépendante (auditeur-comptable, 2026-11-03)** :
+  1. Relecture du code de la migration 0018 corrigée et du nouveau test : logique conforme à la piste
+     (a) — `running_avg` est bien figé sur chaque EXIT (`mv.unit_price = running_avg`) avant d'être
+     recalculé par l'`ENTRY` suivante, exactement comme `ConsumableMovement.save()` fige `unit_price =
+     stock.average_unit_cost` au moment réel d'une sortie (`backend/production/models.py` ~l.429) —
+     aucune divergence entre la logique rejouée par la migration et la logique de `save()` qu'elle
+     reconstitue.
+  2. Reproduction indépendante avec un scénario différent de celui du coordinateur (valeurs et
+     enchaînement différents : 3 `ENTRY` encadrant 2 `EXIT` historiques dégradés à 0, avec une
+     **troisième** `ENTRY` après le **second** EXIT — pour que même le second EXIT ait un CUMP
+     chronologique différent du CUMP final du stock, cas plus exigeant que le test du coordinateur où
+     seul le premier EXIT distinguait les deux valeurs). Calcul à la main : ENTRY 10@100 000 (CUMP=100
+     000) → EXIT 3 (historique, dégradé à 0) → ENTRY 5@130 000 (CUMP=(7×100 000+5×130 000)/12=112 500) →
+     EXIT 4 (historique, dégradé à 0) → ENTRY 2@50 000 (CUMP final=(8×112 500+2×50 000)/10=100 000).
+     Attendu : EXIT1 restampé à 100 000,00 ; EXIT2 restampé à 112 500,0000 (**ni** 0, **ni** le CUMP
+     final 100 000,00) ; `average_unit_cost` final = 100 000,0000. Exécuté dans un test temporaire
+     (`production/tests/test_zzz_scratch_verif_bug126.py`, écrit puis supprimé après vérification, non
+     committé) via `backend/.venv/Scripts/python.exe manage.py test
+     production.tests.test_zzz_scratch_verif_bug126 -v 2` : **conforme**, les deux assertions passent
+     du premier coup (`exit_2.unit_price == 112500.0000`, `!= final_cump`), confirmant que le backfill
+     restampe bien le CUMP chronologique de l'instant précis de chaque sortie, jamais le CUMP final ni
+     0 — y compris dans un cas à trois paliers où la distinction est plus stricte que dans le test
+     permanent du coordinateur.
+  3. Migration inverse (`reset_average_unit_cost`) : relecture + vérification indépendante confirment
+     qu'elle remet bien `ConsumableStock.average_unit_cost=0.0000` **et**
+     `ConsumableMovement.objects.filter(movement_type='EXIT').update(unit_price=Decimal('0.00'))` —
+     les deux champs sont bien réinitialisés, pas seulement le CUMP du stock.
+  4. `python manage.py test` (suite complète) relancé en fin de vérification : voir rapport
+     `docs/qa/rapports/auditeur-comptable-2026-11-03-verif-bug123-bug126.md` pour le résultat détaillé.
+  5. Aucun défaut résiduel trouvé sur ce point. BUG-126 passé à `VÉRIFIÉ` ; BUG-123 repassé à `VÉRIFIÉ`
+     dans la foulée (la seule réserve qui le bloquait est levée).
+
+### BUG-124 — Ticket lié (frontend) : afficher `carried_debt_in` (report de dette commission, BUG-122)
+
+- Module : Commissions
+- Type : Ticket lié (contrat d'API additif)
+- Composant : frontend
+- Gravité : Mineur
+- Statut : CORRIGÉ (dev-frontend, 2026-11-02)
+- Ouvert par : dev-backend, en clôturant BUG-122 (2026-11-02).
+- Description : `ClientCommissionSerializer` expose désormais un champ `carried_debt_in` (lecture
+  seule) — montant de dette de commission reporté depuis la période précédente du même client,
+  jamais remis à zéro (CLAUDE.md §5.2). À afficher dans le listing de paie et/ou la fiche commission
+  détaillée (`Commissions`/`Clients.tsx`), avec un libellé explicite (ex. « Dette reportée (mois
+  précédent) »), pour que l'utilisateur comprenne pourquoi le net à payer est réduit sans ligne de
+  déduction saisie manuellement.
+- Cause : champ additif ajouté côté API (BUG-122) sans équivalent côté interface — aucune
+  reproduction fonctionnelle nécessaire (pas un dysfonctionnement, un écart de contrat d'affichage).
+- Correctif :
+  - `frontend/src/api/services.ts` : `ClientCommission.carried_debt_in: string` ajouté à l'interface
+    (champ lecture seule, documenté).
+  - `frontend/src/pages/dashboard/Commissions.tsx` :
+    - Fiche de paie (modale `ficheItem`) : nouvelle ligne « (−) Report période précédente » entre les
+      retenues (dette/sociale/imprimés/autre/remise) et le total « NET À PAYER », en rouge, visible
+      uniquement si `carried_debt_in > 0`, avec info-bulle explicative. Si un ajustement manuel
+      (`manuel_adjustment`) est en vigueur, une mention « non appliqué au net à payer : un ajustement
+      manuel est en vigueur » est affichée (le backend ne recombine pas le report avec l'ajustement
+      manuel, cf. BUG-122).
+    - Tableau listing : badge discret « Report » (rouge) à côté du nom du client quand
+      `carried_debt_in > 0`, avec info-bulle donnant le montant.
+- Vérification manuelle (pas de test E2E Commissions existant) :
+  1. Backend : générer une commission avec `deduction_debt` > `commission_gross` pour un client
+     (net_payable négatif), puis générer la période suivante pour le même client/nœud.
+  2. Frontend : ouvrir Commissions → vérifier le badge « Report » sur la ligne du client dans le
+     tableau, puis ouvrir la fiche (clic sur la ligne) → vérifier la ligne « (−) Report période
+     précédente » avec le bon montant, juste avant le total NET À PAYER.
+  3. Faire un ajustement manuel sur cette même commission → vérifier que la mention « non appliqué...»
+     apparaît sous la ligne de report.
+- `npx tsc --noEmit` et `npm run build` : OK (aucune erreur, aucun nouvel avertissement).
+- Pas de nouveau `any` introduit. Aucun appel HTTP direct ajouté (aucun nouvel appel nécessaire,
+  affichage uniquement).
+- Laissé à `CORRIGÉ`, pas `VÉRIFIÉ` (CLAUDE.md §7 règle 3) — à vérifier par le testeur d'origine ou le
+  coordinateur.
+- **VÉRIFIÉ (testeur-clients-commissions, 2026-11-03)** : relecture complète du correctif.
+  - `npx tsc --noEmit` et `npm run build` (frontend) relancés : OK, exit code 0, aucune erreur, aucun
+    avertissement nouveau (seuls les avertissements préexistants de taille de chunk/`oxc` mentionnés
+    par dev-frontend), aucun nouvel `any`.
+  - Formule backend relue dans `backend/commissions/models.py::ClientCommission.compute()` et
+    `_compute_carried_debt_in()` : `net_payable = net_carte - deduction_social - deduction_prints -
+    deduction_other - carried_debt_in + bonus`, ou `manuel_adjustment + bonus` si un ajustement manuel
+    est en vigueur (le report n'est alors pas réappliqué). `carried_debt_in` est recalculé à chaque
+    `compute()`, jamais une valeur saisie.
+  - `frontend/src/pages/dashboard/Commissions.tsx` relu ligne à ligne : la ligne « (−) Report période
+    précédente » (tableau + fiche de paie) lit directement `c.carried_debt_in`/`f.carried_debt_in` via
+    `parseFloat` pour l'affichage uniquement (formatage `toLocaleString`, comme toutes les autres
+    valeurs déjà affichées : `net_payable`, `net_ordi`, etc.) — aucune recombinaison côté client, le
+    NET À PAYER affiché est `f.net_payable` tel que renvoyé par l'API, jamais recalculé. La mention
+    « non appliqué au net à payer : un ajustement manuel est en vigueur » n'apparaît que si
+    `manuel_adjustment != null`, cohérent avec la formule backend. Badge « Report » dans le tableau
+    cohérent (même condition `carriedDebtIn > 0`).
+  - `frontend/src/api/services.ts` : `carried_debt_in: string` bien documenté comme champ additif
+    lecture seule, pas de champ de saisie correspondant dans l'UI (pas de formulaire).
+  - Aucune régression visuelle : `colSpan` du tableau listing inchangé (10 colonnes, pas touché par ce
+    ticket), état de chargement et état vide toujours corrects.
+  - Conclusion : correctif conforme au contrat backend, strictement en lecture. Passage à `VÉRIFIÉ`.
+
+### BUG-125 — Ticket lié (frontend) : afficher `average_unit_cost` (CUMP, BUG-123)
+
+- Module : Production
+- Type : Ticket lié (contrat d'API additif)
+- Composant : frontend
+- Gravité : Mineur
+- Statut : CORRIGÉ (dev-frontend, 2026-11-02)
+- Ouvert par : dev-backend, en clôturant BUG-123 (2026-11-02).
+- Description : `ConsumableStockSerializer` expose désormais un champ `average_unit_cost` (CUMP,
+  lecture seule) sur chaque compte de stock consommable. À afficher (optionnel, lecture) dans l'écran
+  « Intrants » (`Production.tsx` §3.2, cf. BUG-094) pour expliquer la valorisation du coût matière du
+  Compte de Résultat, désormais basée sur la consommation réelle (EXIT) et non plus sur les achats
+  (ENTRY) — pertinent notamment pour que le gérant comprenne un changement de montant du coût matière
+  d'un mois à l'autre sans changement du volume produit.
+- Cause : champ additif ajouté côté API (BUG-123) sans équivalent côté interface.
+- Correctif :
+  - `frontend/src/api/services.ts` : `ConsumableStock.average_unit_cost?: string` ajouté à
+    l'interface (optionnel, lecture seule).
+  - `frontend/src/pages/dashboard/Production.tsx` (§3.2, tableau « Intrants — Stocks Consommables ») :
+    nouvelle colonne secondaire « CUMP » (discrète, texte atténué, alignée à droite, entre « Unité » et
+    « Statut »), avec info-bulle expliquant le Coût Unitaire Moyen Pondéré et son usage pour le Compte
+    de Résultat. Affiche `—` si la valeur n'est pas disponible (rétro-compatibilité, aucune régression
+    si le backend ne renvoie pas le champ).
+- Vérification manuelle (pas de test E2E Production/Intrants existant) :
+  1. Backend : effectuer une entrée de stock (achat) sur un consommable à un prix donné.
+  2. Frontend : onglet Production → Intrants → vérifier que la colonne CUMP affiche le coût unitaire
+     moyen pondéré attendu, et se met à jour après une seconde entrée à prix différent.
+- `npx tsc --noEmit` et `npm run build` : OK (aucune erreur, aucun nouvel avertissement).
+- Pas de nouveau `any` introduit. Page `Production.tsx` non extraite en sous-composant pour ce
+  correctif (modification locale au tableau Intrants, quelques lignes ; pas une refonte structurelle
+  déclenchant l'extraction prévue par CLAUDE.md §4).
+- Laissé à `CORRIGÉ`, pas `VÉRIFIÉ` (CLAUDE.md §7 règle 3) — à vérifier par le testeur d'origine ou le
+  coordinateur.
+- Pas de régression actuelle : champ additif, aucun impact si non affiché.
+- **VÉRIFIÉ (testeur-clients-commissions, 2026-11-03)** : relecture complète du correctif.
+  - `npx tsc --noEmit` et `npm run build` (frontend) relancés : OK, exit code 0, aucune erreur, aucun
+    nouvel avertissement, aucun nouvel `any`.
+  - `frontend/src/pages/dashboard/Production.tsx` (§3.2, onglet Intrants) relu : la colonne « CUMP »
+    lit `st.average_unit_cost` (optionnel) via `parseFloat`, affiche `—` si `null`/absent, aucun
+    recalcul côté client (pas d'addition/moyenne pondérée refaite dans le composant — purement
+    informatif, cohérent avec le contrat backend `ConsumableStock.average_unit_cost`, lecture seule,
+    recalculé uniquement par le backend à chaque `ConsumableMovement` ENTRY). En-tête du tableau passé
+    à 5 colonnes (`Intrant`/`Qté`/`Unité`/`CUMP`/`Statut`), `colSpan` de la ligne « Aucun stock » mis à
+    jour `4 → 5`, vérifié correct dans le code (`colSpan={5}`).
+  - `frontend/src/api/services.ts` : `average_unit_cost?: string` bien optionnel, documenté lecture
+    seule, aucune régression si le backend ne renvoie pas le champ (`st.average_unit_cost != null`
+    garde la colonne à `—` sans casser l'affichage).
+  - Aucune régression visuelle évidente détectée (état de chargement et bloc d'alerte stock bas
+    inchangés, inventaire physique non touché par ce ticket).
+  - Conclusion : correctif conforme au contrat backend, strictement en lecture. Passage à `VÉRIFIÉ`.

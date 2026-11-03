@@ -329,6 +329,15 @@ class ConsumableStock(SyncableModel):
     consumable_type = models.CharField(max_length=10, verbose_name=_("Consommable"), help_text=_("Code d'un ConsumableType (Configuration)"))
     quantity        = models.DecimalField(max_digits=10, decimal_places=3, default='0.000', verbose_name=_("Quantité en stock"))
     unit            = models.CharField(max_length=20, blank=True, default='', verbose_name=_("Unité"))
+    # BUG-123 (Q-005) : coût unitaire moyen pondéré (CUMP), recalculé à chaque
+    # entrée (`ConsumableMovement.ENTRY`) et utilisé pour valoriser chaque
+    # sortie (`ConsumableMovement.EXIT`) au moment où elle est enregistrée —
+    # c'est ce coût qui permet de valoriser la consommation réelle en
+    # production (Compte de Résultat, `finance/views.py`).
+    average_unit_cost = models.DecimalField(
+        max_digits=14, decimal_places=4, default='0.0000',
+        verbose_name=_("Coût unitaire moyen pondéré (FC)"),
+    )
 
     class Meta:
         verbose_name = _("Stock Consommable")
@@ -397,6 +406,7 @@ class ConsumableMovement(SyncableModel):
             self.quantity = Decimal(str(self.quantity))
 
         is_new = self._state.adding
+
         if is_new and self.movement_type == self.MovementType.EXIT:
             # BUG-041 : une sortie ne doit jamais faire passer le stock en
             # négatif silencieusement — on refuse l'opération (cohérence
@@ -410,13 +420,42 @@ class ConsumableMovement(SyncableModel):
                         f"Stock insuffisant pour cette sortie de {self.stock.consumable_type} : "
                         f"disponible {stock.quantity}, demandé {self.quantity}."
                     )
+                # BUG-123 (Q-005) : une sortie n'a pas de « prix d'achat » qui
+                # lui soit propre — elle est valorisée au Coût Unitaire Moyen
+                # Pondéré (CUMP) du stock au moment de la sortie, comme
+                # `InvoiceLine.save()` fige `unit_price` depuis `BreadPrice` :
+                # on ignore toute valeur transmise par l'appelant pour rester
+                # cohérent (même règle quel que soit le point d'entrée).
+                self.unit_price = stock.average_unit_cost
                 super().save(*args, **kwargs)
                 stock.quantity = models.F('quantity') - self.quantity
                 stock.save(update_fields=['quantity'])
             return
 
+        if is_new and self.movement_type == self.MovementType.ENTRY:
+            with transaction.atomic():
+                stock = type(self.stock).objects.select_for_update().get(pk=self.stock_id)
+                if not isinstance(self.unit_price, Decimal):
+                    self.unit_price = Decimal(str(self.unit_price or '0'))
+                old_qty  = Decimal(str(stock.quantity))
+                old_avg  = Decimal(str(stock.average_unit_cost))
+                new_qty  = old_qty + self.quantity
+                # BUG-123 (Q-005) : coût unitaire moyen pondéré (CUMP), mis à
+                # jour à chaque approvisionnement, pour pouvoir valoriser la
+                # consommation réelle (sorties) au Compte de Résultat plutôt
+                # que les achats du mois.
+                if new_qty > 0:
+                    new_avg = ((old_qty * old_avg) + (self.quantity * self.unit_price)) / new_qty
+                else:
+                    new_avg = self.unit_price
+                super().save(*args, **kwargs)
+                stock.quantity = new_qty
+                stock.average_unit_cost = new_avg
+                stock.save(update_fields=['quantity', 'average_unit_cost'])
+            return
+
         super().save(*args, **kwargs)
-        # Update running stock balance
+        # Update running stock balance (correction/rare non-`is_new` path).
         stock = self.stock
         if self.movement_type == self.MovementType.ENTRY:
             stock.quantity = models.F('quantity') + self.quantity

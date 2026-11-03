@@ -29,6 +29,7 @@ class ClientCommissionSerializer(serializers.ModelSerializer):
             'commission_gross',
             'deduction_debt', 'deduction_social', 'deduction_prints', 'deduction_other',
             'deduction_carte', 'deduction_remise', 'total_deductions',
+            'carried_debt_in',
             'net_ordi', 'net_carte',
             'annual_bonus', 'annual_bonus_incorporated',
             'net_payable',
@@ -39,6 +40,7 @@ class ClientCommissionSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'commission_gross', 'annual_bonus',
             'deduction_carte', 'deduction_remise', 'total_deductions',
+            'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
             'paid_at', 'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]

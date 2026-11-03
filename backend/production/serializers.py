@@ -116,9 +116,9 @@ class ConsumableStockSerializer(serializers.ModelSerializer):
         model  = ConsumableStock
         fields = [
             'id', 'node', 'node_display', 'consumable_type', 'consumable_type_display',
-            'quantity', 'unit', 'node_origin', 'is_synced', 'created_at', 'updated_at',
+            'quantity', 'unit', 'average_unit_cost', 'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'average_unit_cost', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
     def get_consumable_type_display(self, obj):
         return _consumable_type_label(obj.consumable_type)

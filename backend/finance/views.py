@@ -48,12 +48,20 @@ def _income_statement_for_year(year: int) -> dict:
     revenue_1000 = revenue_agg['revenue_1000'] or Decimal('0')
     total_revenue = revenue_300 + revenue_400 + revenue_500 + revenue_1000
 
-    # COGS : coût total des approvisionnements (ENTRY) par type de consommable
-    # — une seule requête (4 Sum conditionnels)
+    # COGS : coût de la CONSOMMATION RÉELLE en production (mouvements EXIT),
+    # pas des achats du mois (ENTRY) — décision du client (Q-005,
+    # docs/qa/QUESTIONS_CLIENT.md, 2026-11-02, BUG-058/ECART_CADRE_COMPTABLE.md
+    # §[D]). Chaque sortie est valorisée au Coût Unitaire Moyen Pondéré (CUMP)
+    # du consommable au moment de la sortie (`ConsumableMovement.unit_price`,
+    # figé par `ConsumableMovement.save()` — BUG-123) : même formule
+    # `quantity × unit_price` qu'avant, seul le type de mouvement change —
+    # une seule requête (4 Sum conditionnels), toujours couverte par l'index
+    # `prod_consmove_type_crea_idx` (movement_type, created_at), donc sans
+    # régression de performance (BUG-064/066/070).
     from production.models import ConsumableMovement
     _line_cost = ExpressionWrapper(F('quantity') * F('unit_price'), output_field=DjDecimalField(max_digits=14, decimal_places=2))
-    entry_qs = ConsumableMovement.objects.filter(created_at__year=year, movement_type='ENTRY').annotate(line_cost=_line_cost)
-    cost_agg = entry_qs.aggregate(
+    exit_qs = ConsumableMovement.objects.filter(created_at__year=year, movement_type='EXIT').annotate(line_cost=_line_cost)
+    cost_agg = exit_qs.aggregate(
         cost_flour=Sum('line_cost', filter=Q(stock__consumable_type='FLOUR')),
         cost_yeast=Sum('line_cost', filter=Q(stock__consumable_type='YEAST')),
         cost_salt=Sum('line_cost', filter=Q(stock__consumable_type='SALT')),
