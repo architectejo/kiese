@@ -137,6 +137,7 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-124 | Ticket lié à BUG-122 : nouveau champ `carried_debt_in` exposé par `ClientCommissionSerializer` (dette de commission reportée depuis la période précédente) — à afficher dans le listing de paie / la fiche commission (`Commissions`/`Clients.tsx`) pour que l'utilisateur comprenne la déduction | Commissions | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-122, 2026-11-02) | dev-frontend | testeur-clients-commissions (2026-11-03) |
 | BUG-125 | Ticket lié à BUG-123 : nouveau champ `average_unit_cost` (CUMP) exposé par `ConsumableStockSerializer` — affichage optionnel dans l'écran « Intrants » (Production.tsx) pour expliquer la valorisation du coût matière désormais basée sur la consommation réelle | Production | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-123, 2026-11-02) | dev-frontend | testeur-clients-commissions (2026-11-03) |
 | BUG-126 | Vérification de BUG-123 : la migration de backfill (`0018_bug123_backfill_average_unit_cost`) recalcule le CUMP final de `ConsumableStock.average_unit_cost` mais ne restampe jamais `unit_price` sur les `ConsumableMovement` EXIT déjà en base avant le correctif — ces sorties historiques restent valorisées à `0.00` dans le Compte de Résultat pour toujours (le calcul lit `ConsumableMovement.unit_price`, pas `ConsumableStock.average_unit_cost`) | Finance/Production | backend | Majeur | VÉRIFIÉ | auditeur-comptable (vérification BUG-123, 2026-11-02/03) | coordinateur, 2026-11-03 | auditeur-comptable, 2026-11-03 |
+| BUG-128 | Demande client — « Clôture Journalière » (`ClotureJournaliere.tsx`, BUG-120) : le sélecteur de date doit permettre de voir les résultats des jours passés via un vrai calendrier dans une boîte modale, pas le sélecteur natif `<input type="date">` du navigateur (remarque.md l.394) | Production/Ventes/Trésorerie | frontend | Mineur | VÉRIFIÉ | coordinateur (remarque.md l.394) | dev-frontend, 2026-11-03 | testeur-production (2026-11-03) |
 
 ## Fiches détaillées
 
@@ -11571,4 +11572,121 @@ lors de copier-coller), ce qui en fait une base peu fiable à reproduire littér
 - BUG-011 repassé à `CORRIGÉ` dans le tableau de suivi (seul point bloquant signalé par le testeur pour
   ce ticket) — **non repassé à `VÉRIFIÉ`** par `dev-frontend` lui-même (CLAUDE.md §7 règle 3) ; à
   confirmer par `testeur-e2e` (ou `relecteur-code`, point d'ambiguïté qu'il a signalé au coordinateur
-  et non tranché ici).
+
+### BUG-128 — Calendrier dans une boîte modale pour « Clôture Journalière » (demande client, remarque.md l.394)
+
+- Module : Production/Ventes/Trésorerie
+- Type : Fonctionnalité
+- Composant : frontend
+- Gravité : Mineur
+- Statut : VÉRIFIÉ (testeur-production, 2026-11-03)
+- Ouvert par : coordinateur (remarque.md l.394 : « Dans "Clôture Journalière" on doit avoir la
+  possibilité de voir les résultats des jours passés, avoir un calendrier dans une boîte modale où on
+  peut choisir un jour et voir les résultats. »)
+- Contexte : `frontend/src/pages/dashboard/ClotureJournaliere.tsx` (BUG-120, écran déjà fonctionnel et
+  déjà capable de charger n'importe quel jour passé via `fetchReport(node, date)`) utilisait un simple
+  `<input type="date">` natif (lignes ~113-121 avant correctif) pour choisir le jour. Cela permettait
+  déjà techniquement de consulter un jour passé, mais le client demande explicitement un vrai
+  calendrier visuel dans une fenêtre modale, pas le sélecteur natif du navigateur (dont le rendu varie
+  selon le navigateur/l'OS et n'offre pas de vue mensuelle).
+
+**Correction — dev-frontend, 2026-11-03** :
+- Cause : fonctionnalité d'ergonomie jamais implémentée (demande nouvelle, pas un bug de calcul — le
+  chargement du rapport pour une date arbitraire fonctionnait déjà correctement).
+- Nouveau composant réutilisable `frontend/src/components/shared/CalendarPicker.tsx` : calendrier
+  mensuel pur (grille 7 colonnes, navigation mois précédent/suivant, jour sélectionné mis en évidence
+  en couleur d'accent, aujourd'hui entouré distinctement, aucune dépendance npm ajoutée — le besoin
+  (un seul mois, sélection d'un jour unique, pas de plage de dates) ne justifiait pas l'ajout d'une
+  librairie ; composant autonome sans état de type `any`, entièrement typé). Il ne gère pas sa propre
+  boîte modale : il est conçu pour être posé à l'intérieur de n'importe quelle instance de
+  `components/shared/Modal.tsx` (ou ailleurs), conformément à la consigne de ne pas recréer un système
+  de modale séparé.
+- `ClotureJournaliere.tsx` : le `<input type="date">` est remplacé par un bouton (icône `FiCalendar` +
+  date courante formatée en français `JJ/MM/AAAA`) qui ouvre une `Modal` (largeur réduite `360px`,
+  adaptée à un calendrier, pleine largeur responsive sous 360 px comme le reste de `Modal.tsx`)
+  contenant le `CalendarPicker`. Au clic sur un jour valide, `onSelect` met à jour l'état `date` et
+  ferme immédiatement la modale ; le `useEffect` existant (`fetchReport(effectiveNodeCode, date)`)
+  recharge alors le rapport sans aucun changement de logique de récupération des données — réutilise
+  exactement le flux déjà en place depuis BUG-120.
+- Dates futures (point 5 du mandat) : lecture de
+  `backend/production/views.py::DailyClosureReportView.get()`/`_build_daily_closure_report()` — le
+  serveur ne rejette jamais explicitement une date future (`parse_date` seul filtre, aucune comparaison
+  à `date.today()`) ; pour une date future, les `querysets` (`ProductionSession`, `Invoice`,
+  `BreadDisposal`, `BreadTransfer`…) filtrés par cette date sont simplement vides, et la vue renvoie un
+  rapport avec `categories: []` et des totaux à zéro — pas d'erreur HTTP, juste un rapport vide (déjà
+  couvert par l'état « Aucune donnée pour cette boulangerie à la date du … » existant dans
+  `ClotureJournaliere.tsx`). Comme un rapport de clôture d'un jour qui n'est pas encore arrivé n'a
+  aucun sens métier (CLAUDE.md §5.4 : la clôture porte sur une production/vente déjà réalisée), le
+  blocage est fait **côté UI** plutôt que de laisser l'utilisateur sélectionner une date qui ne produira
+  jamais de résultat exploitable : `CalendarPicker` reçoit une prop `maxDate` (par défaut la date du
+  jour, calculée côté client) et grise/désactive tout jour strictement postérieur dans la grille — pas
+  de blocage serveur à ouvrir côté `dev-backend` (le comportement serveur actuel — rapport vide, pas
+  d'erreur — reste parfaitement sûr même si l'UI était contournée, aucun ticket backend nécessaire).
+- Fichiers modifiés :
+  - `frontend/src/components/shared/CalendarPicker.tsx` (nouveau).
+  - `frontend/src/pages/dashboard/ClotureJournaliere.tsx` : import de `Modal`/`CalendarPicker`, état
+    `calendarOpen`, remplacement du bloc `<input type="date">` par le bouton + la `Modal` contenant le
+    calendrier.
+- Vérifications :
+  - `npx tsc --noEmit` → aucune erreur.
+  - `npm run build` → build réussi (avertissements pré-existants inchangés : minifieur `oxc` non
+    supporté pour les chunks legacy, taille de chunk > 500 kB — sans rapport avec ce ticket).
+  - Pas de nouveau `any` introduit ; aucun appel HTTP direct ajouté (le composant ne fait aucun appel
+    réseau, il délègue entièrement à `fetchReport` déjà en place).
+  - Aucun test E2E existant ne couvre `ClotureJournaliere.tsx` (écran récent, BUG-120) — étapes de
+    vérification manuelle pour le testeur :
+    1. Se connecter en GERANT (ou HQ), ouvrir « Clôture Journalière ».
+    2. Cliquer sur le bouton date (icône calendrier) → la modale s'ouvre **sans défilement de page**,
+       entièrement visible (vérifié visuellement à 360 px, 768 px et 1440 px — `Modal.tsx` plafonne à
+       `max-height: 90vh` et scrolle son propre contenu si besoin, jamais la page).
+    3. Naviguer avec les flèches « mois précédent »/« mois suivant » : le mois affiché change, le jour
+       sélectionné reste surligné s'il est visible dans le mois courant, aujourd'hui reste entouré dans
+       n'importe quel mois affiché.
+    4. Cliquer sur un jour passé valide : la modale se ferme, le rapport se recharge pour ce jour
+       (vérifier la valeur affichée en haut du bouton et le contenu du tableau).
+    5. Vérifier que les jours strictement postérieurs à aujourd'hui sont grisés et non cliquables (pas
+       de `onSelect` déclenché, pas de rechargement).
+    6. Redimensionner la fenêtre à 360 px (POS) : la modale (largeur max 360 px déjà adaptée) et la
+       grille du calendrier restent entièrement lisibles et cliquables (cases ≥ 36 px, boutons de
+       navigation ≥ 32 px — cibles tactiles suffisantes).
+- BUG-128 passé à `CORRIGÉ` dans le tableau de suivi — **non passé à `VÉRIFIÉ`** par `dev-frontend`
+  lui-même (CLAUDE.md §7 règle 3) ; demande d'ergonomie pure sans test automatisé associé, à confirmer
+  par le coordinateur ou un testeur de module (pas de testeur dédié identifié pour
+  `ClotureJournaliere.tsx` dans l'organisation actuelle — signalé ici au cas où le coordinateur veuille
+  trancher l'assignation, comme pour BUG-011/BUG-127).
+
+**Vérification — testeur-production, 2026-11-03** (désigné vérificateur comme déjà en charge de cet
+écran sous BUG-120) :
+- Relecture de code `CalendarPicker.tsx`/`ClotureJournaliere.tsx` : aucun `any`, aucun appel réseau dans
+  `CalendarPicker` (composant purement UI, entièrement contrôlé via `value`/`onSelect`/`maxDate`),
+  réutilisation stricte de `fetchReport` déjà en place (BUG-120). `npx tsc --noEmit` propre.
+- Vérification dynamique réelle (pas seulement manuelle/visuelle) : backend (`runserver`) + frontend
+  (`vite`) lancés en local, script Playwright ad hoc (temporaire, non committé) en compte GERANT K1
+  (`demo_gerant_k1_e2e`), exécuté sur les projets Playwright `bureau` (1440×900) et `pos` (360×740) de
+  `e2e/playwright.config.ts` :
+  - Ouverture de la modale, navigation mois précédent → mois suivant ×2 → mois précédent ×2 (retour net
+    au mois courant) : affichage correct de Octobre 2026 / Novembre 2026 / Janvier 2027 selon la
+    navigation, aucun débordement horizontal ni à 360 px ni à 1440 px.
+  - Aujourd'hui (3 novembre 2026) visuellement distinct (bordure couleur accent) du jour sélectionné
+    (fond plein orange) quand les deux coïncident en ouverture initiale ; capturé en écran.
+  - Un jour futur proche (dans le mois affiché) est bien désactivé (`disabled`, non cliquable, opacité
+    réduite) ; tout le mois de janvier 2027 (futur) est entièrement grisé/non cliquable.
+  - Sélection d'un jour passé (2 novembre 2026, veille) : la modale se ferme immédiatement, le bouton
+    affiche bien `02/11/2026`, et le rapport se recharge réellement pour ce jour (pas de rechargement
+    bloqué sur l'ancien jour ni de désynchronisation) — confirmé par les valeurs du tableau de
+    décomposition (catégories K1 : Pain de 200/500/1000) qui changent entre l'état initial et l'état
+    après sélection.
+  - Largeur POS 360 px : modale et grille du calendrier entièrement lisibles, aucune case tronquée,
+    aucun défilement horizontal, cibles tactiles suffisantes (cases ≥ 36 px).
+- Anomalie d'environnement sans rapport avec BUG-128, documentée ici pour information et non pour
+  blocage : le compte de démonstration `demo_gerant_k1_e2e` (`e2e/fixtures/comptes.ts`) avait un mot de
+  passe en base ne correspondant plus à `PASSWORD` (`DemoE2E2026!`) — probablement une dérive locale de
+  `backend/db.sqlite3` entre deux sessions d'agents. Remis en cohérence avec le mot de passe documenté
+  dans la fixture (`u.set_password('DemoE2E2026!')`, compte fictif `demo_*`, aucune donnée client réelle
+  concernée — CLAUDE.md §4 « Données et sécurité »). Signalé au coordinateur pour information : si
+  d'autres comptes `demo_*` dérivent de la même façon, la suite Playwright `e2e/` échouera dès la
+  connexion pour des raisons sans rapport avec le code testé.
+- **BUG-128 → `VÉRIFIÉ`.** Aucun défaut trouvé sur le comportement du calendrier lui-même. Script
+  Playwright ad hoc supprimé après vérification (non committé, pas de test E2E permanent créé pour ce
+  ticket — à prévoir si `ClotureJournaliere.tsx` reçoit un testeur de module dédié, comme déjà signalé
+  par `dev-frontend`).

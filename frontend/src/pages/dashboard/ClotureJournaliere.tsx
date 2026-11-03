@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { FiRefreshCw, FiAlertTriangle, FiCalendar } from 'react-icons/fi';
 import { coreApi, productionApi, BakeryNode, DailyClosureReport } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
+import { Modal } from '@/components/shared/Modal';
+import { CalendarPicker } from '@/components/shared/CalendarPicker';
 
 // BUG-120 (volet frontend) : écran dédié « Clôture Journalière », réunissant en un seul
 // document le rapport consolidé par catégorie de pain exigé par le client (son document
@@ -37,6 +39,9 @@ export const ClotureJournaliere: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repartitionMode, setRepartitionMode] = useState<RepartitionMode>('QUANTITE');
+  // BUG-128 : calendrier dans une boîte modale (remarque.md l.394) à la place du
+  // sélecteur natif du navigateur, pour revoir les résultats des jours passés.
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   const myNodeCode = nodes.find(n => n.id === user?.node)?.code || '';
   const effectiveNodeCode = user?.can_access_all_nodes ? selectedNodeCode : myNodeCode;
@@ -109,16 +114,15 @@ export const ClotureJournaliere: React.FC = () => {
                 ))}
               </select>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <FiCalendar style={{ color: 'hsl(var(--text-secondary))' }} />
-              <input
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="form-input"
-                style={{ height: '32px', fontSize: '0.75rem' }}
-              />
-            </div>
+            <button
+              type="button"
+              onClick={() => setCalendarOpen(true)}
+              className="btn btn-secondary"
+              style={{ height: '32px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 10px' }}
+            >
+              <FiCalendar />
+              <span>{new Date(date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
+            </button>
             <button
               onClick={() => fetchReport(effectiveNodeCode, date)}
               disabled={loading || !effectiveNodeCode}
@@ -332,6 +336,23 @@ export const ClotureJournaliere: React.FC = () => {
           </div>
         </>
       )}
+
+      <Modal
+        isOpen={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        title="Choisir une date"
+        subtitle="Consultez le rapport de clôture d'un jour passé."
+        maxWidth="360px"
+        contentPadding="12px 16px 16px"
+      >
+        <CalendarPicker
+          value={date}
+          onSelect={(iso) => {
+            setDate(iso);
+            setCalendarOpen(false);
+          }}
+        />
+      </Modal>
     </div>
   );
 };
