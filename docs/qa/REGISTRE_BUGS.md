@@ -20,7 +20,8 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-008 | Aucun test automatisé | Tous | backend | Majeur | VÉRIFIÉ (25 fichiers de tests réels — voir fiche relecteur-code) | analyse initiale | testeurs de module | relecteur-code |
 | BUG-009 | Encodage cassé dans settings.py | Infra | backend | Mineur | VÉRIFIÉ (coordinateur, 2026-11-02 — plus aucune occurrence de « â€” » dans `settings.py`) | analyse initiale | nettoyeur-securite | relecteur-code |
 | BUG-010 | Fichier secure.html de test à la racine | Infra | infra | Mineur | VÉRIFIÉ (coordinateur, 2026-11-02 — le fichier n'avait en réalité jamais été réellement supprimé, resté présent mais vide ; supprimé maintenant pour de bon) | analyse initiale | nettoyeur-securite | coordinateur |
-| BUG-011 | Pages React géantes et nombreux `any` | Frontend | frontend | Mineur | CORRIGÉ (dev-frontend, 2026-11-03 — priorités 1+2 complètes, 0 `any` restant dans frontend/src/ ; priorité 3 (découpage de pages) non traitée, reste ouverte pour une prochaine session) | analyse initiale | dev-frontend | relecteur-code |
+| BUG-011 | Pages React géantes et nombreux `any` | Frontend | frontend | Mineur | VÉRIFIÉ (2026-11-03 — BUG-127, seul point bloquant, revérifié et corrigé ; coordinateur a tranché : vérificateur = `testeur-e2e`, pas `relecteur-code`) | analyse initiale | dev-frontend | testeur-e2e |
+| BUG-127 | Régression introduite par BUG-011 : `getErrorDetail` n'affiche plus les erreurs de validation DRF sans clé `detail` (ex. `{"from_node":["Ce champ est obligatoire."]}`) — message générique "Erreur." affiché à la place, perte d'information par rapport au comportement avant BUG-011 (`... \|\| JSON.stringify(d) \|\| 'Erreur.'`) | Production/Trésorerie | frontend | Majeur | VÉRIFIÉ (2026-11-03) | testeur-e2e (vérification BUG-011, 2026-11-03) | dev-frontend | testeur-e2e, 2026-11-03 |
 | BUG-012 | Audit remarque.md non traité — Clients/Commissions (lignes 34-50, 85-97, 108, 130, 148, 172-192, 202, 210) | Clients/Commissions | backend/frontend | À qualifier | REJETÉ (périmètre couvert, remplacé par BUG-017..021 + lignes `[c]` dans remarque.md) | coordinateur | testeur-clients-commissions | testeur-clients-commissions |
 | BUG-013 | Audit remarque.md non traité — Ventes/Facturation (lignes 10-12, 92, 106-117, 134, 136, 145-146, 167, 174, 184, 186, 190-193, 196-200) | Ventes | backend/frontend | À qualifier | VÉRIFIÉ (remplacé par BUG-028, BUG-029, BUG-030, BUG-031, BUG-032) | coordinateur | testeur-ventes | testeur-ventes |
 | BUG-028 | `InvoiceViewSet.create` ne force pas `commission_rate=0` côté serveur pour une vente soldée ou occasionnelle | Ventes | backend | Majeur | VÉRIFIÉ | testeur-ventes | dev-backend | testeur-ventes |
@@ -11395,3 +11396,179 @@ lors de copier-coller), ce qui en fait une base peu fiable à reproduire littér
   - Aucune régression visuelle évidente détectée (état de chargement et bloc d'alerte stock bas
     inchangés, inventaire physique non touché par ce ticket).
   - Conclusion : correctif conforme au contrat backend, strictement en lecture. Passage à `VÉRIFIÉ`.
+
+### BUG-127 — Régression introduite par BUG-011 : perte du détail de validation DRF sans clé `detail` dans `getErrorDetail`
+
+- Module : Production (confirmé) / Trésorerie (passage par `getErrorDetail` identique, endpoint
+  concerné ne renvoie en pratique toujours `detail`, donc non reproductible aujourd'hui — voir note)
+- Composant : frontend
+- Gravité : Majeur (perte d'information utilisateur sur une erreur de saisie réelle et courante,
+  pas de perte de données — la requête échoue proprement côté serveur, seul le message affiché est
+  dégradé)
+- Statut : OUVERT
+- Ouvert par : testeur-e2e, en vérifiant BUG-011 (mission demandée par le coordinateur, 2026-11-03)
+- Référence : rapport `docs/qa/rapports/testeur-e2e-2026-11-03-verif-bug011-regression.md`
+- Description :
+  Le refactoring mécanique de BUG-011 a remplacé, dans plusieurs gestionnaires `catch` de
+  `Production.tsx`, l'idiome :
+  ```ts
+  const d = err?.response?.data;
+  setXError(d?.detail || JSON.stringify(d) || 'Erreur.');
+  ```
+  par :
+  ```ts
+  setXError(getErrorDetail(err, 'Erreur.'));
+  ```
+  `getErrorDetail` (nouveau `frontend/src/api/errors.ts`) ne regarde **que** la clé `detail` de la
+  réponse ; si elle est absente, il renvoie directement le `fallback` générique, **sans** retenter le
+  `JSON.stringify(d)` que l'ancien code utilisait comme filet de sécurité. Or les trois actions
+  concernées appellent des `ModelViewSet.create()` DRF standards, qui renvoient en cas de validation
+  invalide un objet de la forme `{"<champ>": ["<message>"]}`, **sans clé `detail`** — c'est le
+  comportement DRF par défaut pour les erreurs de sérialiseur (`raise_exception` sur un
+  `Serializer.is_valid()`), distinct des réponses `Response({'detail': ...})` explicitement
+  construites à la main dans les `@action` personnalisées.
+  Conséquence concrète : un gérant qui oublie de sélectionner un champ obligatoire dans l'un de ces
+  trois formulaires voit un message « Erreur. » sans aucune indication du champ en cause, alors
+  qu'avant BUG-011 il voyait (de façon moins jolie mais exploitable) le JSON brut, ex.
+  `{"from_node":["Ce champ est obligatoire."]}`.
+- Reproduction (confirmée par appel direct à l'API, contournant totalement le frontend, pour isoler
+  le problème du rendu React) :
+  ```bash
+  TOKEN=$(curl -s -X POST http://localhost:8000/api/core/auth/login/ -H "Content-Type: application/json" \
+    -d '{"username":"demo_gerant_k1_e2e","password":"<mot de passe du compte>"}' \
+    | python -c "import sys,json; print(json.load(sys.stdin)['access'])")
+
+  # 1. Production.tsx::handleTransferSubmit (tError, l.325) — transfert sans boulangerie d'origine
+  curl -s -X POST http://localhost:8000/api/production/transfers/ -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" -d '{"notes":"test","lines":[]}'
+  # → {"from_node":["Ce champ est obligatoire."]}  (HTTP 400, aucune clé "detail")
+
+  # 2. Production.tsx::handleDisposalSubmit (dError, l.381) — sortie sans fournée sélectionnée
+  curl -s -X POST http://localhost:8000/api/production/disposals/ -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"bread_price":1,"disposal_type":"DECLASSED","quantity":5,"unit_price_sold":"100","notes":""}'
+  # → {"session":["Ce champ est obligatoire."]}  (HTTP 400, aucune clé "detail")
+
+  # 3. Production.tsx::handleApproSubmit (approError, l.304) — mouvement de stock sans stock choisi
+  curl -s -X POST http://localhost:8000/api/production/movements/ -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" -d '{"movement_type":"ENTRY","quantity":"5","unit_price":"100"}'
+  # → {"stock":["Ce champ est obligatoire."]}  (HTTP 400, aucune clé "detail")
+  ```
+  Dans les trois cas, `getErrorDetail(err, 'Erreur.')` renvoie aujourd'hui `'Erreur.'` (vérifié en
+  relisant `frontend/src/api/errors.ts` : `detail` est `undefined`, la condition
+  `typeof detail === 'string' && detail.trim() !== ''` est fausse, le code retourne le `fallback`),
+  alors que le code précédent BUG-011 aurait affiché le JSON ci-dessus.
+- Emplacements exacts (après le commit `b0c5291`) :
+  - `frontend/src/pages/dashboard/Production.tsx:304` (`handleApproSubmit` → `approError`)
+  - `frontend/src/pages/dashboard/Production.tsx:325` (`handleTransferSubmit` → `tError`)
+  - `frontend/src/pages/dashboard/Production.tsx:381` (`handleDisposalSubmit` → `dError`)
+- Note sur `Treasury.tsx::handleGenerateReport` (`generateError`, même idiome `getErrorDetail`
+  remplaçant un `JSON.stringify` perdu) : **non retenu comme reproductible aujourd'hui** — relecture
+  de `backend/treasury/views.py::FacturierReportViewSet.generate()` : cette action personnalisée
+  renvoie systématiquement `Response({'detail': ...}, status=400)` pour chacun de ses cas d'erreur
+  (date invalide, nœud manquant, etc.), jamais un objet de validation DRF brut — donc `detail` est
+  toujours présent en pratique pour cet endpoint précis, et `getErrorDetail` s'y comporte de façon
+  strictement équivalente à l'ancien code. Mentionné ici pour mémoire (même motif de code, risque nul
+  tel qu'actuellement implémenté côté backend — à surveiller si `generate()` est un jour modifié pour
+  déléguer à un `Serializer` standard).
+- Suggestion de correctif (à valider par `dev-frontend`, le testeur n'écrit pas de code applicatif) :
+  deux options, non tranchées ici :
+  1. Modifier `getErrorDetail` pour retenter un résumé des erreurs de champ avant de retourner le
+     `fallback` (ex. premier message de la première clé non vide), au prix d'une fonction un peu plus
+     complexe mais réutilisable partout.
+  2. Revenir, aux trois emplacements listés ci-dessus (et vérifier qu'il n'y en a pas d'autres dans la
+     base, cette fiche ne couvrant que les trois confirmés par test manuel), à la gestion manuelle
+     avec filet `JSON.stringify(d)`, comme cela a été fait à raison ailleurs dans le même commit
+     (ex. `Treasury.tsx::handleClosureSubmit` → `closureError`, qui a conservé
+     `(d ? JSON.stringify(d) : undefined)` et n'est donc pas concerné par cette régression).
+- Test à écrire par `dev-frontend` en corrigeant (CLAUDE.md §7 règle 4) : test qui échoue avant/passe
+  après, par ex. unitaire sur `getErrorDetail`/le composant, simulant une réponse `{"from_node":[...]}`
+  sans clé `detail` et vérifiant que le message affiché contient le texte de validation, pas
+  seulement le `fallback` générique.
+- Conséquence sur BUG-011 : le ticket ne peut pas passer à `VÉRIFIÉ` tant que celui-ci reste `OUVERT`
+  — remis à `EN COURS` dans le tableau de suivi.
+
+- **Correctif (dev-frontend, 2026-11-03)** : voir `docs/qa/rapports/dev-frontend-2026-11-03-bug127.md`.
+  Correctif à la racine dans `getErrorDetail` (`frontend/src/api/errors.ts`) plutôt qu'aux 3
+  emplacements de `Production.tsx` — si `detail` est absent mais que la réponse est un objet
+  (erreurs de validation DRF par champ), construit désormais un message lisible `"<champ> :
+  <message(s)>"` (plusieurs champs joints par ` — `), ne retombe sur le `fallback` générique que si
+  aucun champ exploitable n'est trouvé. 6 tests unitaires ajoutés (`frontend/src/api/errors.test.ts`,
+  nouveau `vitest` ajouté au projet, aucun outillage de test n'existait avant), 2 d'entre eux
+  reproduisant exactement les payloads de cette fiche, confirmés échouant sur le code d'avant
+  correctif (`b0c5291`) et passant après, par `dev-frontend` lui-même.
+- **VÉRIFIÉ (testeur-e2e, 2026-11-03)** — vérification ciblée, décidée par le coordinateur (pas
+  besoin de rejouer la suite E2E complète, le seul point résiduel étant cette régression) :
+  1. `cd frontend && npx vitest run src/api/errors.test.ts` → 6/6 passés.
+  2. `cd frontend && npx tsc --noEmit` → aucune erreur.
+  3. Rejeu des 3 appels `curl` exacts de la reproduction ci-dessus contre l'API réelle (serveurs de
+     dev relancés, mot de passe temporaire posé sur `demo_gerant_k1_e2e` puis restauré
+     `unusable` immédiatement après, même protocole que d'habitude) : les 3 réponses serveur sont
+     **inchangées** (`{"from_node":[...]}`, `{"session":[...]}`, `{"stock":[...]}`, toujours sans clé
+     `detail` — confirme que le correctif est bien côté frontend, pas une modification du contrat
+     API).
+  4. Appel direct de `getErrorDetail` (code réel de `frontend/src/api/errors.ts`, exécuté via
+     `vite-node`, pas une relecture) sur les 3 payloads exacts renvoyés par l'étape 3 — résultat
+     confirmé pour chacun des 3 emplacements signalés dans la fiche :
+     - transfert sans `from_node` → `"from_node : Ce champ est obligatoire."`
+     - sortie de pains sans `session` → `"session : Ce champ est obligatoire."`
+     - mouvement de stock sans `stock` → `"stock : Ce champ est obligatoire."`
+     Plus aucun message générique « Erreur. » sur ces 3 cas confirmés.
+  5. Suite backend complète relancée en tâche de fond pendant cette vérification
+     (`manage.py test clients sales treasury production commissions core finance blockchain`,
+     démarrée lors de la session précédente, menée à terme cette fois) : **433 tests, `OK`, aucun
+     échec** — confirme qu'aucune régression backend n'accompagne ce correctif (purement frontend).
+  6. Conclusion : correctif conforme à la reproduction signalée, aucun défaut résiduel trouvé sur le
+     périmètre de cette fiche. Passage à `VÉRIFIÉ`. BUG-011 repassé à `VÉRIFIÉ` dans la foulée (seul
+     point bloquant levé).
+
+- **Statut : CORRIGÉ** (`dev-frontend`, 2026-11-03).
+- Cause : voir description ci-dessus — `getErrorDetail` (`frontend/src/api/errors.ts`) ne lisait que
+  la clé `detail` et retombait directement sur le `fallback` générique si elle était absente, sans
+  retenter l'ancien filet `JSON.stringify(d)`.
+- Correctif retenu : **option 1** de la fiche (généricité dans `getErrorDetail`, pas de retour au
+  `JSON.stringify` aux 3 emplacements de `Production.tsx`, pour ne pas réintroduire la duplication que
+  BUG-011 voulait éliminer). `getErrorDetail` ajoute une étape intermédiaire entre la lecture de
+  `detail` et le `fallback` : si `response.data` est un objet (forme DRF standard
+  `{"<champ>": ["<message>", ...], ...}`), construit un message lisible en joignant, pour chaque champ
+  en erreur, `"<champ> : <message(s)>"`, les champs étant séparés par ` — ` (ex.
+  `"from_node : Ce champ est obligatoire."` ou, pour plusieurs champs,
+  `"session : Ce champ est obligatoire. — quantity : Assurez-vous que cette valeur est supérieure à
+  0."`). Ne retombe sur le `fallback` que si aucun champ exploitable n'a été trouvé (objet vide, ou
+  valeurs qui ne sont ni des chaînes ni des tableaux de chaînes). Aucun nouveau `any` introduit (types
+  `unknown`/`Record<string, unknown>` avec garde de type `isPlainObject`).
+  `Production.tsx` (3 emplacements cités) et `Treasury.tsx::handleGenerateReport` n'ont **pas été
+  modifiés** : ils réutilisent déjà `getErrorDetail`, le correctif à la racine leur profite
+  automatiquement, sans duplication.
+- Fichiers modifiés :
+  - `frontend/src/api/errors.ts` (correctif).
+  - `frontend/src/api/errors.test.ts` (nouveau, test unitaire — voir ci-dessous).
+  - `frontend/package.json` / `package-lock.json` (ajout de `vitest` en devDependency + script
+    `"test": "vitest run"` ; aucune suite de tests frontend n'existait avant ce ticket, condition
+    nécessaire pour écrire un test unitaire exploitable comme demandé par le mandat).
+- Test écrit (`frontend/src/api/errors.test.ts`, `npx vitest run`) : 6 cas sur `getErrorDetail` —
+  réponse avec `detail` (comportement historique conservé), réponse DRF sans `detail` avec un champ en
+  erreur (cas BUG-127, `from_node`), réponse DRF sans `detail` avec plusieurs champs (cas BUG-127,
+  `session`+`quantity`, reproduit le payload exact des 3 appels `curl` de la fiche), réponse objet vide
+  (fallback), erreur non-axios sans message (fallback), `Error` native (message conservé). **Confirmé
+  par rejeu** : les 2 tests marqués BUG-127 échouent (`'Erreur.'` reçu au lieu du message attendu) sur
+  le code d'avant correctif (`git stash` temporaire de `errors.ts` sur le commit `b0c5291`), passent
+  après — satisfait CLAUDE.md §7 règle 4. Les 3 appels `curl` documentés plus haut dans cette fiche
+  restent valides pour une vérification manuelle de bout en bout (serveur réel + frontend) ; non
+  rejoués ici (ticket corrigé au niveau unitaire, à la racine, sans toucher au comportement serveur ni
+  au reste de `Production.tsx`).
+- Vérifications :
+  - `npx vitest run` → 6/6 tests passés.
+  - `npx tsc --noEmit` → aucune erreur.
+  - `npm run build` → build réussi (avertissements pré-existants inchangés : minifieur `oxc` non
+    supporté pour les chunks legacy, taille de chunk > 500 kB — sans rapport avec ce ticket).
+  - Pas de nouveau `any` introduit.
+  - Comment le testeur peut revérifier : rejouer les 3 commandes `curl` de cette fiche contre le
+    frontend réel (formulaires Appro / Transfert / Sortie de pains de `Production.tsx`, en omettant
+    volontairement le champ obligatoire visé) et constater que le message affiché contient désormais le
+    nom du champ et le message DRF au lieu de « Erreur. » générique ; ou `cd frontend && npx vitest
+    run`.
+- BUG-011 repassé à `CORRIGÉ` dans le tableau de suivi (seul point bloquant signalé par le testeur pour
+  ce ticket) — **non repassé à `VÉRIFIÉ`** par `dev-frontend` lui-même (CLAUDE.md §7 règle 3) ; à
+  confirmer par `testeur-e2e` (ou `relecteur-code`, point d'ambiguïté qu'il a signalé au coordinateur
+  et non tranché ici).
