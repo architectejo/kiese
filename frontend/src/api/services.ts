@@ -93,6 +93,14 @@ export interface InvoiceLine {
   loss?: string;
 }
 
+// Ligne agrégée renvoyée par `/api/sales/invoices/daily_summary/` (groupée par
+// boulangerie `node__code` et `payment_type`, CLAUDE.md §5.5 niveau 1).
+export interface DailySummaryRow {
+  node__code?: string;
+  payment_type: 'CASH' | 'CREDIT';
+  total: string | number;
+}
+
 export interface Invoice {
   id: string;
   receipt_number: string;
@@ -322,6 +330,8 @@ export interface ConsumableStock {
   consumable_type_display?: string;
   quantity: string;
   unit: string;
+  /** BUG-125 : Coût Unitaire Moyen Pondéré, recalculé à chaque entrée de stock. */
+  average_unit_cost?: string;
 }
 
 export interface BreadTransferLine {
@@ -432,6 +442,8 @@ export interface ClientCommission {
   deduction_other: string;
   deduction_carte: string;
   deduction_remise: string;
+  /** BUG-124 : report automatique du net à payer négatif de la période précédente (jamais remis à zéro), lecture seule. */
+  carried_debt_in: string;
   total_deductions: string;
   net_ordi: string;
   net_carte: string;
@@ -545,6 +557,8 @@ export interface CashClosure {
   id: string;
   node: string;
   node_display?: string;
+  gerant?: string | null;
+  gerant_display?: string | null;
   date: string;
   total_entries: string;
   total_expenses: string;
@@ -962,7 +976,7 @@ export const salesApi = {
   cleanupExpired: () =>
     apiClient.post('/api/sales/invoices/cleanup_expired/'),
   dailySummary: () =>
-    apiClient.get('/api/sales/invoices/daily_summary/'),
+    apiClient.get<DailySummaryRow[]>('/api/sales/invoices/daily_summary/'),
   breadSummary: (params?: Record<string, string>) =>
     apiClient.get<{
       by_category: Array<{ unit_price: number; total_qty: number; total_fc: number }>;
@@ -1010,7 +1024,7 @@ export const productionApi = {
   transfers: {
     list: (params?: Record<string, string>) =>
       getList<BreadTransfer>('/api/production/transfers/', params),
-    create: (data: Partial<BreadTransfer>) =>
+    create: (data: Partial<Omit<BreadTransfer, 'lines'>> & { lines?: Array<{ bread_price: number; quantity_sent: number }> }) =>
       apiClient.post<BreadTransfer>('/api/production/transfers/', data),
     respond: (id: string, approved: boolean, lines?: Array<{ bread_price: number; quantity_sent: number }>) =>
       apiClient.post(`/api/production/transfers/${id}/respond_to_request/`, { approved, lines }),
@@ -1107,7 +1121,9 @@ export const treasuryApi = {
     list: (params?: Record<string, string>) =>
       getList<CashbookEntry>('/api/treasury/cashbook/', params),
     integrityCheck: () =>
-      apiClient.get('/api/treasury/cashbook/integrity_check/'),
+      apiClient.get<{ chain_valid: boolean; tampered_count: number }>(
+        '/api/treasury/cashbook/integrity_check/'
+      ),
     periodSummary: (params?: Record<string, string>) =>
       apiClient.get('/api/treasury/cashbook/period_summary/', { params }),
   },

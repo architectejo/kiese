@@ -124,7 +124,7 @@ export const Users: React.FC = () => {
       }
       handleCloseModal();
       fetchData();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving user', error);
       alert('Erreur lors de l\'enregistrement. Veuillez vérifier les données (le nom d\'utilisateur doit être unique).');
     } finally {

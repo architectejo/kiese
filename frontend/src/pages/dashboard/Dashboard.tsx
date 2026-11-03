@@ -5,7 +5,7 @@ import {
   FiActivity, FiAlertTriangle, FiCheckCircle, FiRefreshCw,
   FiChevronRight, FiCalendar, FiPrinter
 } from 'react-icons/fi';
-import { salesApi, clientsApi, productionApi, Client, Invoice, ProductionSession } from '@/api/services';
+import { salesApi, clientsApi, productionApi, Client, Invoice, ProductionSession, DailySummaryRow } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
@@ -36,7 +36,7 @@ interface DashboardData {
   clients: Client[];
   riskAlerts: Client[];
   invoices: Invoice[];
-  dailySummaryRows: any[];
+  dailySummaryRows: DailySummaryRow[];
   dailySummary: { total: number; cash: number; credit: number };
   todaySessions: ProductionSession[];
 }
@@ -73,9 +73,9 @@ export const Dashboard: React.FC = () => {
         clientsApi.activeLastMonth(),
       ]);
 
-      const summaryRaw: any[] = Array.isArray(summaryRes.data) ? summaryRes.data : [];
-      const dailyCash = summaryRaw.filter(s => s.payment_type === 'CASH').reduce((a, s) => a + parseFloat(s.total || 0), 0);
-      const dailyCredit = summaryRaw.filter(s => s.payment_type === 'CREDIT').reduce((a, s) => a + parseFloat(s.total || 0), 0);
+      const summaryRaw: DailySummaryRow[] = Array.isArray(summaryRes.data) ? summaryRes.data : [];
+      const dailyCash = summaryRaw.filter(s => s.payment_type === 'CASH').reduce((a, s) => a + (parseFloat(String(s.total)) || 0), 0);
+      const dailyCredit = summaryRaw.filter(s => s.payment_type === 'CREDIT').reduce((a, s) => a + (parseFloat(String(s.total)) || 0), 0);
 
       const sortedInvoices = [...invoicesRes.data].sort((a, b) =>
         new Date(b.invoice_date || b.created_at).getTime() - new Date(a.invoice_date || a.created_at).getTime()
@@ -83,7 +83,7 @@ export const Dashboard: React.FC = () => {
 
       setData({
         totalClients: clientsRes.data.length,
-        activeClients: (activeRes.data as any).count ?? clientsRes.data.filter(c => c.is_active).length,
+        activeClients: activeRes.data.count ?? clientsRes.data.filter(c => c.is_active).length,
         clients: clientsRes.data,
         riskAlerts: riskRes.data,
         invoices: sortedInvoices,
@@ -150,11 +150,12 @@ export const Dashboard: React.FC = () => {
 
   // ── Per-boulangerie breakdowns for KPI detail modals ──────────────────────
   const caByNode: Record<string, { cash: number; credit: number }> = {};
-  (data?.dailySummaryRows || []).forEach((r: any) => {
+  (data?.dailySummaryRows || []).forEach((r) => {
     const key = r.node__code || '—';
     if (!caByNode[key]) caByNode[key] = { cash: 0, credit: 0 };
-    if (r.payment_type === 'CASH') caByNode[key].cash += parseFloat(r.total || 0);
-    else caByNode[key].credit += parseFloat(r.total || 0);
+    const amount = parseFloat(String(r.total)) || 0;
+    if (r.payment_type === 'CASH') caByNode[key].cash += amount;
+    else caByNode[key].credit += amount;
   });
 
   const volumeByNode: Record<string, { breads: number; flour: number; sessions: number }> = {};

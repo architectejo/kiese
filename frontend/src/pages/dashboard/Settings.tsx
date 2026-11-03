@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import {
   FiSettings, FiSave, FiRefreshCw, FiGlobe, FiLock,
   FiAlertTriangle, FiCheckCircle, FiSliders, FiPercent,
@@ -6,6 +7,7 @@ import {
   FiPlus, FiX
 } from 'react-icons/fi';
 import { coreApi, productionApi, SiteConfig, BreadPrice, ExpenseCategory, ConsumableType, BakeryNode, ColisDistribution } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 export const Settings: React.FC = () => {
   const { user } = useAuthStore();
@@ -109,12 +111,12 @@ export const Settings: React.FC = () => {
         rice_sacks: colisRiceSacks || '0', rice_value: colisRiceValue || '0',
         meat_kg: colisMeatKg || '0', meat_value: colisMeatValue || '0',
         cash_amount: colisCash || '0', notes: colisNotes,
-      } as any);
+      });
       setColisLabel(''); setColisRiceSacks(''); setColisRiceValue('');
       setColisMeatKg(''); setColisMeatValue(''); setColisCash(''); setColisNotes('');
       setShowColisForm(false);
       await loadColis();
-    } catch (err: any) { setColisError(err?.response?.data?.detail || 'Erreur.'); }
+    } catch (err: unknown) { setColisError(getErrorDetail(err, 'Erreur.')); }
     finally { setColisSubmitting(false); }
   };
 
@@ -156,9 +158,9 @@ export const Settings: React.FC = () => {
       setForm(res.data);
       setSaveStatus('success');
       setSaveMsg('Configuration enregistrée avec succès.');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSaveStatus('error');
-      setSaveMsg(err?.response?.data?.detail || 'Erreur lors de la sauvegarde.');
+      setSaveMsg(getErrorDetail(err, 'Erreur lors de la sauvegarde.'));
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveStatus('idle'), 4000);
@@ -174,7 +176,7 @@ export const Settings: React.FC = () => {
       setSaveStatus('success');
       setSaveMsg(`Site web ${newVal ? 'ACTIVÉ (vitrine visible)' : 'DÉSACTIVÉ (dashboard uniquement)'}`);
       setTimeout(() => setSaveStatus('idle'), 4000);
-    } catch (err: any) {
+    } catch {
       setForm(prev => ({ ...prev, on_line: !newVal })); // rollback
       setSaveStatus('error');
       setSaveMsg('Impossible de changer le mode. Vérifiez les permissions.');
@@ -195,8 +197,8 @@ export const Settings: React.FC = () => {
       const res = await coreApi.breadPrices.create({ label: bpNewLabel, unit_price: parseFloat(bpNewPrice), category: bpNewCategory.trim().toUpperCase() as BreadPrice['category'], is_active: true });
       setBreadPrices(prev => [...prev, res.data]);
       setBpNewLabel(''); setBpNewPrice(''); setShowBpAdd(false);
-    } catch (err: any) {
-      setBpAddError(err?.response?.data?.detail || 'Erreur de création.');
+    } catch (err: unknown) {
+      setBpAddError(getErrorDetail(err, 'Erreur de création.'));
     }
     setBpLoading(false);
   };
@@ -219,8 +221,8 @@ export const Settings: React.FC = () => {
       const res = await coreApi.breadPrices.update(editingBpId, { label: bpEditLabel, unit_price: parseFloat(bpEditPrice), category: bpEditCategory.trim().toUpperCase() as BreadPrice['category'], is_active: bpEditActive });
       setBreadPrices(prev => prev.map(bp => bp.id === editingBpId ? res.data : bp));
       setEditingBpId(null);
-    } catch (err: any) {
-      setBpEditError(err?.response?.data?.detail || 'Erreur de mise à jour.');
+    } catch (err: unknown) {
+      setBpEditError(getErrorDetail(err, 'Erreur de mise à jour.'));
     }
   };
 
@@ -229,8 +231,8 @@ export const Settings: React.FC = () => {
     try {
       await coreApi.breadPrices.delete(id);
       setBreadPrices(prev => prev.filter(bp => bp.id !== id));
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Suppression impossible — ce tarif est peut-être déjà utilisé.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Suppression impossible — ce tarif est peut-être déjà utilisé.'));
     }
   };
 
@@ -244,8 +246,11 @@ export const Settings: React.FC = () => {
       const res = await coreApi.expenseCategories.create({ code: ecNewCode.toUpperCase(), label: ecNewLabel, is_active: true });
       setExpenseCategories(prev => [...prev, res.data]);
       setEcNewCode(''); setEcNewLabel(''); setShowEcAdd(false);
-    } catch (err: any) {
-      setEcAddError(err?.response?.data?.detail || err?.response?.data?.code?.[0] || 'Erreur de création.');
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; code?: string[] } | undefined)
+        : undefined;
+      setEcAddError(d?.detail || d?.code?.[0] || 'Erreur de création.');
     }
     setEcLoading(false);
   };
@@ -266,8 +271,8 @@ export const Settings: React.FC = () => {
       const res = await coreApi.expenseCategories.update(editingEcId, { code: ecEditCode.toUpperCase(), label: ecEditLabel, is_active: ecEditActive });
       setExpenseCategories(prev => prev.map(ec => ec.id === editingEcId ? res.data : ec));
       setEditingEcId(null);
-    } catch (err: any) {
-      setEcEditError(err?.response?.data?.detail || 'Erreur de mise à jour.');
+    } catch (err: unknown) {
+      setEcEditError(getErrorDetail(err, 'Erreur de mise à jour.'));
     }
   };
 
@@ -276,8 +281,8 @@ export const Settings: React.FC = () => {
     try {
       await coreApi.expenseCategories.delete(id);
       setExpenseCategories(prev => prev.filter(ec => ec.id !== id));
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Suppression impossible — cette catégorie est utilisée par des dépenses existantes.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Suppression impossible — cette catégorie est utilisée par des dépenses existantes.'));
     }
   };
 
@@ -291,8 +296,11 @@ export const Settings: React.FC = () => {
       const res = await productionApi.consumableTypes.create({ code: ctNewCode.toUpperCase(), label: ctNewLabel, unit: ctNewUnit, is_active: true });
       setConsumableTypes(prev => [...prev, res.data]);
       setCtNewCode(''); setCtNewLabel(''); setCtNewUnit(''); setShowCtAdd(false);
-    } catch (err: any) {
-      setCtAddError(err?.response?.data?.detail || err?.response?.data?.code?.[0] || 'Erreur de création.');
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; code?: string[] } | undefined)
+        : undefined;
+      setCtAddError(d?.detail || d?.code?.[0] || 'Erreur de création.');
     }
     setCtLoading(false);
   };
@@ -314,8 +322,8 @@ export const Settings: React.FC = () => {
       const res = await productionApi.consumableTypes.update(editingCtId, { code: ctEditCode.toUpperCase(), label: ctEditLabel, unit: ctEditUnit, is_active: ctEditActive });
       setConsumableTypes(prev => prev.map(ct => ct.id === editingCtId ? res.data : ct));
       setEditingCtId(null);
-    } catch (err: any) {
-      setCtEditError(err?.response?.data?.detail || 'Erreur de mise à jour.');
+    } catch (err: unknown) {
+      setCtEditError(getErrorDetail(err, 'Erreur de mise à jour.'));
     }
   };
 
@@ -324,8 +332,8 @@ export const Settings: React.FC = () => {
     try {
       await productionApi.consumableTypes.delete(id);
       setConsumableTypes(prev => prev.filter(ct => ct.id !== id));
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Suppression impossible — des stocks non nuls existent encore pour ce consommable.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Suppression impossible — des stocks non nuls existent encore pour ce consommable.'));
     }
   };
 

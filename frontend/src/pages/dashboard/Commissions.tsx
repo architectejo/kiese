@@ -5,6 +5,7 @@ import {
   FiPrinter, FiDownload
 } from 'react-icons/fi';
 import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 
@@ -87,9 +88,8 @@ export const Commissions: React.FC = () => {
       const res = await commissionsApi.periods.generate({ node: genNode, month: genMonth, year: genYear });
       setGenerateResult(`${res.data.generated} commission(s) générée(s) pour ${MONTHS_FR[genMonth - 1]} ${genYear}.`);
       await loadData();
-    } catch (err: any) {
-      const d = err?.response?.data;
-      setGenerateError(d?.detail || 'Erreur lors de la génération.');
+    } catch (err: unknown) {
+      setGenerateError(getErrorDetail(err, 'Erreur lors de la génération.'));
     } finally {
       setIsGenerating(false);
     }
@@ -404,6 +404,7 @@ export const Commissions: React.FC = () => {
                   const carte     = parseFloat(c.deduction_carte || '0');
                   const rate      = parseFloat(c.commission_rate || '0') * 100;
                   const hasManuel = c.manuel_adjustment != null;
+                  const carriedDebtIn = parseFloat(c.carried_debt_in || '0');
                   return (
                     <tr
                       key={c.id}
@@ -415,6 +416,17 @@ export const Commissions: React.FC = () => {
                       <td style={{ padding: '8px 10px', fontWeight: 800 }}>
                         {c.client_display || c.client}
                         {hasManuel && <span title="Ajustement manuel" style={{ marginLeft: '4px', color: 'hsl(var(--color-warning))', fontSize: '0.6rem' }}>✎</span>}
+                        {carriedDebtIn > 0 && (
+                          <span
+                            title={`Report période précédente (dette de commission non remise à zéro) : −${carriedDebtIn.toLocaleString('fr-FR')} FC`}
+                            style={{
+                              marginLeft: '4px', fontSize: '0.56rem', fontWeight: 700, padding: '1px 5px', borderRadius: '4px',
+                              color: 'hsl(var(--color-danger))', backgroundColor: 'hsl(var(--color-danger) / 0.1)',
+                            }}
+                          >
+                            Report
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: '8px 10px' }}>{parseFloat(c.order_value || '0').toLocaleString('fr-FR')}</td>
                       <td style={{ padding: '8px 10px' }}>
@@ -494,6 +506,7 @@ export const Commissions: React.FC = () => {
         const prints   = parseFloat(f.deduction_prints   || '0');
         const other    = parseFloat(f.deduction_other    || '0');
         const remise   = parseFloat(f.deduction_remise   || '0');
+        const carriedDebtIn = parseFloat(f.carried_debt_in || '0');
         const net      = parseFloat(f.net_payable        || '0');
         const rate     = parseFloat(f.commission_rate    || '0') * 100;
         const isDir    = user?.role === 'DIRECTION' || user?.is_superuser;
@@ -532,6 +545,19 @@ export const Commissions: React.FC = () => {
                 {prints > 0 && row('(−) Frais imprimés',      prints, 'hsl(var(--color-danger))', '−')}
                 {other  > 0 && row('(−) Retenues diverses',   other,  'hsl(var(--color-danger))', '−')}
                 {remise > 0 && row('(−) Remise 0,1%',         remise, 'hsl(var(--color-danger))', '−')}
+                {carriedDebtIn > 0 && (
+                  <div style={{ padding: '5px 0', borderBottom: '1px solid hsl(var(--border-color) / 0.4)', fontSize: '0.76rem' }} title="Dette de commission non réglée lors de la période précédente, reportée et jamais remise à zéro">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ color: 'hsl(var(--color-danger))', fontWeight: 700 }}>(−) Report période précédente</span>
+                      <span style={{ fontWeight: 800, color: 'hsl(var(--color-danger))' }}>−{fmt(carriedDebtIn)}</span>
+                    </div>
+                    {f.manuel_adjustment != null && (
+                      <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '2px' }}>
+                        ↳ non appliqué au net à payer : un ajustement manuel est en vigueur
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {f.manuel_adjustment != null && (
                   <div style={{ padding: '5px 0', borderBottom: '1px solid hsl(var(--border-color) / 0.4)', fontSize: '0.76rem' }}>

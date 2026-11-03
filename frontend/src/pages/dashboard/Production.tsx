@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import {
   FiGrid, FiPlus, FiAlertTriangle, FiArrowRight, FiCheckCircle,
   FiRefreshCw, FiPackage, FiTruck, FiX
@@ -7,6 +8,7 @@ import {
   productionApi, coreApi, ConsumableStock, ConsumableCount, FlourHistoryEntry,
   ProductionSession, BreadTransfer, BreadDisposal, BreadStock, BakeryNode, BreadPrice
 } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
@@ -113,7 +115,7 @@ export const Production: React.FC = () => {
 
   // §3.4 Disposal form
   const [dSession, setDSession]       = useState('');
-  const [dType, setDType]             = useState('DECLASSED');
+  const [dType, setDType]             = useState<BreadDisposal['disposal_type']>('DECLASSED');
   const [dBreadPrice, setDBreadPrice] = useState('');
   const [dQty, setDQty]               = useState(0);
   const [dUnitPrice, setDUnitPrice]   = useState(0);
@@ -229,13 +231,13 @@ export const Production: React.FC = () => {
           count_date: today,
           physical_quantity: qty,
           notes: '',
-        } as any)
+        })
       ));
       setCountValues({});
       const r = await productionApi.counts.list({ node: nodeId });
       setLastCounts(Array.isArray(r.data) ? r.data : []);
     } catch (err: unknown) {
-      setCountError((err as any)?.response?.data?.detail || 'Erreur lors du comptage.');
+      setCountError(getErrorDetail(err, 'Erreur lors du comptage.'));
     } finally {
       setCountSubmitting(false);
     }
@@ -263,18 +265,20 @@ export const Production: React.FC = () => {
         .filter(([, qty]) => qty !== '' && parseFloat(qty.replace(',', '.')) > 0)
         .map(([ct, qty]) => ({ consumable_type: ct, quantity: parseFloat(qty.replace(',', '.')) }));
       await productionApi.sessions.create({
-        flour_sacks_used: flourSacks as any,
+        flour_sacks_used: flourSacks.toString(),
         date: new Date().toISOString().split('T')[0],
         team: selTeam,
-        lines: lines as any,
+        lines,
         consumables_used: consumablesPayload,
       });
       setQuantities({});
       setConsumablesUsed({ SALT: '', YEAST: '', OIL: '' });
       await loadData();
-    } catch (err: any) {
-      const d = err?.response?.data;
-      setProdError(d?.detail || d?.non_field_errors?.[0] || JSON.stringify(d) || 'Erreur.');
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
+        : undefined;
+      setProdError(d?.detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur.');
     }
   };
 
@@ -292,12 +296,12 @@ export const Production: React.FC = () => {
         unit_price: approPrice || '0',
         supplier: approSupplier,
         description: approDesc || 'Approvisionnement',
-      } as any);
+      });
       setApproStock(''); setApproQty(''); setApproPrice(''); setApproDesc(''); setApproSupplier('');
       setShowApproModal(false);
       await loadData();
-    } catch (err: any) {
-      setApproError(err?.response?.data?.detail || JSON.stringify(err?.response?.data) || 'Erreur.');
+    } catch (err: unknown) {
+      setApproError(getErrorDetail(err, 'Erreur.'));
     } finally {
       setApproSaving(false);
     }
@@ -314,11 +318,11 @@ export const Production: React.FC = () => {
     if (lines.length === 0) { setTError('Indiquez au moins une quantité de pain demandée.'); return; }
     try {
       // from_node = the supplier (tFromNode), to_node = user's own node (set server-side)
-      await productionApi.transfers.create({ from_node: tFromNode, notes: tNotes, lines } as any);
+      await productionApi.transfers.create({ from_node: tFromNode, notes: tNotes, lines });
       setTFromNode(''); setTLines({}); setTNotes('');
       await loadData();
-    } catch (err: any) {
-      setTError(err?.response?.data?.detail || JSON.stringify(err?.response?.data) || 'Erreur.');
+    } catch (err: unknown) {
+      setTError(getErrorDetail(err, 'Erreur.'));
     }
   };
 
@@ -368,13 +372,13 @@ export const Production: React.FC = () => {
     try {
       await productionApi.disposals.create({
         session: dSession,
-        bread_price: Number(dBreadPrice) as any, disposal_type: dType as any,
+        bread_price: Number(dBreadPrice), disposal_type: dType,
         quantity: dQty, unit_price_sold: dUnitPrice.toString(), notes: dNotes,
-      } as any);
+      });
       setDQty(0); setDUnitPrice(0); setDNotes(''); setDSession('');
       await loadData();
-    } catch (err: any) {
-      setDError(err?.response?.data?.detail || JSON.stringify(err?.response?.data) || 'Erreur.');
+    } catch (err: unknown) {
+      setDError(getErrorDetail(err, 'Erreur.'));
     }
   };
 
@@ -490,25 +494,34 @@ export const Production: React.FC = () => {
             <table className="premium-table">
               <thead>
                 <tr style={{ fontSize: '0.6rem', textTransform: 'uppercase' }}>
-                  <th>Intrant</th><th style={{ textAlign: 'right' }}>Qté</th><th>Unité</th><th style={{ textAlign: 'center' }}>Statut</th>
+                  <th>Intrant</th><th style={{ textAlign: 'right' }}>Qté</th><th>Unité</th>
+                  <th style={{ textAlign: 'right' }} title="Coût Unitaire Moyen Pondéré, recalculé à chaque entrée de stock">CUMP</th>
+                  <th style={{ textAlign: 'center' }}>Statut</th>
                 </tr>
               </thead>
               <tbody style={{ fontSize: '0.72rem' }}>
                 {stocks.map(st => {
                   const qty = parseFloat(st.quantity);
                   const isLow = qty < 10;
+                  const cump = st.average_unit_cost != null ? parseFloat(st.average_unit_cost) : null;
                   return (
                     <tr key={st.id}>
                       <td style={{ fontWeight: 700 }}>{STOCK_ICONS[st.consumable_type] || '📦'} {displayStock(st.consumable_type_display || st.consumable_type)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 800, color: isLow ? 'hsl(var(--color-danger))' : undefined }}>{qty}</td>
                       <td style={{ color: 'hsl(var(--text-muted))' }}>{st.unit}</td>
+                      <td
+                        style={{ textAlign: 'right', color: 'hsl(var(--text-muted))', fontSize: '0.68rem' }}
+                        title="Coût Unitaire Moyen Pondéré (CUMP) : coût d'achat moyen par unité, recalculé à chaque entrée de stock. Utilisé pour valoriser la consommation réelle au Compte de Résultat."
+                      >
+                        {cump != null ? `${cump.toLocaleString('fr-FR')} FC` : '—'}
+                      </td>
                       <td style={{ textAlign: 'center' }}>
                         <span className={`badge ${isLow ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.5rem' }}>{isLow ? 'ALERTE' : 'OK'}</span>
                       </td>
                     </tr>
                   );
                 })}
-                {stocks.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))' }}>Aucun stock</td></tr>}
+                {stocks.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))' }}>Aucun stock</td></tr>}
               </tbody>
             </table>
           )}
@@ -1174,7 +1187,7 @@ export const Production: React.FC = () => {
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Nature de la Sortie *</label>
-                <select value={dType} onChange={e => setDType(e.target.value)} className="form-input" style={{ fontSize: '0.72rem', height: '30px' }}>
+                <select value={dType} onChange={e => setDType(e.target.value as BreadDisposal['disposal_type'])} className="form-input" style={{ fontSize: '0.72rem', height: '30px' }}>
                   {Object.entries(DISPOSAL_CREATE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
                 {dType === 'REMAINING' && (

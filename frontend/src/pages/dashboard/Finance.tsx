@@ -6,7 +6,7 @@ import {
 import { TripleTrendChart, TripleChartDataPoint } from '@/components/shared/Charts';
 import {
   financeApi, commissionsApi, coreApi,
-  FinancialYear, IncomeStatement, BalanceSheet,
+  FinancialYear, IncomeStatement, BalanceSheet, Cashflow,
   Doc1Row, CmHistoryRow, BakeryNode,
 } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
@@ -18,7 +18,7 @@ export const Finance: React.FC = () => {
   const [selectedYearId, setSelectedYearId] = useState<string>('');
   const [incomeData, setIncomeData] = useState<IncomeStatement | null>(null);
   const [balanceData, setBalanceData] = useState<BalanceSheet | null>(null);
-  const [cashflowData, setCashflowData] = useState<any | null>(null);
+  const [cashflowData, setCashflowData] = useState<Cashflow | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreatingYear, setIsCreatingYear] = useState(false);
 
@@ -56,7 +56,7 @@ export const Finance: React.FC = () => {
   const handleCreateCurrentYear = async () => {
     setIsCreatingYear(true);
     try {
-      await financeApi.years.create({ year: new Date().getFullYear(), is_current: true } as any);
+      await financeApi.years.create({ year: new Date().getFullYear(), is_current: true });
       loadYears();
     } catch (err) {
       console.error('Failed to create financial year', err);

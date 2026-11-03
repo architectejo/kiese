@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import { Link } from 'react-router-dom';
 import {
   FiBook, FiRefreshCw, FiCheckCircle, FiAlertTriangle,
@@ -10,6 +11,7 @@ import {
   ProductionSession, BakeryNode, ExpenseCategory, DisbursementVoucher, SuggestedCa,
   DirectionCashCount
 } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 
@@ -369,11 +371,13 @@ export const Treasury: React.FC = () => {
         savings_rate: sRate,
       };
       if (nodeFilter) payload.node = nodeFilter;
-      await treasuryApi.savings.create(payload as any);
+      await treasuryApi.savings.create(payload);
       setSFlour(''); setSRevenue('');
       await loadSavings();
     } catch (err: unknown) {
-      const d = (err as any)?.response?.data;
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; node?: string[]; non_field_errors?: string[] } | undefined)
+        : undefined;
       setSError(d?.detail || d?.node?.[0] || d?.non_field_errors?.[0] || "Erreur lors de l'enregistrement.");
     } finally {
       setSSubmitting(false);
@@ -517,9 +521,8 @@ export const Treasury: React.FC = () => {
       }
       const detail = (res.data as unknown as { detail?: string })?.detail;
       if (detail) setGenerateError(detail);
-    } catch (err: any) {
-      const d = err?.response?.data;
-      setGenerateError(d?.detail || JSON.stringify(d) || 'Erreur lors de la génération.');
+    } catch (err: unknown) {
+      setGenerateError(getErrorDetail(err, 'Erreur lors de la génération.'));
     } finally {
       setGeneratingReport(false);
     }
@@ -529,8 +532,8 @@ export const Treasury: React.FC = () => {
     try {
       await treasuryApi.reports.validate(id);
       await loadData();
-    } catch (err: any) {
-      console.error('Validate report failed', err?.response?.data);
+    } catch (err: unknown) {
+      console.error('Validate report failed', axios.isAxiosError(err) ? err.response?.data : err);
     }
   };
 
@@ -554,7 +557,7 @@ export const Treasury: React.FC = () => {
     const targetClosureDate = allowBackdatedSales && closureDate && closureDate !== today ? closureDate : today;
     try {
       if (editingClosure) {
-        await treasuryApi.closures.update(editingClosure.id, { notes: closureNotes, ...bills } as any);
+        await treasuryApi.closures.update(editingClosure.id, { notes: closureNotes, ...bills });
         setEditingClosure(null);
       } else {
         const effectiveNode = user?.node || nodeFilter || null;
@@ -564,7 +567,7 @@ export const Treasury: React.FC = () => {
           notes: closureNotes,
           ...bills,
           ...(nodeFilter && !user?.node ? { node: nodeFilter } : {}),
-        } as any);
+        });
         if (targetClosureDate !== today) {
           // La liste "Clôtures du Jour" (`loadData`) est filtrée sur aujourd'hui — une clôture
           // rétroactive n'y apparaîtrait pas. On informe clairement le gérant du résultat.
@@ -575,14 +578,16 @@ export const Treasury: React.FC = () => {
       setClosureNotes('');
       setClosureDate('');
       await loadData();
-    } catch (err: any) {
-      const d = err?.response?.data;
-      const detail: string | undefined = d?.detail;
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
+        : undefined;
+      const detail = d?.detail;
       // BUG-048 : message reçu tel quel du serveur (jamais inventé) — on ne fait que
       // repérer s'il décrit un transfert entrant en écart non résolu (CLAUDE.md §5.4)
       // pour proposer un renvoi vers la section Transferts de Production.tsx.
       setClosureBlockedByTransferGap(!!detail && /transfert/i.test(detail) && /écart/i.test(detail));
-      setClosureError(detail || d?.non_field_errors?.[0] || JSON.stringify(d) || 'Erreur lors de la clôture.');
+      setClosureError(detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur lors de la clôture.');
     }
   };
 
@@ -595,8 +600,8 @@ export const Treasury: React.FC = () => {
       setValidateNotes('');
       setDetailClosure(null);
       await loadData();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Erreur lors de la confirmation.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Erreur lors de la confirmation.'));
     } finally {
       setClosureActionLoading(false);
     }
@@ -618,8 +623,8 @@ export const Treasury: React.FC = () => {
       setRejectReason('');
       setDetailClosure(null);
       await loadData();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Erreur lors du rejet.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Erreur lors du rejet.'));
     } finally {
       setClosureActionLoading(false);
     }
@@ -631,8 +636,8 @@ export const Treasury: React.FC = () => {
     try {
       await treasuryApi.closures.pushToCashbook(closureId);
       await loadData();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Erreur lors de la mise au Livre de Caisse.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Erreur lors de la mise au Livre de Caisse.'));
     } finally {
       setClosureActionLoading(false);
     }
@@ -644,15 +649,15 @@ export const Treasury: React.FC = () => {
     if (!expDesc || !expAmount || parseFloat(expAmount) <= 0 || !expCategory) { setExpError('Remplissez tous les champs.'); return; }
     try {
       await treasuryApi.expenses.create({
-        description: expDesc, category: Number(expCategory) as any,
+        description: expDesc, category: Number(expCategory),
         amount: expAmount, date: today,
         ...(nodeFilter && !user?.node ? { node: nodeFilter } : {}),
-      } as any);
+      });
       setExpDesc(''); setExpAmount('');
       setShowExpenseForm(false);
       await loadData();
-    } catch (err: any) {
-      setExpError(err?.response?.data?.detail || 'Erreur.');
+    } catch (err: unknown) {
+      setExpError(getErrorDetail(err, 'Erreur.'));
     }
   };
 
@@ -668,8 +673,8 @@ export const Treasury: React.FC = () => {
       await Promise.all(pending.map(r => treasuryApi.reports.validate(r.id)));
       await loadData();
       setConfirmMsg(`${pending.length} rapport(s) validé(s). Procédez au billetage physique (§5.2) pour finaliser la clôture.`);
-    } catch (err: any) {
-      setConfirmMsg(err?.response?.data?.detail || 'Erreur lors de la validation.');
+    } catch (err: unknown) {
+      setConfirmMsg(getErrorDetail(err, 'Erreur lors de la validation.'));
     } finally {
       setConfirmingDay(false);
     }
@@ -777,7 +782,7 @@ export const Treasury: React.FC = () => {
     setCheckingIntegrity(true);
     try {
       const res = await treasuryApi.cashbook.integrityCheck();
-      setIntegrityResult(res.data as any);
+      setIntegrityResult(res.data);
     } catch (err) {
       console.error('Integrity check failed', err);
     } finally {
@@ -855,8 +860,8 @@ export const Treasury: React.FC = () => {
       setVoucherBills({ bills_20000: 0, bills_10000: 0, bills_5000: 0, bills_1000: 0, bills_500: 0, bills_200: 0, bills_100: 0, bills_50: 0 });
       setShowVoucherForm(false);
       await Promise.all([loadVouchers(), loadData()]);
-    } catch (err: any) {
-      setVoucherError(err?.response?.data?.detail || 'Erreur lors de la création du bordereau.');
+    } catch (err: unknown) {
+      setVoucherError(getErrorDetail(err, 'Erreur lors de la création du bordereau.'));
     } finally {
       setVoucherSubmitting(false);
     }
@@ -906,8 +911,8 @@ export const Treasury: React.FC = () => {
         </body></html>`;
       const w = window.open('', '_blank', 'width=800,height=1000');
       if (w) { w.document.write(html); w.document.close(); }
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Erreur lors de la génération du bordereau final.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Erreur lors de la génération du bordereau final.'));
     }
   };
 
@@ -1153,7 +1158,7 @@ export const Treasury: React.FC = () => {
         isOpen={true}
         onClose={() => setDetailClosure(null)}
         title={`Rapport de caisse — ${cl.node_display || cl.node}`}
-        subtitle={`Date : ${cl.date} · Gérant : ${(cl as any).gerant_display || '—'}`}
+        subtitle={`Date : ${cl.date} · Gérant : ${cl.gerant_display || '—'}`}
         maxWidth="480px"
       >
           <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', textTransform: 'uppercase', marginBottom: '6px' }}>Versement du jour</div>
@@ -1191,9 +1196,9 @@ export const Treasury: React.FC = () => {
               </span>
             </div>
           </div>
-          {(cl as any).notes && (
+          {cl.notes && (
             <div style={{ marginTop: '10px', fontSize: '0.68rem', color: 'hsl(var(--text-secondary))', backgroundColor: 'hsl(var(--bg-tertiary))', padding: '6px 10px', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-line' }}>
-              <strong>Notes :</strong> {(cl as any).notes}
+              <strong>Notes :</strong> {cl.notes}
             </div>
           )}
           {/* Rejection notice */}
@@ -1788,8 +1793,8 @@ export const Treasury: React.FC = () => {
                         <strong>{c.node_display || c.node}</strong>
                         <span style={{ marginLeft: '6px', color: 'hsl(var(--text-muted))' }}>{c.date}</span>
                       </div>
-                      <span className={`badge ${c.is_validated ? 'badge-success' : (c as any).is_rejected ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.52rem' }}>
-                        {c.is_validated ? 'CONFIRMÉE' : (c as any).is_rejected ? 'INFIRMÉE' : 'EN ATTENTE'}
+                      <span className={`badge ${c.is_validated ? 'badge-success' : c.is_rejected ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.52rem' }}>
+                        {c.is_validated ? 'CONFIRMÉE' : c.is_rejected ? 'INFIRMÉE' : 'EN ATTENTE'}
                       </span>
                     </div>
                     <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', marginBottom: '6px' }}>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useThemeStore } from '@/store/themeStore';
@@ -162,9 +163,11 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       setNewPassword('');
       setProfileMsg({ type: 'success', text: 'Profil mis à jour avec succès.' });
       setTimeout(() => { setProfileMsg(null); setIsProfileOpen(false); }, 1800);
-    } catch (err: any) {
-      const d = err?.response?.data;
-      const msg = d?.old_password || d?.detail || JSON.stringify(d) || 'Erreur lors de la mise à jour.';
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { old_password?: string; detail?: string } | undefined)
+        : undefined;
+      const msg = d?.old_password || d?.detail || (d ? JSON.stringify(d) : undefined) || 'Erreur lors de la mise à jour.';
       setProfileMsg({ type: 'error', text: msg });
     } finally {
       setProfileSaving(false);

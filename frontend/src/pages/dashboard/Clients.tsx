@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 import {
   FiUsers, FiPlus, FiSearch, FiDollarSign,
   FiAlertTriangle, FiEye, FiPhone, FiChevronDown,
@@ -11,6 +12,7 @@ import {
   SocialContribution, SocialDistribution, SocialDistributionLine,
   BassinRow, ClientImportResult,
 } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
@@ -108,10 +110,10 @@ export const Clients: React.FC = () => {
       setBreadPrices(bpRes.data.filter(b => b.is_active));
       setDebtCeiling(parseFloat(configRes.data.debt_ceiling) || 50000);
       setAllowBackdatedSales(!!configRes.data.allow_backdated_sales);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (requestId !== loadClientsRequestIdRef.current) return; // réponse obsolète, ignorée
       console.error('Failed to load clients', err);
-      setLoadError(err?.response?.data?.detail || 'Erreur lors du chargement des clients.');
+      setLoadError(getErrorDetail(err, 'Erreur lors du chargement des clients.'));
     } finally {
       if (requestId === loadClientsRequestIdRef.current) setIsLoading(false);
     }
@@ -266,7 +268,7 @@ export const Clients: React.FC = () => {
       const r = await clientsApi.contributions.bulkCreateMonth({ node: socialNode, month: socialMonth, year: socialYear });
       setBulkMsg(`${r.data.created} fiche(s) créée(s), ${r.data.skipped} déjà existante(s).`);
       await loadContributions();
-    } catch (e: any) { setBulkMsg(e?.response?.data?.detail || 'Erreur.'); }
+    } catch (e: unknown) { setBulkMsg(getErrorDetail(e, 'Erreur.')); }
   };
 
   const handleTogglePaid = async (id: number) => {
@@ -279,9 +281,9 @@ export const Clients: React.FC = () => {
   const handleCreateDistribution = async () => {
     if (!socialNode) return;
     try {
-      const r = await clientsApi.distributions.create({ node: socialNode, year: socialYear } as any);
+      const r = await clientsApi.distributions.create({ node: socialNode, year: socialYear });
       setDistributions(prev => [r.data, ...prev]);
-    } catch (e: any) { alert(e?.response?.data?.detail || 'Erreur création.'); }
+    } catch (e: unknown) { alert(getErrorDetail(e, 'Erreur création.')); }
   };
 
   const handleAutoPopulate = async (id: number) => {
@@ -290,7 +292,7 @@ export const Clients: React.FC = () => {
       setBulkMsg(`${r.data.created} ligne(s) créée(s), ${r.data.skipped} existante(s).`);
       setSelectedDist(r.data.distribution);
       setDistLines(r.data.distribution.lines || []);
-    } catch (e: any) { alert(e?.response?.data?.detail || 'Erreur auto-population.'); }
+    } catch (e: unknown) { alert(getErrorDetail(e, 'Erreur auto-population.')); }
   };
 
   // §7 BASSINS
@@ -311,7 +313,7 @@ export const Clients: React.FC = () => {
       setBassinRows(res.data.rows || []);
       setBassinThresholds(res.data.thresholds || {});
       if ((res.data.rows || []).length === 0) setBassinMsg('Aucune donnée CM pour ce filtre.');
-    } catch (e: any) { setBassinMsg(e?.response?.data?.detail || 'Erreur.'); }
+    } catch (e: unknown) { setBassinMsg(getErrorDetail(e, 'Erreur.')); }
     finally { setBassinLoading(false); }
   };
 
@@ -468,11 +470,13 @@ export const Clients: React.FC = () => {
       setNewCreditLimit(50000); setNewCommissionRate(25); setNewCotisationSociale(3000);
       if (newPhotoPreview) URL.revokeObjectURL(newPhotoPreview);
       setNewPhoto(null); setNewPhotoPreview(null);
-    } catch (err: any) {
-      const detail = err?.response?.data;
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError(err) ? err.response?.data : undefined;
       const msg = typeof detail === 'string' ? detail
-        : detail?.detail || detail?.node?.[0] || detail?.first_name?.[0]
-          || JSON.stringify(detail) || 'Erreur lors de la création du client.';
+        : (detail as { detail?: string; node?: string[]; first_name?: string[] } | undefined)?.detail
+          || (detail as { node?: string[] } | undefined)?.node?.[0]
+          || (detail as { first_name?: string[] } | undefined)?.first_name?.[0]
+          || (detail ? JSON.stringify(detail) : undefined) || 'Erreur lors de la création du client.';
       setAddError(msg);
       console.error('Failed to create client', detail || err);
     } finally {
@@ -495,8 +499,11 @@ export const Clients: React.FC = () => {
     try {
       const res = await clientsApi.importExcel(importFile, true);
       setImportPreview(res.data);
-    } catch (err: any) {
-      setImportError(err?.response?.data?.file || err?.response?.data?.detail || 'Erreur lors de la lecture du fichier.');
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { file?: string; detail?: string } | undefined)
+        : undefined;
+      setImportError(d?.file || d?.detail || 'Erreur lors de la lecture du fichier.');
     } finally {
       setImportLoading(false);
     }
@@ -511,8 +518,11 @@ export const Clients: React.FC = () => {
       setImportResult(res.data);
       setImportPreview(null);
       await loadClients();
-    } catch (err: any) {
-      setImportError(err?.response?.data?.file || err?.response?.data?.detail || "Erreur lors de l'import.");
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { file?: string; detail?: string } | undefined)
+        : undefined;
+      setImportError(d?.file || d?.detail || "Erreur lors de l'import.");
     } finally {
       setImportLoading(false);
     }
@@ -550,8 +560,8 @@ export const Clients: React.FC = () => {
       setSelectedClientIds(new Set());
       setBulkMoveTarget('');
       await loadClients();
-    } catch (err: any) {
-      setBulkMsgBar(err?.response?.data?.detail || 'Erreur lors du déplacement.');
+    } catch (err: unknown) {
+      setBulkMsgBar(getErrorDetail(err, 'Erreur lors du déplacement.'));
     } finally {
       setBulkLoading(false);
     }
@@ -571,8 +581,8 @@ export const Clients: React.FC = () => {
       setBulkMsgBar(msg);
       setSelectedClientIds(new Set());
       await loadClients();
-    } catch (err: any) {
-      setBulkMsgBar(err?.response?.data?.detail || 'Erreur lors de la suppression.');
+    } catch (err: unknown) {
+      setBulkMsgBar(getErrorDetail(err, 'Erreur lors de la suppression.'));
     } finally {
       setBulkLoading(false);
     }
@@ -632,7 +642,7 @@ export const Clients: React.FC = () => {
           const res = await clientsApi.create({
             first_name: 'Client', last_name: 'Occasionnel',
             phone: '+243 000 000 000', address: 'Vente directe au comptoir', notes: 'Occasionnel',
-          } as any);
+          });
           clientApiId = res.data.id;
         } catch (err) {
           console.error('Failed to create occasionnel client', err);
@@ -663,9 +673,11 @@ export const Clients: React.FC = () => {
           console.error('Auto-deliver failed', deliverErr);
         }
         await loadClients();
-      } catch (err: any) {
-        const d = err?.response?.data;
-        setSaleError(d?.detail || d?.non_field_errors?.[0] || JSON.stringify(d) || 'Erreur.');
+      } catch (err: unknown) {
+        const d = axios.isAxiosError(err)
+          ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
+          : undefined;
+        setSaleError(d?.detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur.');
         setIsSubmitting(false);
         return;
       }
@@ -674,7 +686,7 @@ export const Clients: React.FC = () => {
     setReceiptDetails({
       receiptNumber: receiptId,
       boulangerie: user?.node_display || user?.node || 'ETS. KIESE',
-      agentName: user ? `${(user as any).first_name || ''} ${(user as any).last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
+      agentName: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
       team: user?.team || '—',
       clientName: saleClient.name,
       clientCode: saleClient.id,
@@ -720,7 +732,7 @@ export const Clients: React.FC = () => {
       setReceiptDetails({
         receiptNumber: inv.receipt_number,
         boulangerie: user?.node_display || user?.node || 'ETS. KIESE',
-        agentName: user ? `${(user as any).first_name || ''} ${(user as any).last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
+        agentName: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
         team: user?.team || '—',
         clientName: repaymentClient.name,
         clientCode: repaymentClient.id,
@@ -738,9 +750,8 @@ export const Clients: React.FC = () => {
       setIsRepaymentModalOpen(false);
       setRepaymentAmount('');
       setRepaymentClient(null);
-    } catch (err: any) {
-      const d = err?.response?.data;
-      setRepaymentError(d?.detail || 'Erreur lors du remboursement.');
+    } catch (err: unknown) {
+      setRepaymentError(getErrorDetail(err, 'Erreur lors du remboursement.'));
     } finally {
       setRepaymentLoading(false);
     }
@@ -795,8 +806,10 @@ export const Clients: React.FC = () => {
       await loadClients();
       setIsAdjustModalOpen(false);
       setAdjustTarget(null);
-    } catch (err: any) {
-      const d = err?.response?.data;
+    } catch (err: unknown) {
+      const d = axios.isAxiosError(err)
+        ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
+        : undefined;
       setAdjustError(d?.detail || d?.non_field_errors?.[0] || "Erreur lors de l'ajustement.");
     } finally {
       setAdjustLoading(false);
@@ -833,12 +846,12 @@ export const Clients: React.FC = () => {
     const newLimit = parseFloat(limitInput.replace(',', '.').replace(/\s/g, ''));
     if (isNaN(newLimit) || newLimit <= 0) return;
     try {
-      await clientsApi.update(selectedClient._apiId, { credit_limit: newLimit.toString() } as any);
+      await clientsApi.update(selectedClient._apiId, { credit_limit: newLimit.toString() });
       await loadClients();
       setSelectedClient(prev => prev ? { ...prev, creditLimit: newLimit } : null);
       setIsEditingLimit(false);
-    } catch (err: any) {
-      console.error('Failed to update credit limit', err?.response?.data || err);
+    } catch (err: unknown) {
+      console.error('Failed to update credit limit', axios.isAxiosError(err) ? err.response?.data : err);
     }
   };
 
@@ -1472,7 +1485,7 @@ export const Clients: React.FC = () => {
                   <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '6px', textTransform: 'uppercase' }}>Type de Client</label>
                   <select
                     value={newType}
-                    onChange={(e: any) => setNewType(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewType(e.target.value as 'Grossiste' | 'Détaillant' | 'Revendeur')}
                     className="form-input"
                     style={{ height: '36px', fontSize: '0.8rem' }}
                   >

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import {
   FiMapPin, FiPlus, FiEdit2, FiTrash2, FiRefreshCw,
   FiCheckCircle, FiXCircle, FiClock, FiShield
@@ -120,9 +121,9 @@ export const Nodes: React.FC = () => {
       }
       handleCloseModal();
       fetchNodes();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving node', error);
-      const data = error?.response?.data;
+      const data = axios.isAxiosError(error) ? error.response?.data : undefined;
       if (data && typeof data === 'object') {
         const parsed: Record<string, string> = {};
         for (const [key, val] of Object.entries(data)) {

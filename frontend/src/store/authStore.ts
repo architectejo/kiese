@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiClient } from '@/api/client';
+import { getErrorDetail } from '@/api/errors';
 
 export interface UserProfile {
   id: string;
@@ -57,8 +58,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         error: null,
       });
       return true;
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.detail || 'Identifiants ou mot de passe incorrects.';
+    } catch (error: unknown) {
+      const errorMsg = getErrorDetail(error, 'Identifiants ou mot de passe incorrects.');
       set({ isLoading: false, error: errorMsg });
       return false;
     }

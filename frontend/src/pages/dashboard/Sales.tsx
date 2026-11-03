@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 import {
   FiTruck, FiPlusCircle, FiClock, FiCheckCircle,
   FiAlertCircle, FiSearch, FiX, FiPrinter, FiChevronRight, FiCreditCard
 } from 'react-icons/fi';
 import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdjustPayload } from '@/api/services';
+import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { ThermalReceipt, ReceiptData, ReceiptLine } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
@@ -305,10 +307,8 @@ export const Sales: React.FC = () => {
       setRepaymentAmount('');
       setRepaymentDate('');
       clearClient();
-    } catch (err: any) {
-      const detail = err?.response?.data;
-      const msg = typeof detail === 'string' ? detail : detail?.detail || 'Erreur lors de l\'enregistrement.';
-      setRepaymentError(msg);
+    } catch (err: unknown) {
+      setRepaymentError(getErrorDetail(err, 'Erreur lors de l\'enregistrement.'));
     } finally {
       setRepaymentLoading(false);
     }
@@ -361,10 +361,8 @@ export const Sales: React.FC = () => {
       ]);
       setIsAdjustModalOpen(false);
       setAdjustTarget(null);
-    } catch (err: any) {
-      const detail = err?.response?.data;
-      const msg = typeof detail === 'string' ? detail : detail?.detail || "Erreur lors de l'ajustement.";
-      setAdjustError(msg);
+    } catch (err: unknown) {
+      setAdjustError(getErrorDetail(err, "Erreur lors de l'ajustement."));
     } finally {
       setAdjustLoading(false);
     }
@@ -410,13 +408,15 @@ export const Sales: React.FC = () => {
         await loadData();
       }
       resetForm();
-    } catch (err: any) {
-      const detail = err?.response?.data;
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError(err) ? err.response?.data : undefined;
       const msg = typeof detail === 'string' ? detail
-        : detail?.detail || detail?.client?.[0] || detail?.lines?.[0]
-          || JSON.stringify(detail) || 'Erreur lors de la facturation.';
+        : (detail as { detail?: string; client?: string[]; lines?: string[] } | undefined)?.detail
+          || (detail as { client?: string[] } | undefined)?.client?.[0]
+          || (detail as { lines?: string[] } | undefined)?.lines?.[0]
+          || (detail ? JSON.stringify(detail) : undefined) || 'Erreur lors de la facturation.';
       setFormError(msg);
-      console.error('Invoice creation failed:', JSON.stringify(detail ?? err?.message));
+      console.error('Invoice creation failed:', JSON.stringify(detail) || (err instanceof Error ? err.message : String(err)));
     } finally {
       setIsSubmitting(false);
     }
@@ -427,8 +427,8 @@ export const Sales: React.FC = () => {
     try {
       await salesApi.cancel(item._apiId);
       setQueue(prev => prev.filter(q => q._apiId !== item._apiId));
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || 'Erreur lors de l\'annulation.');
+    } catch (err: unknown) {
+      alert(getErrorDetail(err, 'Erreur lors de l\'annulation.'));
     }
   };
 
@@ -479,9 +479,8 @@ export const Sales: React.FC = () => {
       }
       setDeliverModalItem(null);
       setDeliverDate('');
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : 'Erreur lors de la confirmation de livraison.';
+    } catch (err: unknown) {
+      const msg = getErrorDetail(err, 'Erreur lors de la confirmation de livraison.');
       setDeliveryError({ id: item._apiId, message: msg });
       console.error('Delivery failed', err);
     }
@@ -609,7 +608,7 @@ export const Sales: React.FC = () => {
                   <span style={{ fontWeight: 800, color: 'hsl(var(--text-primary))', minWidth: '28px' }}>{l.qty}×</span>
                   <span style={{ color: 'hsl(var(--text-secondary))' }}>{l.label}</span>
                   <span style={{ marginLeft: 'auto', fontWeight: 700, color: 'hsl(var(--accent-color))' }}>
-                    {(l.qty * (bpMap[Object.keys(bpMap).find(k => bpMap[Number(k)]?.label === l.label) as any]?.unit_price || 0)).toLocaleString('fr-FR')} FC
+                    {(l.qty * (bpMap[Object.keys(bpMap).find(k => bpMap[k]?.label === l.label) ?? '']?.unit_price || 0)).toLocaleString('fr-FR')} FC
                   </span>
                 </div>
               ))}
