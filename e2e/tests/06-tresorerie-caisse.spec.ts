@@ -29,9 +29,21 @@ test('la direction consulte le Livre de Caisse, filtre par dates et vérifie l\'
 });
 
 test('un rôle non-HQ (gérant) ne voit pas le Livre de Caisse Direction (BUG-026/BUG-044, déjà corrigé)', async ({ page }) => {
+  // Note (testeur-e2e, 2026-11-03) : scope restreint au titre de section §5.1.3
+  // (Treasury.tsx l.1941-1943, gardé par `user?.can_access_all_nodes`), pas à
+  // n'importe quelle occurrence du texte — le sous-titre générique du module
+  // ("Clôture & Caisse — 3 Niveaux" / "§5.1 ... · §5.3 Livre de Caisse
+  // Direction", Treasury.tsx l.1305-1307) mentionne les 3 niveaux à TOUS les
+  // rôles à titre descriptif, sans donner accès au Niveau 3 — un `getByText`
+  // non scopé matchait aussi ce sous-titre et faisait échouer ce test sur un
+  // faux positif (aucune régression réelle : confirmé par relecture de
+  // Treasury.tsx, la section §5.1.3 elle-même — avec ses boutons "Vérifier
+  // intégrité SHA-256"/filtres de dates/historique — reste bien absente du DOM
+  // pour un GERANT).
   await seConnecter(page, COMPTES.gerantK1.username, PASSWORD);
   await page.goto('/treasury');
-  await expect(page.getByText(/Livre de Caisse Direction/)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: /§5\.1\.3.*Livre de Caisse Direction/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /vérifier intégrité sha-256/i })).toHaveCount(0);
 });
 
 test.fixme(

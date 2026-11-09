@@ -19,6 +19,22 @@ async function getList<T>(url: string, params?: Record<string, string>): Promise
   return { data: results };
 }
 
+// Page brute DRF ({count, next, previous, results}), SANS agréger les pages
+// suivantes (contrairement à `getList`) : utile quand l'appelant veut afficher
+// la première page tout de suite puis charger le reste progressivement en
+// arrière-plan (BUG-132 : "Gestion de la Clientèle" côté Siège, 685+ fiches,
+// attendait `getList` → toutes les pages → premier rendu très lent).
+export interface PaginatedResponse<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
+
+async function getPage<T>(url: string, params?: Record<string, string>) {
+  return apiClient.get<PaginatedResponse<T>>(url, { params });
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface BakeryNode {
@@ -30,6 +46,10 @@ export interface BakeryNode {
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
+  team_a_start_time: string | null;
+  team_a_end_time: string | null;
+  team_b_start_time: string | null;
+  team_b_end_time: string | null;
 }
 
 export interface BreadPrice {
@@ -870,6 +890,11 @@ export const coreApi = {
 export const clientsApi = {
   list: (params?: Record<string, string>) =>
     getList<Client>('/api/clients/clients/', params),
+  // BUG-132 : page brute (page/page_size), pour affichage progressif côté
+  // `Clients.tsx` — ne pas utiliser `getList`/`list` ici, qui attend la liste
+  // complète avant de résoudre.
+  listPage: (params?: Record<string, string>) =>
+    getPage<Client>('/api/clients/clients/', params),
   // `data` peut être un `FormData` (photo jointe : upload multipart) ou un objet JSON classique.
   // Avec FormData, on retire l'en-tête `Content-Type: application/json` par défaut pour laisser
   // le navigateur générer `multipart/form-data; boundary=...`.

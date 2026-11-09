@@ -123,6 +123,26 @@ class Node(models.Model):
         blank=True,
         verbose_name=_("Dernière synchronisation")
     )
+    team_a_start_time = models.TimeField(
+        null=True, blank=True,
+        verbose_name=_("Équipe A — heure de début"),
+        help_text=_("Ex: 06:00. Laisser vide si le créneau n'est pas encore déclaré.")
+    )
+    team_a_end_time = models.TimeField(
+        null=True, blank=True,
+        verbose_name=_("Équipe A — heure de fin"),
+        help_text=_("Ex: 13:00.")
+    )
+    team_b_start_time = models.TimeField(
+        null=True, blank=True,
+        verbose_name=_("Équipe B — heure de début"),
+        help_text=_("Ex: 13:00.")
+    )
+    team_b_end_time = models.TimeField(
+        null=True, blank=True,
+        verbose_name=_("Équipe B — heure de fin"),
+        help_text=_("Ex: 20:00.")
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -133,6 +153,51 @@ class Node(models.Model):
 
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+    def active_team_at(self, when=None):
+        """
+        Retourne 'A', 'B' ou None selon l'heure donnée (par défaut l'heure
+        courante) et les créneaux déclarés pour cette boulangerie.
+
+        Hypothèse volontaire (remarque.md l.396, BUG-129) : un créneau
+        d'équipe ne traverse JAMAIS minuit (ex. 06:00-13:00, 13:00-20:00).
+        Aucune donnée réelle de `data_kiese/` ni aucun document de référence
+        (CLAUDE.md §5.2 : « Équipes : A et B uniquement, pas de jour/nuit »)
+        ne mentionne une équipe de nuit à cheval sur deux jours civils. Si
+        cette hypothèse s'avère fausse pour une boulangerie donnée, le
+        chantier BUG-130 (détermination automatique de l'équipe active devra
+        la retravailler explicitement — ne pas la contourner silencieusement
+        ici.
+
+        Accepte un `datetime`, un `time`, ou None (= heure courante selon le
+        fuseau du projet). Un créneau non déclaré (`None`) ne correspond
+        jamais à l'heure testée. En cas de chevauchement entre A et B
+        (configuration incohérente), l'équipe A est retournée en priorité.
+        """
+        from datetime import datetime as _datetime, time as _time
+        from django.utils import timezone as _timezone
+
+        if when is None:
+            when = _timezone.localtime().time()
+        elif isinstance(when, _datetime):
+            when = _timezone.localtime(when).time() if _timezone.is_aware(when) else when.time()
+        elif not isinstance(when, _time):
+            raise TypeError("active_team_at() attend un datetime, un time ou None")
+
+        def _in_range(t, start, end):
+            if start is None or end is None:
+                return False
+            if start <= end:
+                return start <= t < end
+            # Créneau traversant minuit : non attendu (voir docstring),
+            # mais géré sans planter si jamais configuré ainsi.
+            return t >= start or t < end
+
+        if _in_range(when, self.team_a_start_time, self.team_a_end_time):
+            return 'A'
+        if _in_range(when, self.team_b_start_time, self.team_b_end_time):
+            return 'B'
+        return None
 
     def is_sync_degraded(self, threshold_hours=None):
         """

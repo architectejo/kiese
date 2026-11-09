@@ -16,7 +16,19 @@ export interface BakeryNode {
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
+  team_a_start_time: string | null;
+  team_a_end_time: string | null;
+  team_b_start_time: string | null;
+  team_b_end_time: string | null;
 }
+
+// <input type="time"> attend/renvoie "HH:MM" ; l'API lit/écrit "HH:MM:SS" (ou null).
+// Ces deux fonctions font l'aller-retour sans jamais envoyer de chaîne vide au serveur.
+const toTimeInputValue = (value: string | null | undefined): string =>
+  value ? value.slice(0, 5) : '';
+
+const fromTimeInputValue = (value: string): string | null =>
+  value ? `${value}:00` : null;
 
 interface NodeAgent {
   id: number;
@@ -50,7 +62,11 @@ export const Nodes: React.FC = () => {
     name: '',
     address: '',
     sac_value_fc: '',
-    is_active: true
+    is_active: true,
+    team_a_start_time: '',
+    team_a_end_time: '',
+    team_b_start_time: '',
+    team_b_end_time: ''
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -79,7 +95,11 @@ export const Nodes: React.FC = () => {
         name: node.name,
         address: node.address || '',
         sac_value_fc: node.sac_value_fc ?? '',
-        is_active: node.is_active
+        is_active: node.is_active,
+        team_a_start_time: toTimeInputValue(node.team_a_start_time),
+        team_a_end_time: toTimeInputValue(node.team_a_end_time),
+        team_b_start_time: toTimeInputValue(node.team_b_start_time),
+        team_b_end_time: toTimeInputValue(node.team_b_end_time)
       });
     } else {
       setEditingNode(null);
@@ -88,7 +108,11 @@ export const Nodes: React.FC = () => {
         name: '',
         address: '',
         sac_value_fc: '',
-        is_active: true
+        is_active: true,
+        team_a_start_time: '',
+        team_a_end_time: '',
+        team_b_start_time: '',
+        team_b_end_time: ''
       });
     }
     setFormErrors({});
@@ -111,6 +135,10 @@ export const Nodes: React.FC = () => {
     const payload = {
       ...formData,
       sac_value_fc: formData.sac_value_fc !== '' ? formData.sac_value_fc : null,
+      team_a_start_time: fromTimeInputValue(formData.team_a_start_time),
+      team_a_end_time: fromTimeInputValue(formData.team_a_end_time),
+      team_b_start_time: fromTimeInputValue(formData.team_b_start_time),
+      team_b_end_time: fromTimeInputValue(formData.team_b_end_time),
     };
     setIsSavingNode(true);
     try {
@@ -360,6 +388,61 @@ export const Nodes: React.FC = () => {
                 />
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
                   Laisser vide pour utiliser la valeur globale de la Configuration.
+                </span>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '6px' }}>
+                  Créneaux Horaires des Équipes
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', display: 'block' }}>Équipe A — Début</span>
+                    <input
+                      type="time"
+                      value={formData.team_a_start_time}
+                      onChange={(e) => setFormData({ ...formData, team_a_start_time: e.target.value })}
+                      className="form-input"
+                      style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                      placeholder="06:00"
+                    />
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', display: 'block' }}>Équipe A — Fin</span>
+                    <input
+                      type="time"
+                      value={formData.team_a_end_time}
+                      onChange={(e) => setFormData({ ...formData, team_a_end_time: e.target.value })}
+                      className="form-input"
+                      style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                      placeholder="13:00"
+                    />
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', display: 'block' }}>Équipe B — Début</span>
+                    <input
+                      type="time"
+                      value={formData.team_b_start_time}
+                      onChange={(e) => setFormData({ ...formData, team_b_start_time: e.target.value })}
+                      className="form-input"
+                      style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                      placeholder="13:00"
+                    />
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', display: 'block' }}>Équipe B — Fin</span>
+                    <input
+                      type="time"
+                      value={formData.team_b_end_time}
+                      onChange={(e) => setFormData({ ...formData, team_b_end_time: e.target.value })}
+                      className="form-input"
+                      style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                      placeholder="20:00"
+                    />
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
+                  Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
                 </span>
               </div>
 

@@ -83,39 +83,78 @@ export const Clients: React.FC = () => {
   const [selectedType, setSelectedType] = useState<string>('All');
   const [selectedRisk, setSelectedRisk] = useState<string>('All');
 
-  // BUG-103 : `clientsApi.list` agrège plusieurs pages DRF (`getList` suit `next`), donc un
-  // chargement initial non filtré peut encore avoir des pages en vol quand une recherche plus
-  // récente (après le debounce) revient déjà. Sans garde, les pages tardives du premier appel
-  // écrasaient `setClients` après coup avec la liste non filtrée. On ignore toute réponse qui
-  // n'est plus la dernière requête lancée (même mécanisme que `requestIdRef`/compteur de
-  // fraîcheur suggéré au ticket — aucun `AbortController` existant ailleurs dans le code à
+  // BUG-103 : un chargement initial non filtré peut encore avoir des pages en vol quand une
+  // recherche plus récente (après le debounce) revient déjà. Sans garde, les pages tardives du
+  // premier appel écrasaient `setClients` après coup avec la liste non filtrée. On ignore toute
+  // réponse qui n'est plus la dernière requête lancée (même mécanisme que `requestIdRef`/compteur
+  // de fraîcheur suggéré au ticket — aucun `AbortController` existant ailleurs dans le code à
   // réutiliser, on reste cohérent avec le style du fichier).
   const loadClientsRequestIdRef = useRef(0);
 
+  // BUG-132 : pour un rôle Siège (ADMIN/DIRECTION/COMPTABLE, `can_access_all_nodes`), la liste
+  // couvre les 685+ clients des 8 boulangeries. `clientsApi.list` (via `getList`) attendait TOUTES
+  // les pages DRF avant de résoudre : premier affichage très lent. On charge maintenant page par
+  // page (`clientsApi.listPage`, page/page_size DRF standard) — la 1ère page (rapide) s'affiche
+  // immédiatement, puis le reste continue de charger seul en arrière-plan et s'accumule dans
+  // `clients`. Le bouton « Voir plus » existant (`clientsVisibleCount`, cf. plus bas) révèle ce
+  // qui a déjà été chargé ; comme le chargement arrière-plan tourne sans attendre de clic, un clic
+  // qui arrive avant que la page suivante soit prête revient simplement à attendre qu'elle le soit
+  // (choix retenu : pas de second bouton « charger plus » séparé, un seul mécanisme plus simple).
+  const CLIENTS_PAGE_SIZE = 50;
+  const [clientsTotalCount, setClientsTotalCount] = useState<number | null>(null);
+  const [clientsLoadedCount, setClientsLoadedCount] = useState(0);
+  const [clientsBackgroundLoading, setClientsBackgroundLoading] = useState(false);
+
   const loadClients = useCallback(async () => {
     const requestId = ++loadClientsRequestIdRef.current;
+    const isCurrent = () => requestId === loadClientsRequestIdRef.current;
     try {
       setIsLoading(true);
       setLoadError(null);
-      const params: Record<string, string> = {};
-      if (clientNodeFilter) params.node = clientNodeFilter;
-      if (debouncedSearchTerm) params.search = debouncedSearchTerm;
-      const [clientRes, bpRes, configRes] = await Promise.all([
-        clientsApi.list(Object.keys(params).length ? params : undefined),
+      setClients([]);
+      setClientsTotalCount(null);
+      setClientsLoadedCount(0);
+      setClientsBackgroundLoading(false);
+      const baseParams: Record<string, string> = { page_size: String(CLIENTS_PAGE_SIZE) };
+      if (clientNodeFilter) baseParams.node = clientNodeFilter;
+      if (debouncedSearchTerm) baseParams.search = debouncedSearchTerm;
+      const [firstPage, bpRes, configRes] = await Promise.all([
+        clientsApi.listPage({ ...baseParams, page: '1' }),
         coreApi.breadPrices.list(),
         coreApi.config.get(),
       ]);
-      if (requestId !== loadClientsRequestIdRef.current) return; // réponse obsolète, ignorée
-      setClients(clientRes.data.map(mapApiClient));
+      if (!isCurrent()) return; // réponse obsolète, ignorée
       setBreadPrices(bpRes.data.filter(b => b.is_active));
       setDebtCeiling(parseFloat(configRes.data.debt_ceiling) || 50000);
       setAllowBackdatedSales(!!configRes.data.allow_backdated_sales);
+      const firstResults = firstPage.data.results.map(mapApiClient);
+      setClients(firstResults);
+      setClientsTotalCount(firstPage.data.count);
+      setClientsLoadedCount(firstResults.length);
+      setIsLoading(false);
+
+      // Chargement progressif des pages suivantes, en arrière-plan, sans bloquer l'affichage.
+      let next = firstPage.data.next;
+      let page = 2;
+      if (next) setClientsBackgroundLoading(true);
+      while (next) {
+        if (!isCurrent()) return; // filtre/recherche changé(e) entre-temps : on arrête
+        const pageRes = await clientsApi.listPage({ ...baseParams, page: String(page) });
+        if (!isCurrent()) return;
+        const mapped = pageRes.data.results.map(mapApiClient);
+        setClients(prev => [...prev, ...mapped]);
+        setClientsLoadedCount(prev => prev + mapped.length);
+        next = pageRes.data.next;
+        page += 1;
+      }
+      if (isCurrent()) setClientsBackgroundLoading(false);
     } catch (err: unknown) {
-      if (requestId !== loadClientsRequestIdRef.current) return; // réponse obsolète, ignorée
+      if (!isCurrent()) return; // réponse obsolète, ignorée
       console.error('Failed to load clients', err);
       setLoadError(getErrorDetail(err, 'Erreur lors du chargement des clients.'));
+      setClientsBackgroundLoading(false);
     } finally {
-      if (requestId === loadClientsRequestIdRef.current) setIsLoading(false);
+      if (isCurrent()) setIsLoading(false);
     }
   }, [clientNodeFilter, debouncedSearchTerm]);
 
@@ -857,9 +896,11 @@ export const Clients: React.FC = () => {
 
   // Filter clients
   // La recherche par nom/code est déjà appliquée côté serveur (paramètre `search` de
-  // `clientsApi.list`, voir `loadClients`) : `clients` ne contient donc déjà que les fiches
-  // correspondant au terme recherché. Seuls le type et le niveau de risque, non filtrables
-  // côté API, restent appliqués ici en mémoire.
+  // `clientsApi.listPage`, voir `loadClients`) : chaque page reçue correspond déjà au terme
+  // recherché, même si certaines pages suivantes sont encore en cours de chargement en
+  // arrière-plan (BUG-132). Seuls le type et le niveau de risque, non filtrables côté API,
+  // restent appliqués ici en mémoire — et peuvent donc être incomplets tant que
+  // `clientsBackgroundLoading` est vrai (avertissement affiché plus bas).
   const filteredClients = clients.filter(c => {
     const matchesType = selectedType === 'All' || c.type === selectedType;
     const matchesRisk = selectedRisk === 'All' ||
@@ -1161,6 +1202,31 @@ export const Clients: React.FC = () => {
             {loadError}
           </div>
         )}
+        {/* BUG-132 : indicateur discret pendant le chargement arrière-plan des pages suivantes
+            (le tableau ci-dessous affiche déjà ce qui est arrivé, sans attendre). */}
+        {!isLoading && clientsBackgroundLoading && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', marginBottom: '8px',
+            fontSize: '0.72rem', color: 'hsl(var(--text-secondary))',
+            background: 'hsl(var(--accent-color) / 0.08)', borderRadius: '6px',
+          }}>
+            <span className="spinner" style={{
+              width: '12px', height: '12px', border: '2px solid hsl(var(--accent-color) / 0.3)',
+              borderTopColor: 'hsl(var(--accent-color))', borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite', flexShrink: 0,
+            }} />
+            Chargement du reste de la liste… {clientsLoadedCount}
+            {clientsTotalCount !== null ? ` / ${clientsTotalCount}` : ''} clients chargés.
+            {(selectedType !== 'All' || selectedRisk !== 'All') && (
+              <span> Les filtres Type/Risque peuvent être incomplets tant que ce chargement n'est pas terminé.</span>
+            )}
+          </div>
+        )}
+        {!isLoading && !clientsBackgroundLoading && clientsTotalCount !== null && clientsLoadedCount === clientsTotalCount && clientsTotalCount > CLIENTS_PAGE_SIZE && (
+          <div style={{ padding: '4px 10px', marginBottom: '8px', fontSize: '0.7rem', color: 'hsl(var(--color-success))' }}>
+            Liste complète chargée ({clientsTotalCount} client(s)).
+          </div>
+        )}
         <div style={{ overflowX: 'auto' }}>
           <table className="premium-table">
             <thead>
@@ -1312,24 +1378,45 @@ export const Clients: React.FC = () => {
             {searchTerm || selectedType !== 'All' || selectedRisk !== 'All'
               ? 'Aucun client ne correspond à cette recherche/ces filtres.'
               : 'Aucun client enregistré pour le moment.'}
-          </div>
-        )}
-        {!isLoading && sortedClients.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '14px 0 4px' }}>
-            <span style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
-              {visibleClients.length} sur {sortedClients.length} client(s)
-            </span>
-            {sortedClients.length > clientsVisibleCount && (
-              <button
-                onClick={() => setClientsVisibleCount(c => c + 20)}
-                className="btn btn-secondary"
-                style={{ padding: '6px 16px', fontSize: '0.75rem' }}
-              >
-                Voir plus
-              </button>
+            {/* BUG-132 : filtres Type/Risque appliqués en mémoire sur les pages déjà reçues —
+                tant que le reste de la liste charge encore, « aucun résultat » peut juste
+                signifier « pas encore trouvé » plutôt qu'une absence réelle. */}
+            {clientsBackgroundLoading && (selectedType !== 'All' || selectedRisk !== 'All') && (
+              <div style={{ marginTop: '6px', fontWeight: 700 }}>
+                Chargement du reste de la liste toujours en cours — ce résultat peut être incomplet.
+              </div>
             )}
           </div>
         )}
+        {!isLoading && sortedClients.length > 0 && (() => {
+          // BUG-132 : le bouton reste visible tant qu'il reste des clients déjà chargés à
+          // révéler OU que le chargement arrière-plan n'est pas terminé (dans ce dernier cas, un
+          // clic ne révèle encore rien de neuf mais fait avancer `clientsVisibleCount` : la ligne
+          // suivante apparaîtra seule, sans second clic, dès que la page suivante arrivera).
+          const hasMoreLoaded = sortedClients.length > clientsVisibleCount;
+          const showButton = hasMoreLoaded || clientsBackgroundLoading;
+          const isWaiting = clientsBackgroundLoading && !hasMoreLoaded;
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '14px 0 4px' }}>
+              <span style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
+                {visibleClients.length} sur {sortedClients.length} client(s) affiché(s)
+                {clientsTotalCount !== null && clientsTotalCount > clientsLoadedCount
+                  ? ` (${clientsTotalCount} au total, chargement en cours)`
+                  : ''}
+              </span>
+              {showButton && (
+                <button
+                  onClick={() => setClientsVisibleCount(c => c + 20)}
+                  className="btn btn-secondary"
+                  disabled={isWaiting}
+                  style={{ padding: '6px 16px', fontSize: '0.75rem', opacity: isWaiting ? 0.7 : 1 }}
+                >
+                  {isWaiting ? 'En attente de la page suivante…' : 'Voir plus'}
+                </button>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Import Clients (Excel) Modal — Direction centrale */}

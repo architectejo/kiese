@@ -16,7 +16,10 @@ class NodeSerializer(serializers.ModelSerializer):
         model = Node
         fields = [
             'id', 'code', 'name', 'address', 'sac_value_fc', 'is_active',
-            'last_sync', 'display_name', 'created_at', 'updated_at'
+            'last_sync', 'display_name',
+            'team_a_start_time', 'team_a_end_time',
+            'team_b_start_time', 'team_b_end_time',
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
 

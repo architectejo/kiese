@@ -138,6 +138,10 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-125 | Ticket lié à BUG-123 : nouveau champ `average_unit_cost` (CUMP) exposé par `ConsumableStockSerializer` — affichage optionnel dans l'écran « Intrants » (Production.tsx) pour expliquer la valorisation du coût matière désormais basée sur la consommation réelle | Production | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-123, 2026-11-02) | dev-frontend | testeur-clients-commissions (2026-11-03) |
 | BUG-126 | Vérification de BUG-123 : la migration de backfill (`0018_bug123_backfill_average_unit_cost`) recalcule le CUMP final de `ConsumableStock.average_unit_cost` mais ne restampe jamais `unit_price` sur les `ConsumableMovement` EXIT déjà en base avant le correctif — ces sorties historiques restent valorisées à `0.00` dans le Compte de Résultat pour toujours (le calcul lit `ConsumableMovement.unit_price`, pas `ConsumableStock.average_unit_cost`) | Finance/Production | backend | Majeur | VÉRIFIÉ | auditeur-comptable (vérification BUG-123, 2026-11-02/03) | coordinateur, 2026-11-03 | auditeur-comptable, 2026-11-03 |
 | BUG-128 | Demande client — « Clôture Journalière » (`ClotureJournaliere.tsx`, BUG-120) : le sélecteur de date doit permettre de voir les résultats des jours passés via un vrai calendrier dans une boîte modale, pas le sélecteur natif `<input type="date">` du navigateur (remarque.md l.394) | Production/Ventes/Trésorerie | frontend | Mineur | VÉRIFIÉ | coordinateur (remarque.md l.394) | dev-frontend, 2026-11-03 | testeur-production (2026-11-03) |
+| BUG-129 | `ProductionSessionViewSet.perform_create` (`backend/production/views.py:250`) lève `ValidationError(f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}.")` avec une chaîne nue (pas un dict `{'detail': ...}`, seul site de tout le backend dans ce cas) — DRF sérialise la réponse HTTP 400 en tableau JSON nu (`["Une session existe déjà ..."]`, pas d'objet) ; `Production.tsx::handleAddSession` (l.277-281, logique ad hoc non migrée vers `getErrorDetail`/BUG-127) ne reconnaît que `d.detail`/`d.non_field_errors[0]`, retombe sur `JSON.stringify(d)` et affiche donc au gérant le texte brut `["Une session existe déjà pour l'Équipe B le 2026-11-03 à la boulangerie K1."]` (crochets et guillemets inclus) au lieu d'une phrase française propre | Production | backend/frontend | Mineur | OUVERT | testeur-e2e (régression complète avant client, 2026-11-03, découvert en investiguant l'échec du test `10-regression-remarque-2026-10-30.spec.ts:147`) | — | — |
+| BUG-130 | Demande client — chaque boulangerie (`Node`) doit pouvoir déclarer les créneaux horaires des équipes A et B (heure de début/fin de chaque équipe), configurables à la création/édition de la boulangerie ; prérequis pour un futur chantier de détermination automatique de l'équipe active (voir note de numérotation dans la fiche détaillée : le nom « BUG-129 » demandé initialement était déjà pris par un autre ticket) | Core/Production | backend/frontend | Mineur | VÉRIFIÉ | coordinateur (remarque.md l.396) | dev-backend, 2026-11-09 | testeur-e2e, 2026-11-09 |
+| BUG-131 | Sous-ticket de BUG-130 (backend terminé, frontend à faire) : ajouter les 4 champs horaires (`team_a_start_time`, `team_a_end_time`, `team_b_start_time`, `team_b_end_time`) au formulaire de création/édition de boulangerie `frontend/src/pages/dashboard/Nodes.tsx` (`<input type="time">`, visibles seulement pour un rôle HQ, cohérent avec le reste de la page) ; le futur chantier « détermination automatique de l'équipe active » mentionné par le coordinateur devra être ouvert sous un numéro ultérieur (BUG-132+), pas BUG-130/131 qui sont pris par ce qui précède | Core/Production | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-130, 2026-11-09) | dev-frontend, 2026-11-09 | testeur-e2e, 2026-11-09 |
+| BUG-132 | Performance — « Gestion de la Clientèle » (`Clients.tsx`) attendait que `getList()` suive TOUTES les pages DRF avant le premier affichage ; très lent pour un rôle Siège (685+ clients des 8 boulangeries) ; demande client : affichage progressif (page 1 immédiate, reste en arrière-plan, indicateur de progression) | Clients | frontend | Majeur | VÉRIFIÉ | coordinateur (demande client remontée directement), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-e2e, 2026-11-09 |
 
 ## Fiches détaillées
 
@@ -11690,3 +11694,420 @@ lors de copier-coller), ce qui en fait une base peu fiable à reproduire littér
   Playwright ad hoc supprimé après vérification (non committé, pas de test E2E permanent créé pour ce
   ticket — à prévoir si `ClotureJournaliere.tsx` reçoit un testeur de module dédié, comme déjà signalé
   par `dev-frontend`).
+
+### BUG-129 — Déclaration de fournée en doublon (même nœud/équipe/jour) : message d'erreur affiché au gérant au format JSON brut au lieu d'une phrase française
+
+- Module : Production · Composant : backend (cause racine) / frontend (symptôme visible) · Gravité : Mineur
+- Statut : OUVERT
+- Ouvert par : testeur-e2e, régression E2E complète avant passage client (mission du coordinateur,
+  2026-11-03) — découvert en investiguant l'échec, à chaud, du test existant
+  `e2e/tests/10-regression-remarque-2026-10-30.spec.ts:147` (« Clôture de fournée automatisée
+  (BUG-093/108) ») lors d'une repasse complète de la suite Playwright (`--project=bureau`).
+
+#### Description
+`ProductionSessionViewSet.perform_create()` (`backend/production/views.py`, ~l.248-252) contient deux
+chemins pour détecter une `ProductionSession` déjà déclarée aujourd'hui pour le même (nœud, équipe,
+date) — contrainte `unique_together`, CLAUDE.md §5.4 :
+1. `ProductionSessionSerializer.validate()` (`backend/production/serializers.py:51-63`) fait une
+   pré-vérification propre et lève `serializers.ValidationError("Une session existe déjà pour cette
+   boulangerie, cette équipe et cette date.")` — **mais seulement si `node` est présent dans
+   `attrs`** (`if node and team and date:`, l.55).
+2. Pour un utilisateur non-HQ (GERANT/FACTURIER), `perform_create()` **ignore volontairement** toute
+   valeur de `node` envoyée par le frontend et la remplace par `user.node` (commentaire « BUG-056 »,
+   l.230-235) — le frontend (`Production.tsx`) n'envoie d'ailleurs jamais `node` dans le payload pour
+   ce cas. Donc `attrs.get('node')` est `None` au moment de `serializer.validate()`, la pré-vérification
+   du point 1 est **silencieusement sautée**, et c'est seulement la contrainte SQL `unique_together`
+   qui finit par lever une `IntegrityError` dans le `try/except` de `perform_create()` (l.241-252) :
+   ```python
+   except IntegrityError:
+       team = serializer.validated_data.get('team', '?')
+       date = serializer.validated_data.get('date', '?')
+       raise ValidationError(
+           f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
+       )
+   ```
+   Ce `raise ValidationError(f"...")` passe une **chaîne nue**, pas un dict `{'detail': ...}` — seul
+   site de tout `backend/` dans ce cas (vérifié par recherche exhaustive de `raise ValidationError(` :
+   tous les ~30 autres sites du projet passent un dict). DRF sérialise alors la réponse HTTP 400 en
+   **tableau JSON nu**, sans objet englobant :
+   ```json
+   ["Une session existe déjà pour l'Équipe B le 2026-11-03 à la boulangerie K1."]
+   ```
+   (confirmé par appel direct à l'API, contournant le frontend — voir Reproduction ci-dessous).
+
+   Côté frontend, `Production.tsx::handleAddSession` (l.277-281) n'a **pas** été migré vers
+   `getErrorDetail` (BUG-011/BUG-127, qui couvre déjà `Production.tsx` pour les 3 autres formulaires
+   Appro/Transfert/Sortie, mais pas celui-ci) et garde sa propre logique ad hoc :
+   ```ts
+   const d = axios.isAxiosError(err)
+     ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
+     : undefined;
+   setProdError(d?.detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur.');
+   ```
+   `d` est ici le tableau lui-même (`["Une session existe déjà..."]`) : ni `d.detail` ni
+   `d.non_field_errors` n'existent sur un tableau, donc le code retombe sur `JSON.stringify(d)`, qui
+   affiche au gérant le texte brut, crochets et guillemets inclus :
+   `["Une session existe déjà pour l'Équipe B le 2026-11-03 à la boulangerie K1."]`
+   au lieu d'une phrase française propre (capture d'écran ci-dessous).
+
+   **Note pour mémoire** : `getErrorDetail` (`frontend/src/api/errors.ts`, correctif BUG-127) **ne
+   traiterait pas non plus correctement** ce cas particulier s'il était appliqué tel quel ici — son
+   garde `isPlainObject` (l.12-14) exclut explicitement les tableaux (`!Array.isArray(value)`), donc un
+   tableau JSON nu ferait retomber `getErrorDetail` sur le `fallback` générique (perte totale du
+   message, pas d'affichage de JSON brut mais pas d'information non plus). Les deux correctifs
+   (ajout du dict manquant côté `production/views.py`, et éventuellement l'ajout d'un cas « tableau de
+   chaînes » dans `getErrorDetail` pour couvrir tout endroit similaire à l'avenir) sont indépendants et
+   peuvent être traités ensemble ou séparément — laissé à l'appréciation de `dev-backend`/`dev-frontend`.
+
+#### Reproduction
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/core/auth/login/ -H 'Content-Type: application/json' \
+  -d '{"username":"demo_gerant_k1_e2e","password":"<mot de passe du compte>"}' \
+  | python -c 'import sys,json;print(json.load(sys.stdin)["access"])')
+
+# Déclarer une 1ère fournée Équipe B aujourd'hui pour K1 (si pas déjà fait), puis rejouer EXACTEMENT
+# la même requête une 2e fois :
+curl -s -i -X POST http://localhost:8000/api/production/sessions/ -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"flour_sacks_used":"1","date":"2026-11-03","team":"B","lines":[{"bread_price":1,"quantity":5}],"consumables_used":[]}'
+```
+→ HTTP 400, corps `["Une session existe déjà pour l'Équipe B le 2026-11-03 à la boulangerie K1."]`
+(tableau JSON nu, pas d'objet `{"detail": ...}`).
+
+Côté UI (capture d'écran jointe au rapport `docs/qa/rapports/testeur-e2e-2026-11-03-regression-complete-avant-client.md`) :
+connecté en GERANT K1, onglet Production & Stocks → Fournées, formulaire « §3.1 — Déclaration de
+Fournée », Équipe B, 1 sac, 5 pains de 200, soumettre une 2e fois le même jour → bandeau d'erreur rouge
+sous le formulaire affichant littéralement
+`["Une session existe déjà pour l'Équipe B le 2026-11-03 à la boulangerie K1."]`.
+
+#### Analyse d'impact
+- Aucune perte de données ni aucune incohérence comptable : la contrainte `unique_together` protège
+  correctement contre le doublon, aucune `ProductionSession` en double n'est créée (comportement
+  fonctionnel conforme à CLAUDE.md §5.4).
+- Seul l'habillage du message d'erreur est en cause : le gérant comprend sans doute la cause (le texte
+  français reste lisible malgré les crochets/guillemets), mais l'affichage n'est pas professionnel pour
+  un outil livré au client — à corriger avant la prise en main.
+- Gravité retenue : **Mineur** (pas de perte de données, pas de blocage fonctionnel, juste un habillage
+  d'erreur dégradé sur un cas marginal — doublon volontaire ou rejeu de formulaire).
+
+#### Suggestion de correctif (à valider par dev-backend, le testeur n'écrit pas de code applicatif)
+Dans `backend/production/views.py`, aligner ce site unique sur tous les autres du projet :
+```python
+except IntegrityError:
+    team = serializer.validated_data.get('team', '?')
+    date = serializer.validated_data.get('date', '?')
+    raise ValidationError({
+        'detail': f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
+    })
+```
+Test à écrire par `dev-backend` en corrigeant (CLAUDE.md §7 règle 4) : test qui échoue avant/passe
+après, ex. `self.client.post(...)` déclenchant le doublon et vérifiant
+`response.data == {'detail': '...'}` (ou au minimum `isinstance(response.data, dict)`), pas une liste
+nue.
+
+#### Vérification
+- Par : —
+- Résultat : en attente.
+
+### BUG-130 — Créneaux horaires des équipes A/B configurables par boulangerie (demande client, remarque.md l.396)
+
+- Module : Core/Production
+- Type : Fonctionnalité
+- Composant : backend/frontend
+- Gravité : Mineur
+- Statut : VÉRIFIÉ (backend, dev-backend, 2026-11-09 ; vérifié testeur-e2e, 2026-11-09) — frontend couvert séparément par BUG-131
+- Ouvert par : coordinateur (remarque.md l.396 : « ... il faudrait aussi avoir la possibilité
+  d'enregistrer les heures de début et de fin à l'enregistrement d'une succursale comme chaque
+  succursale dispose de deux créneaux pour les équipes A et B », demande précisée directement par le
+  coordinateur comme prérequis d'un futur chantier de détermination automatique de l'équipe active).
+
+**Note de numérotation** : le coordinateur avait demandé d'ouvrir ce ticket sous le nom « BUG-129 »,
+mais ce numéro était déjà pris dans le tableau de suivi par un ticket distinct, ouvert par
+`testeur-e2e` le 2026-11-03 (régression `getErrorDetail`/tableau JSON nu sur
+`ProductionSessionViewSet`, toujours `OUVERT`, non lié à cette demande). Pour ne pas écraser ni
+renuméroter un ticket existant, cette fonctionnalité a été enregistrée sous **BUG-130**, et le sous-
+ticket frontend sous **BUG-131**. Le futur chantier de détermination automatique de l'équipe active,
+que le coordinateur avait anticipé sous le nom « BUG-130 », devra donc être ouvert sous un numéro
+ultérieur (**BUG-132** ou plus) quand il sera lancé — signalé ici pour que le coordinateur en tienne
+compte, pas tranché unilatéralement.
+
+**Correction — dev-backend, 2026-11-09** :
+- Cause : fonctionnalité jamais implémentée (demande nouvelle) — `Node` ne portait aucune information
+  d'horaire d'équipe.
+- `backend/core/models.py::Node` : 4 nouveaux champs `TimeField(null=True, blank=True)` —
+  `team_a_start_time`, `team_a_end_time`, `team_b_start_time`, `team_b_end_time`. Nullable à dessein :
+  une boulangerie existante n'a pas encore ces données, aucune contrainte serveur ne force une valeur
+  (les éventuelles valeurs suggérées — ex. équipe A 06h00-13h00, équipe B 13h00-20h00 — relèvent de
+  l'UI frontend, pas du modèle).
+- Nouvelle méthode `Node.active_team_at(when=None)` : retourne `'A'`, `'B'` ou `None` selon l'heure
+  donnée (`datetime` aware/naïf ou `time`, défaut = heure locale courante) et les créneaux déclarés.
+  Hypothèse documentée explicitement dans la docstring et à valider si besoin par le client : **un
+  créneau ne traverse jamais minuit** — aucune mention d'équipe de nuit à cheval sur deux jours dans
+  `data_kiese/`, `remarque.md`, `cahierDesCharges.md` ou `adaptes.md` (CLAUDE.md §5.2 confirme
+  « Équipes : A et B uniquement, pas de jour/nuit »). La fonction gère quand même sans planter le cas
+  `start > end` (traversée de minuit) si jamais une boulangerie était configurée ainsi par erreur, mais
+  ce n'est pas le comportement visé. Comparaison en intervalle semi-ouvert `[début, fin)` ; en cas de
+  chevauchement A/B (configuration incohérente côté utilisateur, non empêchée par le modèle), l'équipe
+  A est retournée en priorité. Non testée en conditions réelles de chevauchement de minuit — à
+  retravailler explicitement par le futur chantier (BUG-132+) si un cas réel apparaît, pas à deviner
+  ici.
+- Migration `backend/core/migrations/0016_node_team_a_end_time_node_team_a_start_time_and_more.py` :
+  schéma seul (4 colonnes nullable), aucune migration de données nécessaire.
+- `backend/core/serializers.py::NodeSerializer` : les 4 champs ajoutés à `fields` (lecture/écriture).
+  Permission : `NodeViewSet.get_permissions()` (`backend/core/views.py`) n'a pas de garde par champ —
+  toute écriture (create/update/partial_update/destroy) est déjà réservée à `IsDirection` (ADMIN/
+  DIRECTION), la même garde que pour tous les autres champs de configuration de `Node` (`sac_value_fc`,
+  `is_active`, `address`…). Un `COMPTABLE` (HQ au sens `IsHeadquarters` mais pas `IsDirection`) ne peut
+  donc pas non plus modifier ces champs, exactement comme pour les champs existants — pas de nouvelle
+  classe de permission introduite, cohérence vérifiée par test plutôt que supposée.
+- Tests (nouveau fichier `backend/core/tests/test_bug130_team_schedule.py`, 14 tests, tous nouveaux —
+  aucun test existant modifié ou affaibli) :
+  - `NodeTeamScheduleApiTests` : DIRECTION peut écrire les 4 champs via `PATCH /api/core/nodes/{id}/` ;
+    un GERANT non-HQ reçoit 403 et aucune valeur n'est modifiée ; un COMPTABLE (HQ mais pas DIRECTION)
+    reçoit aussi 403 ; les champs sont bien renvoyés en lecture pour tout utilisateur authentifié ; la
+    création d'une boulangerie sans ces champs ne force aucune valeur par défaut (`None` en base).
+  - `NodeActiveTeamAtTests` : heure dans le créneau A, heure dans le créneau B, borne de début incluse
+    (`[start, end)`), borne de fin exclue (appartient au créneau suivant), heure hors des deux créneaux
+    (`None`), créneaux non déclarés (`None`), acceptation d'un `datetime` aware, valeur par défaut
+    (heure courante, ne lève jamais d'exception), type invalide (`date` seul) → `TypeError`.
+- Fichiers modifiés : `backend/core/models.py`, `backend/core/serializers.py`,
+  `backend/core/migrations/0016_node_team_a_end_time_node_team_a_start_time_and_more.py` (nouveau),
+  `backend/core/tests/test_bug130_team_schedule.py` (nouveau).
+- Impact API : **ajout de champs uniquement** (rétrocompatible) — 4 nouveaux champs optionnels dans la
+  réponse `GET`/réponse acceptée en `POST`/`PATCH` sur `/api/core/nodes/`. Aucun champ existant modifié,
+  aucun changement de code HTTP. Pas de ticket `dev-frontend` nécessaire côté contrat d'API (BUG-131
+  couvre uniquement l'ajout du formulaire, pas une adaptation d'un contrat cassé).
+- Vérifications :
+  - `python manage.py test` (suite complète, 504 tests) → **OK** (confirmé le 2026-11-09, après un
+    faux départ opérationnel sans rapport avec le code livré : deux exécutions précédentes avaient été
+    lancées en tâche de fond puis interrompues par erreur avant la fin ; une exécution propre et
+    unique, non interrompue, a tourné jusqu'au bout — `Ran 504 tests in 1622.606s` / `OK`). Détail dans
+    le rapport `docs/qa/rapports/dev-backend-2026-11-09-bug129-creneaux-equipes.md`.
+  - `python manage.py makemigrations --check --dry-run` → `No changes detected`.
+- BUG-130 passé à `CORRIGÉ` (backend uniquement) — **non passé à `VÉRIFIÉ`** par `dev-backend`
+  lui-même (CLAUDE.md §7 règle 3). Pas de testeur de module dédié identifié pour `Node`/`core` dans
+  l'organisation actuelle (comme pour BUG-011/127/128) — à trancher par le coordinateur.
+
+#### Vérification
+- Par : testeur-e2e, 2026-11-09
+- Résultat : **VÉRIFIÉ**. Code relu (`backend/core/models.py`, `serializers.py`,
+  `views.py::NodeViewSet.get_permissions()`, `backend/core/permissions.py::IsDirection`/
+  `IsHeadquarters`) : confirmé indépendamment que seul `IsDirection` (ADMIN/DIRECTION/superuser)
+  garde l'écriture sur `Node`, pas `IsHeadquarters` — un COMPTABLE (HQ mais pas DIRECTION) ne peut
+  donc pas modifier les créneaux, conforme à la demande. `python manage.py test
+  core.tests.test_bug130_team_schedule` rejoué : 14/14 OK. `makemigrations --check --dry-run` :
+  `No changes detected`. `active_team_at()` rejoué indépendamment via un script `manage.py shell`
+  ad hoc (pas les tests existants) sur 7 scénarios : heure dans le créneau A (09:00→'A'), borne de
+  début incluse côté B (13:00→'B', pas 'A'), juste avant le créneau A (05:59→None), borne de fin
+  exclue (20:00→None), juste avant la fin de B (19:59→'B'), `datetime` naïf accepté (07:00→'A'),
+  chevauchement A/B avec priorité à A confirmée (12:00→'A' sur une config A=06:00-15:00/
+  B=10:00-20:00). Vérification API de bout en bout via `demo_direction_e2e`/`demo_comptable_e2e`
+  (comptes `e2e/fixtures/comptes.ts`, mots de passe déjà utilisables, aucune manipulation
+  `set_unusable_password` nécessaire) : création d'un nœud sans créneaux → les 4 champs renvoyés
+  `None` (pas de valeur forcée) ; `PATCH` des 4 créneaux par DIRECTION → 200 ; `PATCH` par COMPTABLE
+  → 403 confirmé en conditions réelles (pas seulement en test unitaire). Nœud de test supprimé
+  après vérification. Aucun écart avec le rapport `dev-backend-2026-11-09-bug129-creneaux-equipes.md`.
+
+### BUG-131 — Sous-ticket BUG-130 : formulaire frontend des créneaux horaires d'équipe (`Nodes.tsx`)
+
+- Module : Core/Production
+- Type : Fonctionnalité
+- Composant : frontend
+- Gravité : Mineur
+- Statut : VÉRIFIÉ
+- Ouvert par : dev-backend (ticket lié, en clôturant BUG-130, 2026-11-09)
+- Contexte : le backend (BUG-130) expose désormais 4 champs optionnels sur `Node` —
+  `team_a_start_time`, `team_a_end_time`, `team_b_start_time`, `team_b_end_time` (format `HH:MM:SS`,
+  lecture par tout utilisateur authentifié, écriture réservée à `IsDirection` via `NodeViewSet`, comme
+  tous les autres champs de configuration de `Node`). Le formulaire de création/édition de boulangerie
+  (`frontend/src/pages/dashboard/Nodes.tsx`, interface réservée à la Direction d'après le bandeau d'en-
+  tête déjà présent) ne les affiche pas encore.
+- À faire (par `dev-frontend`, hors périmètre `dev-backend` — CLAUDE.md « Interdits : ne pas modifier
+  le frontend ») :
+  1. Ajouter 4 `<input type="time">` au formulaire (`formData`/`handleOpenModal`/`handleSubmit`),
+     regroupés visuellement par équipe (A : début/fin ; B : début/fin), avec libellés en français.
+  2. Gérer `null`/vide proprement à l'aller (pré-remplissage à l'édition) et au retour (ne pas envoyer
+     de chaîne vide si l'utilisateur laisse le champ vide — envoyer `null` comme pour `sac_value_fc`).
+  3. Suggestion d'ergonomie (pas une contrainte serveur, voir BUG-130) : proposer des valeurs par
+     défaut dans l'UI uniquement pour une nouvelle boulangerie sans créneau déjà défini (ex. placeholder
+     ou pré-remplissage éditable 06:00/13:00/13:00/20:00), jamais imposées.
+  4. Typer `BakeryNode` (interface locale du fichier) avec les 4 nouveaux champs (`string | null`).
+  5. `npx tsc --noEmit` et `npm run build` propres, pas de nouveau `any`.
+- Pas de test automatisé existant pour cette page (comme BUG-128/`ClotureJournaliere.tsx`) — à
+  confirmer avec le coordinateur si un test E2E minimal est attendu avant de passer à `VÉRIFIÉ`.
+
+#### Correction
+- Par : dev-frontend le 2026-11-09
+- Cause : fonctionnalité jamais implémentée côté frontend (le backend BUG-130 expose les 4 champs
+  mais `Nodes.tsx` ne les affichait pas).
+- Fichiers modifiés :
+  - `frontend/src/api/services.ts` : ajout de `team_a_start_time`, `team_a_end_time`,
+    `team_b_start_time`, `team_b_end_time` (`string | null`) à l'interface `BakeryNode`.
+  - `frontend/src/pages/dashboard/Nodes.tsx` : même ajout sur l'interface `BakeryNode` locale (ce
+    fichier en exporte une copie distincte, réutilisée par `Users.tsx` — les deux types étaient déjà
+    dupliqués avant ce ticket ; mis à jour les deux par cohérence, pas de fusion des deux types décidée
+    unilatéralement). Ajout de 4 `<input type="time">` au formulaire de création/édition (section
+    « Créneaux Horaires des Équipes »), groupés par équipe avec libellés « Équipe A — Début »,
+    « Équipe A — Fin », « Équipe B — Début », « Équipe B — Fin », et placeholders suggérant
+    06:00/13:00/13:00/20:00 (indicatifs seulement, jamais imposés — valeur initiale réelle reste vide).
+    Deux fonctions utilitaires `toTimeInputValue`/`fromTimeInputValue` gèrent la conversion
+    `"HH:MM:SS" | null` (API) ↔ `"HH:MM" | ""` (`<input type="time">`) dans les deux sens :
+    pré-remplissage à l'édition (chaîne vide si `null`), et à l'enregistrement un champ laissé vide est
+    envoyé comme `null` (jamais `""`), suivant le même pattern que `sac_value_fc`.
+- Pas de nouveau `any` introduit. Appels HTTP de cette page déjà faits via `apiClient` directement
+  (pas via `src/api/services.ts`) — pattern préexistant à tout ce fichier, non touché par ce ticket
+  (migration complète de la page vers `services.ts` hors périmètre de BUG-131, à ouvrir séparément si
+  le coordinateur le souhaite).
+- Test de non-régression : aucun test automatisé n'existait pour cette page (comme noté plus haut) ;
+  aucun ajouté ici non plus — vérification manuelle décrite ci-dessous pour le testeur.
+- Vérification manuelle suggérée (pas de test E2E existant sur `Nodes.tsx`) :
+  1. Se connecter en DIRECTION/ADMIN, aller sur « Gestion des Succursales ».
+  2. Créer une nouvelle succursale sans toucher aux 4 champs horaires → vérifier en base/API que les
+     4 champs sont `null` (pas `""`).
+  3. Modifier une succursale existante, renseigner les 4 créneaux (ex. 06:00/13:00/13:00/20:00),
+     enregistrer, rouvrir la modale → les 4 valeurs doivent être pré-remplies correctement.
+  4. Vider un seul des 4 champs puis enregistrer → vérifier que seul ce champ repasse à `null` côté
+     API, les 3 autres restant inchangés.
+  5. Vérifier à 360 px (mobile) et 768 px que la grille 2 colonnes des créneaux reste lisible et que la
+     modale (`maxWidth: 500px`) ne déborde pas de l'écran ni ne nécessite de défilement de page.
+- Impact API / frontend : aucun changement de contrat, uniquement consommation des 4 champs déjà
+  exposés par BUG-130.
+- `npx tsc --noEmit` : aucune erreur. `npm run build` : succès (avertissements préexistants seulement —
+  taille de chunk, minificateur `oxc` non supporté pour les chunks legacy — aucun nouvel avertissement).
+
+#### Vérification
+- Par : testeur-e2e, 2026-11-09
+- Résultat : **VÉRIFIÉ**. Vérification manuelle sur serveurs de dev réels (`demo_direction_e2e`,
+  compte déjà utilisable) : connexion en DIRECTION, `/admin/nodes` (pas `/dashboard/nodes` —
+  route réelle confirmée dans `frontend/src/App.tsx`), création d'une succursale `ZZMAN` sans
+  toucher aux créneaux → ré-ouverture de la modale : les 4 `<input type="time">` bien présents et
+  vides (confirmé aussi côté API : `None` en base, cf. vérification BUG-130 ci-dessus). Modification
+  avec les 4 créneaux renseignés (06:00/13:00/13:00/20:00), sauvegarde, ré-ouverture : pré-remplissage
+  correct des 4 valeurs. Un seul champ vidé puis sauvegardé : seul ce champ repasse vide à la
+  ré-ouverture, les 3 autres inchangés — confirmé. Testé aux largeurs **360 px (pos)**, **768 px
+  (tablette)** et **1440 px (bureau)** : la grille des créneaux reste utilisable, aucun débordement
+  ni blocage d'interaction. Succursale de test supprimée via l'UI après vérification (plus aucune
+  trace en base). Aucun écart avec le rapport `dev-frontend-2026-11-09-bug131-creneaux-frontend.md`.
+  Remarque non bloquante (déjà signalée par dev-frontend, non reprise ici comme anomalie) : la page
+  n'impose pas elle-même la visibilité par rôle (elle s'appuie sur le menu + la garde backend
+  `IsDirection`, déjà vérifiée réelle), cohérent avec le reste de l'application.
+
+---
+
+### BUG-132 — Chargement de « Gestion de la Clientèle » très lent pour un rôle Siège (685+ clients attendus en une seule fois)
+
+- Module : Clients
+- Type : Performance / ergonomie
+- Composant : frontend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ
+- Ouvert par : coordinateur (demande client remontée directement, pas encore dans `remarque.md`),
+  2026-11-09
+- Contexte / cause confirmée : `frontend/src/api/services.ts::getList()` (utilitaire PARTAGÉ par
+  tout `services.ts`) suit systématiquement `next` et n'attend d'avoir TOUTES les pages DRF avant de
+  résoudre. `Clients.tsx::loadClients()` appelait `clientsApi.list()` (basé sur `getList`), donc
+  attendait que les 685+ fiches des 8 boulangeries soient intégralement chargées avant d'afficher la
+  moindre ligne pour un rôle Siège (ADMIN/DIRECTION/COMPTABLE, `can_access_all_nodes=true`). Un
+  GERANT (une seule boulangerie, dizaines de fiches) ne voyait pas le problème.
+- Demande explicite du client : affichage progressif — la première page s'affiche dès qu'elle
+  arrive, le reste continue à charger automatiquement en arrière-plan, un indicateur visible pendant
+  ce chargement, et un moyen de révéler ce qui est déjà chargé (bouton ou affichage automatique, au
+  choix du développeur).
+- Contrainte du ticket : ne pas modifier `services.ts::getList()` lui-même (utilitaire partagé par
+  Treasury/Production/Sales/etc., tout changement là impacterait ces modules hors périmètre de ce
+  ticket).
+
+#### Correction
+- Par : dev-frontend le 2026-11-09
+- Fichiers modifiés :
+  - `frontend/src/api/services.ts` : ajout de `getPage<T>()` (fonction interne, ne touche pas à
+    `getList`) et `clientsApi.listPage(params)` qui renvoie UNE page brute DRF
+    (`{count, next, previous, results}`), sans agrégation. Type exporté `PaginatedResponse<T>`.
+    `getList`/`clientsApi.list` restent inchangées (toujours utilisées ailleurs sans régression).
+  - `frontend/src/pages/dashboard/Clients.tsx` :
+    - `loadClients()` réécrit : appelle `clientsApi.listPage({ page: '1', page_size: '50', ...filtres })`
+      en parallèle de `coreApi.breadPrices.list()`/`coreApi.config.get()`. Dès que la page 1 revient,
+      `setClients(firstResults)` + `setIsLoading(false)` : la table s'affiche immédiatement avec les
+      50 premières fiches (page/page_size = contrat DRF standard déjà exposé par `ClientViewSet`,
+      pagination par défaut du projet — `PAGE_SIZE_QUERY_PARAM='page_size'`, `MAX_PAGE_SIZE=500`,
+      confirmé dans `backend/kiese/settings.py`).
+    - Ensuite, une boucle `while (next)` continue à appeler `clientsApi.listPage` page par page,
+      SANS bloquer l'UI (pas de `await` qui retarde l'affichage initial — cette boucle démarre après
+      le premier rendu), en accumulant chaque page dans `clients` via
+      `setClients(prev => [...prev, ...mapped])`.
+    - Garde de fraîcheur `loadClientsRequestIdRef` (déjà en place pour BUG-103) étendue à chaque
+      itération de la boucle : si le filtre/la recherche change pendant le chargement arrière-plan, la
+      boucle en cours s'arrête proprement (`isCurrent()` vérifié à chaque page) au lieu de continuer à
+      alimenter un état obsolète.
+    - Nouveaux états : `clientsTotalCount` (total serveur), `clientsLoadedCount` (nombre déjà reçu),
+      `clientsBackgroundLoading` (true pendant la boucle).
+    - Indicateur discret ajouté sous le titre du tableau : spinner + « Chargement du reste de la
+      liste… X / Y clients chargés. », avec avertissement supplémentaire si les filtres Type/Risque
+      (appliqués en mémoire, non côté serveur) sont actifs pendant ce chargement — ils peuvent être
+      incomplets tant que toutes les pages ne sont pas arrivées. Message « Liste complète chargée (Y
+      client(s)). » une fois terminé.
+    - Message « Aucun client ne correspond » complété d'un avertissement « peut être incomplet » si
+      les filtres Type/Risque sont actifs et le chargement arrière-plan toujours en cours (évite le
+      faux-négatif « ce client n'existe pas » signalé comme risque par le coordinateur).
+    - Bouton « Voir plus » existant (`clientsVisibleCount`, révélation 20 par 20 déjà en place avant
+      ce ticket) conservé et étendu : reste visible/affiché tant qu'il reste des clients déjà chargés
+      à révéler OU que le chargement arrière-plan n'est pas terminé. Dans ce second cas, le bouton est
+      désactivé et affiche « En attente de la page suivante… » — le choix retenu est qu'un seul
+      mécanisme (pas de bouton séparé « charger plus de pages ») suffit : le chargement arrière-plan
+      tourne déjà tout seul sans attendre de clic, et `clientsVisibleCount` étant déjà avancé, la ligne
+      suivante apparaît automatiquement, sans second clic, dès que la page suivante arrive.
+  - Recherche/filtrage : la recherche par nom/code reste envoyée au serveur (`search`, déjà en place
+    avant ce ticket, BUG-061/BUG-103) — chaque requête de recherche (page 1 incluse) interroge
+    directement l'ensemble correspondant côté serveur, donc un résultat de recherche à 0 ligne reste
+    fiable même si le chargement arrière-plan est en cours (pas de faux-négatif pour la recherche par
+    nom/code). Seuls les filtres Type/Risque (non filtrables côté API aujourd'hui) restent appliqués en
+    mémoire sur ce qui est déjà chargé — avertissement ajouté comme décrit plus haut plutôt que d'ouvrir
+    un chantier backend non demandé par ce ticket.
+- Vérification manuelle (pas de nouveau test E2E ajouté par ce ticket — le test existant ci-dessous
+  couvre déjà le parcours et devient plus rapide/plus représentatif) :
+  1. Se connecter avec un compte Siège (ADMIN/DIRECTION/COMPTABLE) ayant 685+ clients visibles,
+     ouvrir `/clients` : la table affiche les 50 premières fiches quasi immédiatement (`isLoading`
+     repasse à `false` dès la page 1), pas après le chargement complet.
+  2. Observer le bandeau « Chargement du reste de la liste… X / Y clients chargés. » pendant quelques
+     secondes, puis « Liste complète chargée (Y client(s)). ».
+  3. Cliquer « Voir plus » plusieurs fois pendant le chargement arrière-plan : la liste visible grossit
+     par paliers de 20 sans attente perceptible une fois les pages déjà arrivées ; si on clique plus
+     vite que l'arrivée des pages, le bouton affiche « En attente de la page suivante… » (désactivé)
+     puis redevient cliquable.
+  4. Taper une recherche par nom/code pendant le chargement arrière-plan : le résultat reste correct
+     (recherche serveur), sans dépendre de ce qui est déjà accumulé en mémoire.
+  5. Filtrer par Type ou Risque pendant que le bandeau de chargement est affiché : vérifier
+     l'avertissement « peut être incomplet » si 0 résultat.
+  6. Se connecter avec un GERANT (une boulangerie) : comportement inchangé, chargement toujours rapide
+     (une seule page suffit généralement, pas de bandeau arrière-plan).
+- `npx tsc --noEmit` : aucune erreur. `npm run build` : succès (avertissements préexistants seulement —
+  taille de chunk `index-legacy` > 500 kB, minificateur `oxc` non supporté pour les chunks legacy —
+  aucun nouvel avertissement).
+- Test E2E existant exécuté : `e2e/tests/03-clients.spec.ts` (notamment le 3e scénario, « un facturier
+  de K2 retrouve un client rattaché à K1 », qui attend déjà `/\d+ fiches/` ne valant pas `0 fiches`
+  avant de chercher — ce texte provient de `{clients.length} fiches`, qui apparaît maintenant dès la
+  page 1 au lieu d'attendre l'intégralité du chargement : ce test devient plus rapide, son
+  `test.slow()`/timeout 60 s existant (commentaire BUG-061) reste une marge de sécurité, pas une
+  nécessité). Résultat : voir rapport `docs/qa/rapports/dev-frontend-2026-11-09-bug132-chargement-progressif-clients.md`.
+
+#### Vérification
+- Par : testeur-e2e, 2026-11-09
+- Résultat : **VÉRIFIÉ**. Code relu (`frontend/src/api/services.ts::getPage`/`clientsApi.listPage`,
+  `frontend/src/pages/dashboard/Clients.tsx::loadClients`) : conforme à la description (page 1
+  affichée dès réception, boucle d'arrière-plan gardée par `loadClientsRequestIdRef`, recherche
+  envoyée au serveur). `cd e2e && npx playwright test tests/03-clients.spec.ts` rejoué
+  indépendamment sur les **4 largeurs** (pos/tablette/bureau/tv) : **12/12 passés** (3.8 min),
+  confirmant le résultat déjà obtenu par dev-frontend. Vérification manuelle complémentaire avec
+  `demo_direction_e2e` (722 clients réels en base de dev, bien au-delà du seuil de 685+) sur
+  largeurs **360 px** et **1440 px** :
+  - Premier rendu de la table en ~2-3 s (`X fiches` visible), largement avant la fin du chargement
+    complet.
+  - Bandeau « Chargement du reste de la liste… X / Y clients chargés. » observé avec un compteur
+    strictement croissant dans le temps (ex. 50 → 250 → 550 → 722), jamais figé ni régressif.
+  - Message final « Liste complète chargée (722 client(s)). » atteint à chaque essai.
+  - Recherche par nom pendant le chargement arrière-plan (rechargement de la page puis recherche
+    immédiate sur `CrossNodeE2E`) : résultat trouvé de façon fiable, confirmant que la recherche
+    reste server-side et n'est pas affectée par l'état du chargement progressif en mémoire.
+  - Bouton « Voir plus » et compteur « 20 sur 550 client(s) affiché(s) (722 au total, chargement en
+    cours) » observés cohérents pendant le chargement.
+  Aucun écart avec le rapport `dev-frontend-2026-11-09-bug132-chargement-progressif-clients.md`.
