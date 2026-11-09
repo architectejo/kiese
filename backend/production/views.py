@@ -12,9 +12,9 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
 from core.models import Config, Node, BreadPrice
-from core.permissions import IsGerant, IsHeadquarters
+from core.permissions import IsGerant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
-from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, _adjust_bread_stock
+from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, _adjust_bread_stock
 from .serializers import (
     ProductionSessionSerializer, BreadStockSerializer, ConsumableTypeSerializer, ConsumableStockSerializer,
     ConsumableMovementSerializer, ConsumableCountSerializer, BreadTransferSerializer, BreadDisposalSerializer,
@@ -1099,6 +1099,21 @@ def _build_daily_closure_report(node, report_date):
 
     team_choices = [c[0] for c in ProductionSession.Team.choices]
 
+    # BUG-133 : si le gérant a explicitement confirmé le stock de départ
+    # (RESTE DU HIER) pour (node, équipe, report_date) via la boîte modale
+    # de première connexion, cette valeur DÉCLARÉE devient prioritaire sur
+    # le calcul auto-dérivé de `DailyBreadStockSnapshot.reste_du_hier()`
+    # pour cette équipe/catégorie/jour précis — sans jamais toucher
+    # `DailyBreadStockSnapshot` lui-même (BUG-118, VÉRIFIÉ, laissé intact).
+    # Absence de confirmation pour ce jour/équipe = comportement auto-dérivé
+    # strictement inchangé (rétro-compatibilité totale).
+    confirmed_reste_du_hier_by_team_bp = {}
+    for confirmation in DailyOpeningConfirmation.objects.filter(
+        node=node, date=report_date,
+    ).prefetch_related('lines'):
+        for line in confirmation.lines.all():
+            confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
+
     category_ids = (
         set(BreadPrice.objects.filter(is_active=True).values_list('id', flat=True))
         | set(produced_by_bp) | set(normal_by_bp) | set(soldee_by_bp)
@@ -1135,8 +1150,29 @@ def _build_daily_closure_report(node, report_date):
             team: DailyBreadStockSnapshot.reste_du_jour(node, bp, report_date, team)
             for team in team_choices
         }
+        # BUG-135 : `DailyOpeningConfirmationLine.qty_confirmed` est stocké
+        # POSITIF à dessein (stock physique réel saisi/validé par le gérant
+        # dans la boîte modale, CLAUDE.md §5.4/BUG-133/134 — ne pas toucher
+        # à ce stockage). Mais `DailyBreadStockSnapshot.reste_du_hier()`
+        # (BUG-118, VÉRIFIÉ, formule-vérifiée contre l'Excel réel) suit la
+        # convention INVERSE : `reste_du_hier = -reste_du_jour(veille)`,
+        # négative par construction. `facture_mvm_interne`/`total_du_jour`
+        # (BUG-120, déjà vérifiés formule à formule contre les Excel réels)
+        # dépendent de `reste_du_hier_fc` calculé ci-dessous à partir de ce
+        # dict : une valeur confirmée non négée y introduirait un signe
+        # inversé par rapport à un jour équivalent non confirmé, cassant la
+        # cohérence du total cumulé (trouvé par le coordinateur en relisant
+        # le code après BUG-133/134). On applique donc ici — et seulement
+        # ici, à l'agrégation du rapport — la même convention de signe que
+        # le calcul auto-dérivé, pour que `reste_du_hier_by_team` (exposé
+        # tel quel au frontend, `ClotureJournaliere.tsx`) reste cohérent en
+        # signe entre jours confirmés et jours non confirmés.
         reste_du_hier_by_team = {
-            team: DailyBreadStockSnapshot.reste_du_hier(node, bp, report_date, team)
+            team: (
+                -confirmed_reste_du_hier_by_team_bp[(team, bp_id)]
+                if (team, bp_id) in confirmed_reste_du_hier_by_team_bp
+                else DailyBreadStockSnapshot.reste_du_hier(node, bp, report_date, team)
+            )
             for team in team_choices
         }
         reste_du_jour_fc = _m(sum(Decimal(v or 0) for v in reste_du_jour_by_team.values()) * catalog_price)
@@ -1324,3 +1360,360 @@ class DailyClosureReportView(APIView):
                 return Response({'detail': f"Boulangerie « {node_param} » introuvable."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(_build_daily_closure_report(node, report_date))
+
+
+def _opening_confirmation_resolve_node(request, node_param):
+    """
+    Même règle que `DailyClosureReportView.get()`/`_resolve_node()` : un
+    non-HQ n'agit jamais que sur sa propre boulangerie (toute valeur `node`
+    reçue est ignorée, jamais une fuite — même motif que BUG-022/025/056) ;
+    un HQ doit explicitement préciser `node`.
+    Renvoie `(node, None)` ou `(None, Response(...))`.
+    """
+    user = request.user
+    if not user.can_access_all_nodes:
+        if not user.node_id:
+            return None, Response(
+                {'detail': "Compte non assigné à une boulangerie."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return user.node, None
+    if not node_param:
+        return None, Response(
+            {'detail': "Le paramètre `node` (code ou identifiant) est requis."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    node = _resolve_node(node_param)
+    if node is None:
+        return None, Response(
+            {'detail': f"Boulangerie « {node_param} » introuvable."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return node, None
+
+
+class DailyOpeningConfirmationView(APIView):
+    """
+    BUG-133 (docs/qa/REGISTRE_BUGS.md) : boîte modale « stock de départ » —
+    à sa première connexion de la journée (en pratique : tant qu'aucune
+    confirmation n'existe pour node/équipe/aujourd'hui, le client a demandé
+    que la boîte modale se réaffiche à CHAQUE changement de page du
+    dashboard, pas seulement au login), le gérant doit pouvoir consulter le
+    stock physique actuellement disponible par catégorie de pain
+    (`BreadStock.qty_available`, déjà net des ventes confirmées —
+    `sales/views.py` décrémente ce même solde via `_adjust_bread_stock(...,
+    sent=...)` à chaque livraison), le modifier ou le valider tel quel, et
+    que cette validation devienne la valeur officielle de « RESTE DU HIER »
+    pour démarrer la journée (consommée par `_build_daily_closure_report`,
+    BUG-120 — voir le docstring de `DailyOpeningConfirmation`).
+
+    `GET /api/production/opening-confirmation/?node=<code>&date=<AAAA-MM-JJ, optionnel, défaut aujourd'hui>`
+    Volontairement léger (deux requêtes filtrées simples, aucune agrégation
+    lourde) pour être interrogé en toute sécurité à chaque changement de
+    route du dashboard côté frontend, pas seulement au login — voir le
+    sous-ticket `dev-frontend` lié. Renvoie, pour les DEUX équipes A et B à
+    la fois (le choix de l'équipe à confirmer se fait dans la boîte modale
+    elle-même, jamais déduit ici) :
+      - `categories` : catégories actives avec la quantité PROPOSÉE
+        (`qty_proposed` = `BreadStock.qty_available` courant).
+      - `teams.<A|B>.confirmed` : `true` si une confirmation existe déjà
+        pour cette équipe à cette date (le frontend n'affiche alors plus la
+        boîte modale pour cette équipe) ; sinon `false`.
+
+    `POST /api/production/opening-confirmation/`
+    Corps : `{"node": <code, HQ seulement>, "team": "A"|"B",
+    "date": "AAAA-MM-JJ" (optionnel, défaut aujourd'hui),
+    "lines": [{"bread_price": <id>, "qty": <entier >= 0>}, ...]}`.
+    Idempotent (upsert) : un gérant qui corrige une saisie avant d'avoir
+    quitté la boîte modale peut soumettre plusieurs fois le même jour pour
+    la même équipe — la dernière soumission remplace la précédente (même
+    idiome `update_or_create` que `DailyBreadStockSnapshot.record_snapshot`,
+    BUG-118, déjà vérifié), dans une unique transaction atomique couvrant
+    toutes les catégories soumises ensemble (CLAUDE.md §4).
+
+    BUG-136 (client, 2026-11-09) : cette validation synchronise TOUJOURS le
+    stock physique réel (`BreadStock.qty_available`) sur la valeur
+    confirmée, y compris en cas de validation telle que proposée (delta nul,
+    no-op). L'écart entre la valeur confirmée et le `qty_available` courant
+    au moment de la soumission est appliqué comme un ajustement manuel
+    traçable (`BreadStock.qty_adjusted`, jamais `qty_sent`/`qty_disposed`,
+    sémantique distincte — voir docstring du modèle), verrouillé via
+    `select_for_update()` (CLAUDE.md §4) et journalisé via `log_activity`.
+    Le delta est recalculé par rapport à l'état COURANT à chaque
+    soumission : une resoumission/correction le même jour pour la même
+    équipe n'applique jamais l'ajustement deux fois cumulativement.
+
+    BUG-138 (client, tranché directement avec le coordinateur, 2026-11-09,
+    remarque.md l.398 « le facturier peut aussi faire ça ») : le FACTURIER
+    peut désormais consulter et soumettre cette confirmation au même titre
+    que le GERANT (`IsFacturier` englobe déjà GERANT+ — voir
+    `core/permissions.py`) — jamais sur un autre nœud que le sien
+    (`_opening_confirmation_resolve_node` applique la même règle
+    `can_access_all_nodes`/`user.node` pour les deux rôles, FACTURIER n'ayant
+    pas accès multi-nœud, comme GERANT).
+
+    BUG-139 (client, tranché directement avec le coordinateur, 2026-11-09,
+    remarque.md l.398 « on le fait une fois le matin, [...] juste une fois
+    au créneau d'ouverture (premier créneau) ») : UNE SEULE confirmation
+    dans la journée — celle de l'équipe du créneau d'ouverture — doit
+    suffire à faire disparaître la boîte modale, pas les deux équipes A ET
+    B. Ceci ne change QUE le signal consommé par le frontend pour décider
+    d'afficher la boîte modale ; le modèle `DailyOpeningConfirmation`
+    (clé `[node, team, date]`) et `_build_daily_closure_report`/BUG-135
+    (qui continuent, par équipe, à préférer la valeur confirmée de CETTE
+    équipe si elle existe, sinon l'auto-dérivé BUG-118) restent inchangés.
+
+    La réponse du GET porte donc, en plus de `teams.<A|B>.confirmed`
+    (informatif, conservé pour compatibilité mais NE DOIT PLUS servir à
+    décider d'afficher la boîte modale côté frontend) :
+      - `opening_team` : `"A"` ou `"B"` — l'équipe du PREMIER créneau de la
+        journée (`Node.opening_team()`, BUG-141), déterminée
+        STRUCTURELLEMENT à partir des horaires configurés du nœud
+        (`team_a_start_time`/`team_b_start_time`), **indépendamment de
+        l'heure actuelle** ; `null` si le nœud n'a pas de créneaux
+        configurés. Ne pas confondre avec `Node.active_team_at()` (BUG-130),
+        utilisé ailleurs dans le code pour répondre à une question
+        différente (« qui travaille EN CE MOMENT ? ») — ce n'est PAS la
+        méthode utilisée ici : un gérant/facturier peut se connecter le
+        soir, hors de tout créneau, pour rattraper une confirmation
+        oubliée (remarque.md l.398), et doit malgré tout voir l'équipe du
+        premier créneau (BUG-141).
+      - `needs_confirmation` (booléen) : **seul signal que le frontend doit
+        utiliser** pour décider d'afficher la boîte modale (BUG-139) :
+          * `opening_team` déterminé (A ou B) → `needs_confirmation =
+            not teams[opening_team].confirmed` (seule l'équipe du créneau
+            d'ouverture doit avoir confirmé) ;
+          * `opening_team` est `null` (nœud sans créneaux configurés, filet
+            de sécurité) → `needs_confirmation = not teams.A.confirmed and
+            not teams.B.confirmed` (UNE confirmation, A OU B, suffit).
+    """
+    permission_classes = [IsFacturier]
+
+    def get(self, request):
+        from django.utils.dateparse import parse_date
+
+        node, err = _opening_confirmation_resolve_node(request, request.query_params.get('node'))
+        if err is not None:
+            return err
+
+        date_str = request.query_params.get('date')
+        if date_str:
+            report_date = parse_date(date_str)
+            if report_date is None:
+                return Response(
+                    {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            report_date = timezone.localdate()
+
+        categories = list(BreadPrice.objects.filter(is_active=True).order_by('unit_price'))
+        # `qty_available` est une propriété Python (produced+received-sent-
+        # disposed), pas une colonne — on l'évalue en Python par ligne,
+        # jamais via `values_list` (qui ne verrait que des colonnes brutes).
+        proposed_by_bp = {
+            bs.bread_price_id: bs.qty_available
+            for bs in BreadStock.objects.filter(node=node, bread_price__in=categories)
+        }
+
+        categories_payload = [
+            {
+                'bread_price': bp.id,
+                'label': bp.label,
+                'unit_price': bp.unit_price,
+                'qty_proposed': proposed_by_bp.get(bp.id, 0),
+            }
+            for bp in categories
+        ]
+
+        confirmations_by_team = {
+            confirmation.team: confirmation
+            for confirmation in DailyOpeningConfirmation.objects.filter(
+                node=node, date=report_date,
+            ).select_related('confirmed_by').prefetch_related('lines')
+        }
+
+        teams_payload = {}
+        for team in ProductionSession.Team.values:
+            confirmation = confirmations_by_team.get(team)
+            if confirmation is None:
+                teams_payload[team] = {
+                    'confirmed': False, 'confirmed_at': None, 'confirmed_by': None, 'lines': None,
+                }
+            else:
+                teams_payload[team] = {
+                    'confirmed': True,
+                    'confirmed_at': confirmation.confirmed_at,
+                    'confirmed_by': (
+                        confirmation.confirmed_by.get_full_name() or confirmation.confirmed_by.username
+                        if confirmation.confirmed_by else None
+                    ),
+                    'lines': [
+                        {'bread_price': line.bread_price_id, 'qty_confirmed': line.qty_confirmed}
+                        for line in confirmation.lines.all()
+                    ],
+                }
+
+        # BUG-139/BUG-141 : équipe du PREMIER créneau de la journée,
+        # déterminée structurellement à partir des horaires configurés
+        # (`None` si le nœud n'a pas de créneaux configurés, BUG-130/131) —
+        # c'est elle, et elle seule, qui doit avoir confirmé pour que la
+        # boîte modale disparaisse pour le reste de la journée, quelle que
+        # soit l'heure à laquelle cette requête est faite (NE PAS utiliser
+        # `active_team_at()` ici : il répond à une autre question, « qui
+        # travaille EN CE MOMENT ? »).
+        opening_team = node.opening_team()
+        if opening_team in teams_payload:
+            needs_confirmation = not teams_payload[opening_team]['confirmed']
+        else:
+            # Filet de sécurité (nœud sans créneaux configurés) : une seule
+            # confirmation, A OU B, suffit — ne jamais exiger les deux.
+            needs_confirmation = not (
+                teams_payload['A']['confirmed'] or teams_payload['B']['confirmed']
+            )
+
+        return Response({
+            'node': node.code,
+            'date': str(report_date),
+            'categories': categories_payload,
+            'teams': teams_payload,
+            'opening_team': opening_team,
+            'needs_confirmation': needs_confirmation,
+        })
+
+    def post(self, request):
+        from django.db import transaction
+        from django.utils.dateparse import parse_date
+
+        data = request.data
+        node, err = _opening_confirmation_resolve_node(request, data.get('node'))
+        if err is not None:
+            return err
+
+        team = data.get('team')
+        valid_teams = ProductionSession.Team.values
+        if team not in valid_teams:
+            return Response(
+                {'detail': f"Le champ `team` doit être l'une des valeurs : {valid_teams}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        date_str = data.get('date')
+        if date_str:
+            confirmation_date = parse_date(date_str)
+            if confirmation_date is None:
+                return Response(
+                    {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            confirmation_date = timezone.localdate()
+
+        lines = data.get('lines')
+        if not isinstance(lines, list) or not lines:
+            return Response(
+                {'detail': "Le champ `lines` (liste non vide de {bread_price, qty}) est requis."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parsed_lines = []
+        seen_bp_ids = set()
+        for entry in lines:
+            if not isinstance(entry, dict):
+                return Response({'detail': "Chaque élément de `lines` doit être un objet."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                bread_price_id = int(entry.get('bread_price'))
+                qty = int(entry.get('qty'))
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': "Chaque ligne doit fournir `bread_price` et `qty` entiers."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if qty < 0:
+                return Response(
+                    {'detail': "La quantité confirmée ne peut pas être négative."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if bread_price_id in seen_bp_ids:
+                return Response(
+                    {'detail': "Catégorie de pain dupliquée dans `lines`."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            seen_bp_ids.add(bread_price_id)
+            parsed_lines.append((bread_price_id, qty))
+
+        bp_by_id = {
+            bp.id: bp for bp in BreadPrice.objects.filter(id__in=seen_bp_ids)
+        }
+        missing_bp_ids = seen_bp_ids - set(bp_by_id.keys())
+        if missing_bp_ids:
+            return Response(
+                {'detail': f"Catégorie(s) de pain introuvable(s) : {sorted(missing_bp_ids)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # BUG-136 : le client a confirmé que la validation de cette boîte
+        # modale doit TOUJOURS synchroniser le stock physique réel
+        # (`BreadStock.qty_available`) sur la valeur confirmée — y compris
+        # quand le gérant valide le nombre proposé tel quel (delta nul,
+        # no-op) et surtout quand il le corrige (ajustement traçable, à la
+        # manière d'un écart manquant/excédent, CLAUDE.md §5.4). Le delta est
+        # recalculé à chaque soumission par rapport à l'état COURANT de
+        # `BreadStock` (pas par rapport à l'ancienne valeur confirmée
+        # mémorisée) : une resoumission/correction le même jour n'applique
+        # donc jamais l'ajustement deux fois cumulativement (idempotence).
+        stock_adjustments = []
+        with transaction.atomic():
+            confirmation, _created = DailyOpeningConfirmation.objects.update_or_create(
+                node=node, team=team, date=confirmation_date,
+                defaults={'confirmed_by': request.user},
+            )
+            # Remplace intégralement les lignes de CETTE confirmation par la
+            # soumission reçue (idempotent — un gérant qui resoumet après
+            # correction ne doit jamais accumuler d'anciennes lignes
+            # obsolètes pour une catégorie qu'il aurait retirée).
+            confirmation.lines.exclude(bread_price_id__in=seen_bp_ids).delete()
+            for bread_price_id, qty in parsed_lines:
+                DailyOpeningConfirmationLine.objects.update_or_create(
+                    confirmation=confirmation, bread_price_id=bread_price_id,
+                    defaults={'qty_confirmed': qty},
+                )
+
+                # Verrouillage de la ligne de stock avant lecture (CLAUDE.md
+                # §4) : jamais de mise à jour de solde sans
+                # select_for_update() sur la ligne lue.
+                stock, _ = BreadStock.objects.get_or_create(node=node, bread_price_id=bread_price_id)
+                stock = BreadStock.objects.select_for_update().get(pk=stock.pk)
+                before = stock.qty_available
+                delta = qty - before
+                if delta:
+                    _adjust_bread_stock(node, bp_by_id[bread_price_id], adjusted=delta)
+                    stock_adjustments.append({
+                        'bread_price_id': bread_price_id,
+                        'before': before, 'after': qty, 'delta': delta,
+                    })
+
+        log_activity(
+            request.user, "Confirmation Stock de Départ",
+            f"{node.code} Éq.{team} {confirmation_date} : stock de départ confirmé "
+            f"({len(parsed_lines)} catégorie(s)).",
+            node_origin=node.code,
+        )
+        for adj in stock_adjustments:
+            label = bp_by_id[adj['bread_price_id']].label
+            log_activity(
+                request.user, "Ajustement Stock (Confirmation Stock de Départ)",
+                f"{node.code} Éq.{team} {confirmation_date} — {label} : stock disponible "
+                f"ajusté de {adj['before']} à {adj['after']} (delta {adj['delta']:+d}, "
+                f"BUG-136).",
+                node_origin=node.code,
+            )
+
+        return Response(
+            {
+                'detail': "Stock de départ confirmé.",
+                'node': node.code, 'team': team, 'date': str(confirmation_date),
+                'stock_adjustments': stock_adjustments,
+            },
+            status=status.HTTP_200_OK,
+        )

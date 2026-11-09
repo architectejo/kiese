@@ -13,6 +13,7 @@ import {
 } from 'react-icons/fi';
 import { coreApi } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
 
 interface SidebarItemProps {
   to: string;
@@ -819,6 +820,17 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
               </button>
             </form>
         </Modal>
+      )}
+
+      {/* BUG-133/134/138/140 : boîte modale « stock de départ » — pour un
+          GERANT ou un FACTURIER non-HQ (un rôle Siège supervise plusieurs
+          boulangeries et n'a pas de stock de départ personnel à confirmer,
+          cf. fiche BUG-134 du registre ; remarque.md l.398 : « le facturier
+          peut aussi faire ça », BUG-138 côté API). Montée une seule fois ici
+          (pas page par page) ; le composant réinterroge le GET à chaque
+          changement de route via `routeKey`. */}
+      {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
+        <OpeningStockConfirmationModal routeKey={location.pathname} />
       )}
     </div>
   );

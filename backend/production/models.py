@@ -127,8 +127,22 @@ class BreadStock(models.Model):
     """
     Running bread inventory per bakery per price tier.
     Columns track the origin of breads so the UI can show produced vs received.
-      qty_available = qty_produced + qty_received - qty_sent - qty_disposed
+      qty_available = qty_produced + qty_received - qty_sent - qty_disposed + qty_adjusted
     Updated atomically via _adjust_bread_stock() on each business event.
+
+    BUG-136 (docs/qa/REGISTRE_BUGS.md) : `qty_adjusted` capture le cumul des
+    corrections MANUELLES du stock réel décidées par un gérant (actuellement
+    uniquement via la confirmation « stock de départ du jour », BUG-133/134,
+    `DailyOpeningConfirmationView.post()`), par opposition aux mouvements
+    métier réels (`qty_produced`/`qty_received`/`qty_sent`/`qty_disposed`,
+    qui restent inchangés — ne jamais réutiliser `qty_sent`/`qty_disposed`
+    pour une correction manuelle, sémantique trompeuse). Signe retenu : un
+    delta POSITIF signifie que le gérant a déclaré PLUS de pains que ce que
+    le système calculait (excédent constaté) ; un delta NÉGATIF signifie
+    moins (manquant constaté) — même convention que l'écart théorique vs
+    déclaré de CLAUDE.md §5.4 (« Écart = valeur théorique − valeur produite
+    déclarée → manquant ou excédent »), ici appliqué à la quantité physique
+    disponible plutôt qu'à une valeur FC.
     """
     node        = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='bread_stocks', verbose_name=_("Boulangerie"))
     bread_price = models.ForeignKey(BreadPrice, on_delete=models.PROTECT, related_name='bread_stocks', verbose_name=_("Catégorie Pain"))
@@ -136,6 +150,7 @@ class BreadStock(models.Model):
     qty_received = models.IntegerField(default=0, verbose_name=_("Reçus (transferts entrants confirmés)"))
     qty_sent     = models.IntegerField(default=0, verbose_name=_("Expédiés (transferts sortants confirmés)"))
     qty_disposed = models.IntegerField(default=0, verbose_name=_("Disposés (ventes/déchets/dons)"))
+    qty_adjusted = models.IntegerField(default=0, verbose_name=_("Ajustements manuels (corrections gérant, BUG-136)"))
 
     class Meta:
         verbose_name = _("Stock Pains")
@@ -148,10 +163,10 @@ class BreadStock(models.Model):
 
     @property
     def qty_available(self):
-        return self.qty_produced + self.qty_received - self.qty_sent - self.qty_disposed
+        return self.qty_produced + self.qty_received - self.qty_sent - self.qty_disposed + self.qty_adjusted
 
 
-def _adjust_bread_stock(node, bread_price, produced=0, received=0, sent=0, disposed=0):
+def _adjust_bread_stock(node, bread_price, produced=0, received=0, sent=0, disposed=0, adjusted=0):
     """Atomically update BreadStock for a node/bread_price using F() expressions."""
     stock, _ = BreadStock.objects.get_or_create(node=node, bread_price=bread_price)
     updates = {}
@@ -159,6 +174,7 @@ def _adjust_bread_stock(node, bread_price, produced=0, received=0, sent=0, dispo
     if received: updates['qty_received'] = models.F('qty_received') + received
     if sent:     updates['qty_sent']     = models.F('qty_sent')     + sent
     if disposed: updates['qty_disposed'] = models.F('qty_disposed') + disposed
+    if adjusted: updates['qty_adjusted'] = models.F('qty_adjusted') + adjusted
     if updates:
         BreadStock.objects.filter(pk=stock.pk).update(**updates)
 
@@ -292,6 +308,118 @@ class DailyBreadStockSnapshot(models.Model):
                 date=session.date, team=session.team,
                 defaults={'qty_at_close': remaining_by_bp.get(bread_price_id, 0)},
             )
+
+
+class DailyOpeningConfirmation(models.Model):
+    """
+    BUG-133 (docs/qa/REGISTRE_BUGS.md ; demande client reformulée par le
+    coordinateur, suite de remarque.md l.396 / BUG-130/131) : à sa première
+    connexion de la journée, le gérant doit voir une boîte modale qui
+    propose, par catégorie de pain, le stock PHYSIQUE actuellement
+    disponible (`BreadStock.qty_available` — ce qui reste après déduction
+    des ventes déjà confirmées, CLAUDE.md §5.2/§5.4) comme point de départ
+    « RESTE DU HIER » de la journée. Il peut modifier ces nombres ou les
+    valider tels quels — la validation devient la valeur OFFICIELLE du
+    « RESTE DU HIER » utilisée pour démarrer la journée dans le rapport de
+    clôture journalier (BUG-120, `_build_daily_closure_report`).
+
+    Point de conception 1 — « première connexion du jour » sans login par
+    équipe : un seul compte GERANT couvre aujourd'hui les équipes A et B
+    (`User.team` reste vide pour ce rôle), donc l'équipe ne peut pas être
+    déduite de l'heure de connexion ni de `Node.active_team_at()`
+    (BUG-130/131 — pensé pour un AUTRE usage : déterminer qui travaille MAINTENANT,
+    pas pour quelle équipe confirmer un stock de départ). L'équipe est donc
+    choisie EXPLICITEMENT par le gérant DANS la boîte modale elle-même (voir
+    `DailyOpeningConfirmationView`), jamais déduite silencieusement. La
+    détection de « première connexion » elle-même n'est pas un événement de
+    session : c'est simplement l'ABSENCE d'une ligne (node, team, date=
+    aujourd'hui) qui signale au frontend qu'il doit encore proposer la
+    boîte modale pour CETTE équipe ; une fois la ligne créée, la question ne
+    se repose plus ce jour-là pour cette équipe, quel que soit le nombre de
+    reconnexions ultérieures (persistant côté serveur, pas un simple drapeau
+    de session local qui disparaîtrait à la déconnexion).
+
+    Point de conception 2 — ne jamais corrompre l'historique : ce modèle est
+    volontairement DISTINCT de `DailyBreadStockSnapshot` (BUG-118, VÉRIFIÉ) —
+    il ne le modifie ni ne le remplace jamais. `DailyBreadStockSnapshot`
+    reste l'unique source de vérité des clôtures PASSÉES (solde déclaré par
+    une équipe à SA clôture de session, `qty_at_close`/`reste_du_jour`/
+    `reste_du_hier`, formule négative confirmée par le client). Ce nouveau
+    modèle n'intervient qu'en SURCOUCHE, au niveau de l'agrégation du
+    rapport (`_build_daily_closure_report`) : quand une confirmation existe
+    pour (node, team, date), sa valeur devient `reste_du_hier` pour cette
+    équipe/catégorie/jour, prioritaire sur le calcul auto-dérivé de
+    `DailyBreadStockSnapshot.reste_du_hier()` — qui continue, lui, à
+    s'appliquer EXACTEMENT comme avant pour tout jour/équipe sans
+    confirmation explicite (rétro-compatibilité totale).
+
+    Choix de signe (BUG-135, correction du choix initial de BUG-133/134) :
+    `qty_confirmed` reste stocké ici tel que saisi/validé par le gérant dans
+    la boîte modale, un nombre naturellement POSITIF (stock physique
+    réellement disponible — c'est intuitif pour l'UI et volontaire, aucun
+    changement). En revanche `DailyBreadStockSnapshot.reste_du_hier()`
+    produit un `reste_du_hier` NÉGATIF par construction (confirmé par le
+    client pour BUG-118, « − reste_du_jour de la veille »), et ce
+    `reste_du_hier` négatif alimente directement `facture_mvm_interne`/
+    `total_du_jour` (BUG-120, déjà vérifiés formule à formule contre les
+    Excel réels du client). Utiliser `qty_confirmed` sans le néger dans
+    l'agrégation du rapport inversait donc le signe pour les jours/équipes
+    confirmés et faussait ces totaux déjà vérifiés — ce n'était PAS un
+    changement de convention voulu mais une erreur d'agrégation (trouvée par
+    le coordinateur en relisant le code). `_build_daily_closure_report`
+    applique donc désormais `-qty_confirmed` au moment de construire
+    `reste_du_hier_by_team`, pour retrouver la même convention de signe que
+    le calcul auto-dérivé — sans jamais toucher au stockage positif de
+    `qty_confirmed` ni à l'affichage de la boîte modale (BUG-134, intact).
+    """
+
+    node = models.ForeignKey(
+        Node, on_delete=models.PROTECT, related_name='daily_opening_confirmations',
+        verbose_name=_("Boulangerie"),
+    )
+    team = models.CharField(
+        max_length=1, choices=ProductionSession.Team.choices,
+        verbose_name=_("Équipe"),
+        help_text=_("Équipe pour laquelle ce stock de départ est confirmé — choisie explicitement dans la boîte modale, jamais déduite de l'heure."),
+    )
+    date = models.DateField(verbose_name=_("Date de la journée confirmée"))
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='daily_opening_confirmations', verbose_name=_("Confirmé par"),
+    )
+    confirmed_at = models.DateTimeField(auto_now=True, verbose_name=_("Confirmé le"))
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Confirmation du Stock de Départ")
+        verbose_name_plural = _("Confirmations du Stock de Départ")
+        unique_together = [['node', 'team', 'date']]
+        ordering = ['-date', 'node__code', 'team']
+
+    def __str__(self):
+        return f"{self.node.code} | Éq.{self.team} | {self.date} : confirmé"
+
+
+class DailyOpeningConfirmationLine(models.Model):
+    """Quantité confirmée (RESTE DU HIER officiel) pour une catégorie de pain donnée."""
+
+    confirmation = models.ForeignKey(
+        DailyOpeningConfirmation, on_delete=models.CASCADE, related_name='lines',
+        verbose_name=_("Confirmation"),
+    )
+    bread_price = models.ForeignKey(
+        BreadPrice, on_delete=models.PROTECT, verbose_name=_("Catégorie Pain"),
+    )
+    qty_confirmed = models.IntegerField(verbose_name=_("Quantité confirmée (RESTE DU HIER officiel)"))
+
+    class Meta:
+        verbose_name = _("Ligne de Confirmation du Stock de Départ")
+        verbose_name_plural = _("Lignes de Confirmation du Stock de Départ")
+        unique_together = [['confirmation', 'bread_price']]
+        ordering = ['bread_price__unit_price']
+
+    def __str__(self):
+        return f"{self.confirmation} — {self.bread_price.label} : {self.qty_confirmed}"
 
 
 class ConsumableType(models.Model):

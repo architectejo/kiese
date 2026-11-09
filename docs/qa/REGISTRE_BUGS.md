@@ -142,6 +142,15 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-130 | Demande client — chaque boulangerie (`Node`) doit pouvoir déclarer les créneaux horaires des équipes A et B (heure de début/fin de chaque équipe), configurables à la création/édition de la boulangerie ; prérequis pour un futur chantier de détermination automatique de l'équipe active (voir note de numérotation dans la fiche détaillée : le nom « BUG-129 » demandé initialement était déjà pris par un autre ticket) | Core/Production | backend/frontend | Mineur | VÉRIFIÉ | coordinateur (remarque.md l.396) | dev-backend, 2026-11-09 | testeur-e2e, 2026-11-09 |
 | BUG-131 | Sous-ticket de BUG-130 (backend terminé, frontend à faire) : ajouter les 4 champs horaires (`team_a_start_time`, `team_a_end_time`, `team_b_start_time`, `team_b_end_time`) au formulaire de création/édition de boulangerie `frontend/src/pages/dashboard/Nodes.tsx` (`<input type="time">`, visibles seulement pour un rôle HQ, cohérent avec le reste de la page) ; le futur chantier « détermination automatique de l'équipe active » mentionné par le coordinateur devra être ouvert sous un numéro ultérieur (BUG-132+), pas BUG-130/131 qui sont pris par ce qui précède | Core/Production | frontend | Mineur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-130, 2026-11-09) | dev-frontend, 2026-11-09 | testeur-e2e, 2026-11-09 |
 | BUG-132 | Performance — « Gestion de la Clientèle » (`Clients.tsx`) attendait que `getList()` suive TOUTES les pages DRF avant le premier affichage ; très lent pour un rôle Siège (685+ clients des 8 boulangeries) ; demande client : affichage progressif (page 1 immédiate, reste en arrière-plan, indicateur de progression) | Clients | frontend | Majeur | VÉRIFIÉ | coordinateur (demande client remontée directement), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-e2e, 2026-11-09 |
+| BUG-133 | Demande client (suite remarque.md l.396, après BUG-130/131) — boîte modale « stock de départ » : à la première connexion du jour (et tant qu'elle n'est pas confirmée, à chaque changement de page du dashboard), le gérant doit voir, par catégorie de pain, le stock disponible proposé, pouvoir le modifier ou le valider ; la validation devient le « RESTE DU HIER » officiel du rapport de clôture journalier (BUG-120) | Production | backend | Majeur | VÉRIFIÉ | coordinateur (demande client reformulée après clarification directe), 2026-11-09 | dev-backend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-134 | Sous-ticket lié à BUG-133 : boîte modale frontend « stock de départ », consommant `GET/POST /api/production/opening-confirmation/`, interrogée à CHAQUE changement de route du dashboard (`DashboardLayout.tsx`), pas seulement au login — se réaffiche tant qu'aucune confirmation n'existe pour l'équipe choisie/aujourd'hui | Production | frontend | Majeur | VÉRIFIÉ | dev-backend (ticket lié, en clôturant BUG-133), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-135 | Erreur d'agrégation : `_build_daily_closure_report` (BUG-120) utilisait `DailyOpeningConfirmationLine.qty_confirmed` (BUG-133, positif) sans le néger, inversant le signe de `reste_du_hier`/`reste_du_hier_fc`/`facture_mvm_interne`/`total_du_jour` pour les jours/équipes confirmés par rapport au calcul auto-dérivé (`DailyBreadStockSnapshot.reste_du_hier()`, négatif, BUG-118) | Production | backend | Bloquant | VÉRIFIÉ | coordinateur (relecture de code après BUG-133/134), 2026-11-09 | dev-backend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-136 | Demande client (test en direct, après BUG-133/134) : valider/corriger le nombre de pains dans la boîte modale « stock de départ du jour » n'avait aucun effet sur `BreadStock.qty_available` (« Production & Stocks ») — la confirmation n'alimentait que le rapport de clôture journalier (BUG-120/135). Le client a confirmé explicitement que la validation doit TOUJOURS synchroniser le stock réel, y compris en no-op (valeur proposée acceptée telle quelle) | Production | backend | Majeur | VÉRIFIÉ | coordinateur (demande client reformulée après clarification directe), 2026-11-09 | dev-backend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-137 | Sous-ticket frontend proposé par dev-backend en clôturant BUG-136 : la réponse de `POST /api/production/opening-confirmation/` renvoie désormais `stock_adjustments` mais la boîte modale « stock de départ du jour » (`OpeningStockConfirmationModal.tsx`) ne l'affichait pas — le gérant n'avait aucune confirmation visuelle que sa correction avait bien ajusté le stock réel | Production | frontend | Mineur | VÉRIFIÉ | dev-backend (sous-ticket, en clôturant BUG-136), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-production (vérification finale du lot — Django OK, E2E non rejoué en direct ce jour, nœuds de démo déjà confirmés, voir rapport), 2026-11-09 |
+| BUG-138 | Vérification BUG-133/134/135/136 (testeur-production, lecture complète de remarque.md l.396-398) : le texte du client dit explicitement « **le facturier peut aussi faire ça** » (confirmer le stock de départ du jour) — `DailyOpeningConfirmationView` (`permission_classes = [IsGerant]`) et le montage de la boîte modale (`DashboardLayout.tsx`, garde `user.role === 'GERANT'`) excluent totalement le rôle FACTURIER (403/jamais montée). Aucune fiche BUG-133/134 ne mentionne avoir traité ce point de remarque.md, et la ligne correspondante y reste non cochée (`[]`) | Production | backend/frontend | Majeur | VÉRIFIÉ | testeur-production (vérification BUG-133/134/135/136), 2026-11-09 | dev-backend, 2026-11-09 (backend) ; dev-frontend, 2026-11-09 (BUG-140, frontend) | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-139 | Vérification BUG-133/134/135/136 (testeur-production) : remarque.md l.398 dit explicitement que la confirmation du stock de départ se fait « **une fois le matin, [pas] pour l'équipe A ou B, juste une fois au créneau d'ouverture (premier créneau)** » — l'implémentation livrée (BUG-133/134) exige au contraire une confirmation EXPLICITE et DISTINCTE par équipe (A **et** B). Tranché directement par le client avec le coordinateur le 2026-11-09 (ligne remarque.md l.398 ajoutée par le client lui-même) : une seule confirmation (équipe du créneau d'ouverture) suffit | Production | backend/frontend | Majeur | VÉRIFIÉ | testeur-production (vérification BUG-133/134/135/136), 2026-11-09 | dev-backend, 2026-11-09 (backend) ; dev-frontend, 2026-11-09 (BUG-140, frontend) | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-140 | Sous-ticket frontend ouvert par dev-backend en corrigeant BUG-138/139 : `DashboardLayout.tsx` ne monte `OpeningStockConfirmationModal` que pour `user.role === 'GERANT'` (doit inclure FACTURIER, BUG-138) et la logique d'affichage de la boîte modale doit utiliser **uniquement** le nouveau champ `needs_confirmation` de `GET /api/production/opening-confirmation/` (plus `!teams.A.confirmed \|\| !teams.B.confirmed`, BUG-139) | Production | frontend | Majeur | VÉRIFIÉ | dev-backend (sous-ticket, en corrigeant BUG-138/139), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
+| BUG-141 | `opening_team` (BUG-139/140) était calculé via `Node.active_team_at()` (« qui travaille EN CE MOMENT ? ») au lieu du premier créneau structurel de la journée — testé en direct par le client à 21h (hors des deux créneaux K1), la boîte modale ne présélectionnait plus aucune équipe alors que le premier créneau (toujours A pour K1) ne dépend pas de l'heure de connexion | Production | backend | Majeur | VÉRIFIÉ | client (test en direct), 2026-11-09 | dev-backend, 2026-11-09 | testeur-production, 2026-11-09 |
 
 ## Fiches détaillées
 
@@ -12111,3 +12120,988 @@ compte, pas tranché unilatéralement.
   - Bouton « Voir plus » et compteur « 20 sur 550 client(s) affiché(s) (722 au total, chargement en
     cours) » observés cohérents pendant le chargement.
   Aucun écart avec le rapport `dev-frontend-2026-11-09-bug132-chargement-progressif-clients.md`.
+
+### BUG-133 — Boîte modale « stock de départ » : confirmation du RESTE DU HIER à la première connexion du jour
+
+- Module : Production
+- Type : Fonctionnalité
+- Composant : backend
+- Gravité : Majeur
+- Statut : CORRIGÉ (dev-backend, 2026-11-09)
+- Ouvert par : coordinateur (demande client reformulée après clarification directe, suite de
+  remarque.md l.396, après BUG-130/131 qui ont livré `Node.active_team_at()`/les créneaux
+  horaires équipe A/B), 2026-11-09.
+- Référence métier : CLAUDE.md §5.2 (équipes A/B), §5.4 (stock de pains, « RESTE DU HIER ») ;
+  BUG-118 (`DailyBreadStockSnapshot`, formule `reste_du_hier` confirmée par le client, VÉRIFIÉ) ;
+  BUG-120 (`_build_daily_closure_report`, rapport de clôture journalier, VÉRIFIÉ).
+- Demande exacte (reformulée par le coordinateur) : à sa première connexion de la journée, le
+  gérant doit voir une boîte modale qui propose automatiquement, par catégorie de pain, le nombre
+  de pains restants = stock disponible actuel (ce qui reste après les ventes déjà déduites). Il
+  peut modifier ces nombres ou les valider directement. Cette validation devient la valeur
+  officielle du « RESTE DU HIER » utilisée pour démarrer la journée (et donc pour le rapport de
+  Clôture Journalière, BUG-120). **Précision ajoutée en cours de mission (remarque.md l.396)** : la
+  boîte modale n'est pas un prompt ponctuel au login — tant qu'aucune confirmation n'existe pour
+  (nœud, équipe concernée, aujourd'hui), elle doit se réafficher à CHAQUE changement de page du
+  dashboard, jusqu'à validation. Traité ici côté contrat d'API (le `GET` est conçu pour être
+  interrogé à chaque changement de route, pas seulement au login) ; l'implémentation frontend de ce
+  réaffichage systématique est le sous-ticket **BUG-134**.
+- Numérotation : prochain numéro libre vérifié dans ce registre avant attribution (dernier ticket
+  existant au moment de l'ouverture : BUG-132) — `BUG-133` n'était pris par aucun autre ticket.
+
+#### Points de conception tranchés par dev-backend (documentés, pas reposés au coordinateur)
+
+1. **Détection de « première connexion du jour » sans login par équipe** : aujourd'hui un seul
+   compte GERANT couvre les équipes A et B (`User.team` reste vide pour ce rôle, vérifié dans
+   `backend/core/models.py::User`) — l'équipe ne peut donc pas être déduite de l'heure de connexion
+   ni de `Node.active_team_at()` (BUG-130/131, pensé pour un AUTRE usage : déterminer qui travaille
+   MAINTENANT, pas pour quelle équipe confirmer un stock de départ). Décision : l'équipe est choisie
+   **explicitement par le gérant dans la boîte modale elle-même** (paramètre `team` du `POST`,
+   jamais déduit côté serveur). La détection de « première connexion » n'est pas un évènement de
+   session : c'est l'**absence** d'une ligne `DailyOpeningConfirmation(node, team, date=aujourd'hui)`
+   qui signale au frontend qu'il doit encore proposer la boîte modale pour CETTE équipe — persistant
+   côté serveur (contrairement à un simple drapeau de session local qui disparaîtrait à la
+   déconnexion), et donc naturellement compatible avec la précision « réaffiché à chaque changement
+   de page » ajoutée en cours de mission : le frontend n'a qu'à réinterroger le `GET` à chaque
+   changement de route et comparer `teams.<team>.confirmed`.
+2. **Ne jamais corrompre l'historique** : nouveau modèle **strictement distinct** de
+   `DailyBreadStockSnapshot` (BUG-118, VÉRIFIÉ) — ce dernier n'est ni modifié ni relu en écriture
+   par ce ticket, et reste l'unique source de vérité des clôtures passées. L'intégration avec
+   BUG-120 se fait uniquement en SURCOUCHE, au niveau de l'agrégation du rapport
+   (`_build_daily_closure_report`) : une confirmation existante pour (node, team, report_date) est
+   PRIORITAIRE sur le calcul auto-dérivé de `DailyBreadStockSnapshot.reste_du_hier()` pour cette
+   équipe/catégorie/jour ; l'absence de confirmation laisse le calcul auto-dérivé **strictement
+   inchangé** (non-régression totale, testée explicitement — voir
+   `test_unconfirmed_day_keeps_auto_derived_value_unchanged`).
+3. **Calcul proposé confirmé correct** : `qty_proposed` = `BreadStock.qty_available` courant par
+   catégorie pour ce nœud. Vérifié avant implémentation que ce solde est bien net des ventes :
+   `backend/sales/views.py` décrémente `BreadStock` via `_adjust_bread_stock(node, bread_price,
+   sent=line.quantity)` à chaque livraison/retour de facture (4 points d'appel relus : livraison,
+   annulation, régularisation, suppression) — confirmé par un test dédié
+   (`test_get_reflects_sales_deduction_in_proposed_stock`).
+4. **Choix de signe (documenté, à confirmer avec le client lors de la livraison frontend — pas
+   bloquant ici, demande explicite de la mission plutôt qu'une ambiguïté inventée)** : le calcul
+   auto-dérivé de `DailyBreadStockSnapshot.reste_du_hier()` est NÉGATIF par construction (confirmé
+   par le client pour BUG-118, `−reste_du_jour` de la veille). La mission demande explicitement que
+   « cette validation devient la valeur officielle du reste du hier » — la quantité confirmée
+   (positive, stock physique réel) est donc utilisée **telle que saisie, sans négation**. Les jours
+   confirmés afficheront donc un `reste_du_hier` positif, par construction différent en signe des
+   jours sans confirmation (qui restent négatifs, calcul auto-dérivé inchangé) — changement de
+   convention VOULU pour les jours confirmés (le gérant valide un stock réel, pas un report
+   comptable), documenté dans le docstring de `DailyOpeningConfirmation` pour que ce ne soit jamais
+   redécouvert comme un « bug » de signe plus tard.
+5. **Endpoints** : un seul `APIView` (`DailyOpeningConfirmationView`,
+   `backend/production/views.py`), pas une action sur un ViewSet existant — même raisonnement que
+   `DailyClosureReportView` (BUG-120) : ce n'est rattaché à aucune ressource CRUD précise.
+   - `GET /api/production/opening-confirmation/?node=<code>&date=<AAAA-MM-JJ, optionnel, défaut
+     aujourd'hui>` : volontairement léger (deux requêtes filtrées simples — `BreadStock`/
+     `DailyOpeningConfirmation`+`lines` préchargées — aucune agrégation lourde comme
+     `_build_daily_closure_report`), pour être interrogé à chaque changement de route du dashboard
+     sans risque de ralentir la navigation. Renvoie les DEUX équipes A/B à la fois
+     (`teams.<A|B>.confirmed`), plus `categories[].qty_proposed`.
+   - `POST /api/production/opening-confirmation/` : corps `{"node": <code, HQ seulement>, "team":
+     "A"|"B", "date": "AAAA-MM-JJ" (optionnel), "lines": [{"bread_price": <id>, "qty": <entier
+     >= 0>}, ...]}`. Idempotent (upsert, même idiome `update_or_create` que
+     `DailyBreadStockSnapshot.record_snapshot`) : une resoumission remplace intégralement les
+     lignes précédentes de cette confirmation (une catégorie retirée entre deux soumissions ne
+     laisse jamais de ligne obsolète). Toute la soumission (en-tête + lignes) est couverte par une
+     seule `transaction.atomic()` (CLAUDE.md §4).
+
+#### Correction
+
+- Par : dev-backend, 2026-11-09.
+- Fichiers modifiés/ajoutés :
+  - `backend/production/models.py` : nouveaux modèles `DailyOpeningConfirmation` (node, team, date,
+    confirmed_by, confirmed_at, `unique_together=[node, team, date]`) et
+    `DailyOpeningConfirmationLine` (confirmation FK, bread_price FK, qty_confirmed,
+    `unique_together=[confirmation, bread_price]`) — docstrings détaillant les 4 points de
+    conception ci-dessus.
+  - `backend/production/migrations/0019_dailyopeningconfirmation_and_more.py` : migration standard
+    (deux nouveaux modèles, aucune donnée existante à migrer, aucune colonne ajoutée à un modèle
+    déjà peuplé).
+  - `backend/production/views.py` :
+    - Import des deux nouveaux modèles.
+    - `_build_daily_closure_report()` : ajout d'une étape de résolution des confirmations
+      existantes pour (node, report_date) avant la boucle par catégorie ; `reste_du_hier_by_team`
+      utilise désormais la valeur confirmée quand elle existe pour (team, bread_price), sinon
+      l'appel inchangé à `DailyBreadStockSnapshot.reste_du_hier(...)`. Aucune autre ligne de cette
+      fonction modifiée.
+    - `_opening_confirmation_resolve_node()` (nouvelle fonction utilitaire, même règle que
+      `_resolve_node()`/`DailyClosureReportView.get()` : non-HQ limité à son nœud, `node` ignoré
+      silencieusement s'il ne correspond pas, HQ doit préciser `node`).
+    - `DailyOpeningConfirmationView` (nouvelle `APIView`, `permission_classes = [IsGerant]` — même
+      niveau que `DailyClosureReportView`).
+  - `backend/production/urls.py` : route littérale `opening-confirmation/`, avant le routeur DRF
+    (aucun conflit possible), même pattern que `daily-closure/`.
+  - `backend/production/tests/test_daily_opening_confirmation.py` (nouveau, 22 tests, sans
+    `@expectedFailure` — fonctionnalité neuve) :
+    - `GET` : proposition = `qty_available` courant, preuve que les ventes déduisent bien la
+      proposition, détection « non confirmé » par équipe, défaut à aujourd'hui, date invalide → 400.
+    - `POST` : confirmation telle que proposée, confirmation MODIFIÉE (valeur saisie ≠ valeur
+      proposée retenue), idempotence (resoumission remplace, catégorie retirée supprimée),
+      rejets (quantité négative, équipe invalide, `lines` vide, catégorie inconnue).
+    - Intégration BUG-120 : une confirmation explicite devient prioritaire sur
+      `DailyBreadStockSnapshot.reste_du_hier()` dans `_build_daily_closure_report` pour l'équipe/
+      jour confirmés, un jour/équipe NON confirmé garde exactement l'ancien calcul auto-dérivé
+      (non-régression), et `DailyBreadStockSnapshot` lui-même n'est jamais modifié par une
+      confirmation (relu directement après coup).
+    - Permissions : GERANT non-HQ ne peut jamais forger `node` (même motif que BUG-022/025/056), HQ
+      doit préciser `node`, FACTURIER refusé (403), requête non authentifiée refusée (401/403).
+- Test de non-régression : `backend/production/tests/test_daily_opening_confirmation.py` (nouveau,
+  22/22 OK) + `backend/production/tests/test_daily_closure_report.py` et
+  `test_daily_stock_snapshot.py` rejoués sans aucune modification de leur côté (aucune assertion
+  changée) pour confirmer que l'intégration n'affecte aucun scénario déjà couvert sans confirmation
+  explicite.
+- Résultat :
+  - `python manage.py test production.tests.test_daily_opening_confirmation -v 2` → **22/22 OK**.
+  - `python manage.py test production sales` → **158/158 OK** (613,8 s).
+  - `python manage.py test` (suite complète) → **526/526 OK** (1688,4 s, ralentie par la même
+    contention CPU que documentée pour BUG-118/119/120, mais terminée avec 0 échec). Détail dans
+    `docs/qa/rapports/dev-backend-2026-11-09-confirmation-reste-hier.md`.
+  - `python manage.py makemigrations --check --dry-run` → « No changes detected ».
+  - `python manage.py check` → « System check identified no issues (0 silenced) ».
+- Impact API : **nouvel endpoint uniquement**, aucun contrat d'API existant modifié. `reste_du_hier`
+  dans la réponse de `GET /api/production/daily-closure/` (BUG-120) peut désormais afficher une
+  valeur POSITIVE pour un jour/équipe confirmé (au lieu de toujours négative) — comportement VOULU
+  (point de conception 4 ci-dessus), pas une régression de contrat, mais à signaler explicitement au
+  frontend qui consomme déjà ce rapport (écran « Clôture Journalière », BUG-120) pour qu'il n'affiche
+  jamais ce changement de signe comme une anomalie visuelle. Ticket lié ouvert pour `dev-frontend` :
+  **BUG-134** (boîte modale elle-même).
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — vérification finale du lot BUG-133 à
+  BUG-140, voir `docs/qa/rapports/testeur-production-2026-11-09-verif-finale-bug133-140.md` : suite
+  `production.tests.test_daily_opening_confirmation`/`test_opening_confirmation_verification`
+  (54 tests, relus et étendus indépendamment) toutes vertes ; `production sales finance` (209
+  tests) OK ; code de `DailyOpeningConfirmationView`/modèles relu intégralement, cohérent avec
+  BUG-138/139 désormais tranchés).
+
+### BUG-134 — Sous-ticket BUG-133 : boîte modale frontend « stock de départ »
+
+- Module : Production
+- Type : Fonctionnalité
+- Composant : frontend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ
+- Ouvert par : dev-backend (ticket lié, en clôturant BUG-133), 2026-11-09.
+- Contexte : le backend (BUG-133) expose désormais :
+  - `GET /api/production/opening-confirmation/?node=<code, HQ seulement>&date=<AAAA-MM-JJ,
+    optionnel, défaut aujourd'hui>` → `{"node": "K1", "date": "2026-11-09", "categories": [{"bread_price":
+    3, "label": "Pain 500 FC", "unit_price": 500, "qty_proposed": 120}, ...], "teams": {"A":
+    {"confirmed": false, "confirmed_at": null, "confirmed_by": null, "lines": null}, "B": {
+    "confirmed": true, "confirmed_at": "2026-11-09T06:12:00Z", "confirmed_by": "Jean Mbemba",
+    "lines": [{"bread_price": 3, "qty_confirmed": 97}]}}}`.
+  - `POST /api/production/opening-confirmation/` body `{"team": "A", "lines": [{"bread_price": 3,
+    "qty": 115}]}` (`node`/`date` optionnels pour un GERANT — forcés à son nœud/aujourd'hui ;
+    `node` requis pour un rôle Siège) → `200 {"detail": "Stock de départ confirmé.", "node": "K1",
+    "team": "A", "date": "2026-11-09"}`, ou `400 {"detail": "..."}` en cas de validation échouée.
+- Mission demandée :
+  1. Dans `frontend/src/components/layout/DashboardLayout.tsx` (PAS page par page — précision
+     explicite du coordinateur, cf. remarque.md l.396) : à chaque changement de route (et au
+     montage initial), pour un utilisateur GERANT (rôle `GERANT`, pas HQ — vérifier
+     `user.can_access_all_nodes`/rôle avant d'appeler l'endpoint, un Siège gère plusieurs
+     boulangeries et n'a pas de stock de départ personnel à confirmer), appeler `GET
+     /api/production/opening-confirmation/` (sans `node`, le backend le force à celui du gérant) et
+     afficher la boîte modale SI au moins une des deux équipes (`teams.A.confirmed`/
+     `teams.B.confirmed`) est encore `false`.
+  2. La boîte modale doit :
+     - Permettre de choisir explicitement l'équipe à confirmer (A ou B) — PAS déduite
+       automatiquement (voir point de conception 1 de BUG-133). Si une seule équipe reste à
+       confirmer, présélectionner celle-ci pour l'ergonomie, mais rester modifiable.
+     - Afficher, par catégorie (`categories[]`), le nombre proposé (`qty_proposed`) dans un champ
+       modifiable (nombre entier ≥ 0), pré-rempli avec cette valeur.
+     - Un bouton « Valider » qui envoie `POST` avec les valeurs actuelles des champs (modifiées ou
+       non) pour l'équipe choisie.
+     - **Rester affichée après validation si l'autre équipe n'est pas encore confirmée** (reposer le
+       `GET`, et si l'équipe restante a `confirmed=false`, proposer immédiatement la confirmation
+       pour cette équipe — ne pas fermer complètement la modale avant que les deux équipes
+       pertinentes à la boulangerie soient traitées, sauf si une seule équipe travaille ce jour-là ;
+       au minimum, ne jamais bloquer la fermeture si le gérant souhaite ignorer une équipe qui ne
+       travaille pas aujourd'hui — à l'appréciation ergonomique de dev-frontend, non trancher seul
+       si un vrai choix métier se présente, cf. CLAUDE.md §7 règle 6).
+  3. **Comportement de réaffichage systématique (précision client ajoutée en cours de mission,
+     remarque.md l.396)** : ce n'est PAS un prompt ponctuel qu'on peut fermer et oublier pour la
+     journée. Tant qu'aucune confirmation n'existe pour (nœud, équipe concernée, aujourd'hui), la
+     boîte modale doit se réafficher à CHAQUE navigation/changement de page du gérant dans le
+     dashboard — d'où l'implémentation demandée au niveau du layout (`DashboardLayout.tsx`), pas
+     page par page : un `useEffect` sur le changement de route (`useLocation`/équivalent du routeur
+     déjà en place) qui réinterroge le `GET` (léger par construction côté backend, voir BUG-133) et
+     réaffiche la modale si nécessaire, même si le gérant l'a fermée (bouton « fermer »/« plus
+     tard ») sur une page précédente sans avoir validé. Si une fermeture temporaire est prévue pour
+     l'ergonomie (ex. ne pas bloquer une action urgente en cours), elle ne doit durer que jusqu'au
+     prochain changement de page, jamais toute la session.
+  4. Type TypeScript strict pour la réponse de l'endpoint (`src/api/services.ts` ou `src/types/`),
+     pas de nouveau `any` (CLAUDE.md §4). Tous les appels HTTP via `src/api/services.ts`, jamais
+     d'axios direct dans `DashboardLayout.tsx`.
+  5. Responsive obligatoire (POS ≈ 360 px inclus, CLAUDE.md §4) — la boîte modale doit rester
+     utilisable sur un écran étroit (liste de catégories potentiellement scrollable dans la modale).
+- Points à garder à l'esprit (signalés par dev-backend, non tranchés, à vérifier avec le
+  coordinateur/testeur si besoin au moment de l'implémentation) :
+  - Le `reste_du_hier` renvoyé par `GET /api/production/daily-closure/` (BUG-120, écran « Clôture
+    Journalière ») peut désormais être **positif** pour un jour/équipe confirmé via ce nouveau
+    mécanisme (au lieu de toujours négatif) — ne pas traiter cela comme une anomalie d'affichage si
+    l'écran existant formatte ce champ en supposant implicitement un signe négatif.
+  - Un rôle Siège (HQ) n'a pas de stock de départ personnel à confirmer dans ce flux (il supervise
+    plusieurs boulangeries) — ne pas déclencher cette modale pour ces rôles.
+- Pas de contrainte sur `services.ts::getList()` ici (différent de BUG-132) : ce sont deux
+  opérations ponctuelles (GET léger + POST), pas une pagination à agréger.
+
+#### Correction
+
+- Par : dev-frontend le 2026-11-09.
+- Cause : fonctionnalité neuve, backend prêt (BUG-133, CORRIGÉ) mais aucune boîte modale frontend
+  n'existait encore pour l'exposer au gérant.
+- Fichiers modifiés/ajoutés :
+  - `frontend/src/api/services.ts` : nouveaux types `OpeningConfirmationReport`,
+    `OpeningConfirmationCategory`, `OpeningConfirmationTeamLine`, `OpeningConfirmationTeamState`,
+    `OpeningConfirmationTeam`, `OpeningConfirmationSubmitPayload`,
+    `OpeningConfirmationSubmitResponse` (strictement typés, aucun `any`) + `productionApi.
+    openingConfirmation.get()`/`.submit()` consommant `GET`/`POST /api/production/opening-
+    confirmation/`. Aucun appel axios direct ailleurs (CLAUDE.md §4).
+  - `frontend/src/components/production/OpeningStockConfirmationModal.tsx` (nouveau) : composant
+    autonome qui réinterroge `GET /api/production/opening-confirmation/` au montage ET à chaque
+    changement de `routeKey` (prop alimentée par `location.pathname`), affiche la boîte modale
+    (réutilise `src/components/shared/Modal.tsx`) si `teams.A.confirmed` ou `teams.B.confirmed` est
+    `false`, propose l'équipe restante par défaut (présélection modifiable, jamais déduite de
+    l'heure — conformément au point de conception 1 de BUG-133), affiche `qty_proposed` par
+    catégorie dans des champs numériques modifiables (entier ≥ 0, repli à 0 si saisie invalide/
+    vide), et reste ouvert après une validation réussie tant que l'autre équipe pertinente n'est
+    pas confirmée (relance `fetchReport()` après le `POST`, qui recalcule l'équipe par défaut).
+    Bouton « Plus tard » : fermeture temporaire, mémorisée uniquement pour la route courante
+    (`dismissedForRoute`) — réapparaît obligatoirement au prochain changement de route, jamais pour
+    le reste de la session (demande client, remarque.md l.396). Liste vide (aucune catégorie
+    active) affichée proprement (« Aucune catégorie de pain active... »), pas une erreur. Aucune
+    négation du signe des quantités : affiche un nombre de pains restants positif, intuitif pour le
+    gérant — ne reproduit PAS la convention de signe négative de `DailyBreadStockSnapshot.
+    reste_du_hier()` (BUG-118), qui reste un écran différent à des fins différentes (point de
+    vigilance signalé par dev-backend, confirmé non applicable à cette UI).
+  - `frontend/src/components/layout/DashboardLayout.tsx` : import et montage unique de
+    `OpeningStockConfirmationModal` (pas page par page, consigne explicite du coordinateur), avec
+    garde stricte `user.role === 'GERANT' && !user.can_access_all_nodes` (un rôle Siège — ADMIN/
+    DIRECTION/COMPTABLE — ou un GERANT HQ n'est jamais concerné, CLAUDE.md §5.1/§5.2). `routeKey`
+    alimenté par `location.pathname` (hook `useLocation` déjà en place dans ce fichier).
+- Test de non-régression : aucun test E2E Playwright n'existe pour ce parcours (fonctionnalité
+  neuve, aucun fichier `e2e/*opening*`/`*stock-depart*` trouvé) — pas de script à lancer ici,
+  conformément à la mission (« sinon, décris les étapes de vérification manuelle »). Étapes de
+  vérification manuelle pour le testeur :
+  1. Se connecter avec un compte GERANT non-HQ. La boîte modale « Stock de départ du jour » doit
+     apparaître immédiatement (après le premier GET), sans navigation requise.
+  2. Vérifier que les quantités proposées correspondent à `BreadStock.qty_available` du nœud du
+     gérant (comparer avec l'onglet Production & Stocks).
+  3. Modifier une quantité, choisir l'équipe A, cliquer « Valider ». La modale doit rester ouverte
+     et proposer immédiatement l'équipe B (si B n'était pas déjà confirmée), avec les champs
+     réinitialisés aux valeurs proposées actuelles.
+  4. Valider l'équipe B. La modale doit se fermer (les deux équipes sont confirmées pour
+     aujourd'hui).
+  5. Naviguer entre plusieurs pages du dashboard (Tableau de bord, Clients, Production...) : la
+     modale ne doit PAS réapparaître (confirmation déjà enregistrée côté serveur pour aujourd'hui).
+  6. Rejouer le scénario sans valider une équipe, cliquer « Plus tard », naviguer vers une autre
+     page : la modale doit réapparaître sur la nouvelle page (fermeture temporaire, pas définitive).
+  7. Se connecter avec un compte ADMIN/DIRECTION/COMPTABLE ou un GERANT HQ (`can_access_all_nodes`)
+     : la modale ne doit jamais apparaître.
+  8. Sur un nœud sans `BreadStock` récent (ou sans catégorie active) : la modale doit afficher
+     « Aucune catégorie de pain active... » proprement, sans erreur ni écran blanc.
+  9. Vérifier le rendu à 360 px (POS) : la modale et sa liste de catégories doivent rester
+     utilisables sans débordement horizontal, liste scrollable verticalement si besoin.
+  10. Après confirmation d'un jour, vérifier l'écran « Clôture Journalière » (BUG-120) : le
+      `reste_du_hier` de ce jour/équipe doit apparaître NÉGATIF, avec la même grandeur que la
+      quantité confirmée (ex. confirmation = 150 → `reste_du_hier` affiché = −150). **Mise à jour
+      BUG-135** : le point laissé non tranché ci-dessus (signe différent entre la boîte modale et
+      l'écran de clôture) était en réalité un bug d'agrégation, pas un choix UX ouvert — corrigé
+      par dev-backend le 2026-11-09, voir fiche BUG-135. La boîte modale continue, elle, à afficher
+      un nombre positif (stock physique, inchangé, BUG-134 intact).
+- Impact API / frontend : aucun endpoint backend modifié (consommation du contrat BUG-133 tel que
+  livré). Nouveau composant React + nouveaux types/fonctions dans `services.ts`, aucun changement
+  de contrat pour les écrans existants.
+- `npx tsc --noEmit` : aucune erreur. `npm run build` : build réussi (avertissements préexistants
+  sur la taille des chunks legacy, sans rapport avec ce ticket).
+- **Vérification finale (testeur-production, 2026-11-09)** : code relu intégralement dans son état
+  actuel (après BUG-137/140 appliqués par-dessus) — réaffichage à chaque changement de route,
+  fermeture temporaire « Plus tard » limitée à la route courante, sélecteur A/B toujours modifiable,
+  tout confirmé conforme. Parcours E2E `e2e/tests/11-stock-depart-confirmation.spec.ts` exécuté
+  (réaffichage multi-pages, correction + validation, reflet dans « Production & Stocks ») : **vert**
+  sur bureau/tablette/TV ; sur `pos` (360 px), skip propre (K1 déjà confirmé aujourd'hui par une
+  exécution antérieure — comportement attendu, pas un échec). `npm run build` réexécuté : OK.
+  → **VÉRIFIÉ**.
+
+### BUG-135 — `_build_daily_closure_report` : signe inversé de `reste_du_hier` pour les jours confirmés (BUG-133)
+
+- Composant : Production (backend) — `_build_daily_closure_report`, consommé par BUG-120.
+- Gravité : Bloquant (fausse l'agrégation financière du rapport de clôture journalier déjà
+  vérifié formule à formule contre les Excel réels du client, BUG-120/auditeur-comptable).
+- Ouvert par : coordinateur, 2026-11-09, en relisant le code après la clôture de BUG-133/134.
+- Contexte : `DailyOpeningConfirmationLine.qty_confirmed` (BUG-133) est stocké **positif** à dessein
+  (nombre de pains restants, intuitif pour le gérant dans la boîte modale BUG-134, voulu, aucun
+  changement demandé ici). `DailyBreadStockSnapshot.reste_du_hier()` (BUG-118, VÉRIFIÉ, formule
+  confirmée contre l'Excel réel pour `FACTURE MVM INTERNE`) suit la convention inverse :
+  `reste_du_hier = −reste_du_jour(dernière clôture antérieure de l'équipe)`, **négatif** par
+  construction.
+- Cause : dans `backend/production/views.py::_build_daily_closure_report` (autour de la ligne
+  1153), le dict `reste_du_hier_by_team` utilisait `confirmed_reste_du_hier_by_team_bp[(team,
+  bp_id)]` TEL QUEL (positif) quand une confirmation BUG-133 existait pour (node, team,
+  report_date), sans appliquer la négation nécessaire pour rester cohérent avec le calcul
+  auto-dérivé. Conséquence : pour un jour/équipe confirmé via la boîte modale, `reste_du_hier_fc`
+  (donc `facture_mvm_interne`/`total_du_jour`, déjà vérifiés formule à formule contre les Excel
+  réels sous BUG-120) avait un signe inversé par rapport à un jour équivalent non confirmé —
+  cassant la cohérence du total cumulé. Le ticket BUG-133/134 avait documenté ce signe inversé
+  comme un « changement de convention voulu », ce qui était une erreur d'analyse (pas une
+  ambiguïté métier réelle à trancher avec le client : la convention de signe de
+  `facture_mvm_interne` est déjà fixée et vérifiée par BUG-120/auditeur-comptable).
+- Correction : aucune modification de stockage. `DailyOpeningConfirmationLine.qty_confirmed` reste
+  positif ; la boîte modale (BUG-134) continue d'afficher un nombre positif, sans régression.
+  Seule l'agrégation est corrigée : `backend/production/views.py` applique désormais
+  `-confirmed_reste_du_hier_by_team_bp[(team, bp_id)]` au moment de construire
+  `reste_du_hier_by_team`, pour que la valeur (exposée telle quelle dans le JSON du rapport,
+  `reste_du_hier` par équipe, consommé par `ClotureJournaliere.tsx`) suive la même convention de
+  signe qu'un jour/équipe non confirmé. Docstring de `DailyOpeningConfirmation` mise à jour dans
+  `backend/production/models.py` pour refléter la correction (l'ancien texte documentait le choix
+  erroné).
+- Fichiers modifiés :
+  - `backend/production/views.py` (négation dans `_build_daily_closure_report`).
+  - `backend/production/models.py` (docstring `DailyOpeningConfirmation`, correction de la section
+    « Choix de signe »).
+  - `backend/production/tests/test_daily_opening_confirmation.py` :
+    - `test_confirmed_value_overrides_reste_du_hier_in_daily_closure_report` corrigé : attendait
+      `row['reste_du_hier']['A'] == 150` (signe positif, comportement BUGUÉ) ; attend désormais
+      `== -150`, avec une assertion explicite que `qty_confirmed` en base reste bien `150`
+      (positif, stockage inchangé) — ce test dépendait par erreur de l'ancien comportement signé
+      positif et a été corrigé en comprenant la cause (pas masqué).
+    - Nouveau test `test_confirmed_reste_du_hier_matches_auto_derived_in_total_du_jour` : compare,
+      pour une même situation réelle (150 pains restants, équipe A), un rapport purement
+      auto-dérivé (`DailyBreadStockSnapshot`, nœud témoin) à un rapport avec confirmation BUG-133
+      (autre nœud, même scénario) — prouve que `reste_du_hier`/`facture_mvm_interne` sont
+      identiques (même signe, même grandeur) dans les deux cas. Ce test échouait avant le
+      correctif (`-150` vs `150`) et passe après.
+- Test de non-régression : `python manage.py test production.tests.test_daily_opening_confirmation`
+  (23 tests, OK) ; `python manage.py test production finance` (105 tests, OK) ;
+  `python manage.py makemigrations --check --dry-run` → « No changes detected » (aucune migration
+  nécessaire, correction purement applicative, aucun changement de schéma).
+- Impact API / frontend : **changement de valeur** (pas de forme) du champ JSON `reste_du_hier`
+  (par équipe) renvoyé par `_build_daily_closure_report`/l'endpoint de clôture journalière (BUG-120)
+  — pour les jours/équipes confirmés via BUG-133 uniquement, ce champ passe de positif à négatif
+  (même grandeur). `ClotureJournaliere.tsx` affiche ce champ via un formateur numérique générique
+  (`formatQty`, pas de logique de signe spécifique) : **aucun changement de code frontend requis**,
+  vérifié en lisant `frontend/src/pages/dashboard/ClotureJournaliere.tsx` (lignes 286-289). Le
+  rendu visuel change seulement pour les jours déjà confirmés affichés jusqu'ici avec un nombre
+  positif à tort (ils afficheront désormais un nombre négatif, cohérent avec les jours non
+  confirmés) — pas une régression, c'est la correction elle-même. Étape 10 du plan de test manuel
+  de BUG-134 mise à jour en conséquence ci-dessus. Pas de sous-ticket `dev-frontend` nécessaire.
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — négation confirmée correcte par lecture du
+  code (`-confirmed_reste_du_hier_by_team_bp[...]`) et par
+  `test_gerant_corrects_proposed_value_full_scenario`/`test_build_daily_closure_report_unaffected_by_bug139_change`
+  dans `test_opening_confirmation_verification.py`, revérifiés indépendamment ; non-régression
+  `production sales finance` 209/209 OK).
+
+### BUG-136 — La confirmation « stock de départ du jour » (BUG-133/134) n'ajustait jamais le stock réel `BreadStock.qty_available`
+
+- Composant : Production (backend) — `DailyOpeningConfirmationView.post()`, `BreadStock`.
+- Gravité : Majeur (le gérant corrige un nombre dans la boîte modale, l'écran « Production &
+  Stocks » affiche toujours l'ancienne valeur — incohérence visible par le client en test direct,
+  sans toutefois bloquer une clôture ou fausser un calcul financier déjà vérifié).
+- Ouvert par : coordinateur (demande client reformulée après clarification directe, test en
+  direct avec le client le 2026-11-09, après BUG-133/134).
+- Contexte : BUG-133/134 ont ajouté la boîte modale « stock de départ du jour » —
+  `DailyOpeningConfirmationLine.qty_confirmed` (positif, par catégorie/équipe) n'alimentait QUE
+  `_build_daily_closure_report` (BUG-120/135) via `DailyOpeningConfirmation`. Elle ne touchait
+  jamais `BreadStock.qty_available`, le solde physique affiché dans « Production & Stocks ».
+- Question posée explicitement au client (CLAUDE.md §7 règle 6, ambiguïté métier réelle : la
+  confirmation doit-elle aussi mettre à jour le stock disponible ?) : **réponse — oui, toujours
+  synchroniser**, y compris quand le gérant valide le nombre proposé tel quel (no-op) ou le
+  corrige vers une autre valeur (doit ajuster le stock réel en conséquence, de façon traçable, à
+  la manière d'un écart/ajustement de production, CLAUDE.md §5.4).
+- Cause : `DailyOpeningConfirmationView.post()` ne faisait que persister `DailyOpeningConfirmation`/
+  `DailyOpeningConfirmationLine` ; aucun appel à `_adjust_bread_stock()` ou équivalent.
+- Correction :
+  - `backend/production/models.py` — nouveau champ `BreadStock.qty_adjusted` (`IntegerField`,
+    `default=0`) : cumul des corrections MANUELLES du stock réel décidées par un gérant, par
+    opposition aux mouvements métier réels (`qty_produced`/`qty_received`/`qty_sent`/
+    `qty_disposed`, inchangés — volontairement PAS réutilisés pour cet usage, sémantique trompeuse
+    comme demandé). `qty_available` devient
+    `qty_produced + qty_received - qty_sent - qty_disposed + qty_adjusted`. Convention de signe
+    documentée dans le docstring du modèle (positif = excédent constaté par le gérant, négatif =
+    manquant constaté, même logique que CLAUDE.md §5.4). `_adjust_bread_stock()` étendu avec un
+    paramètre `adjusted=0` (mise à jour `F()`, inchangé pour les appelants existants qui ne le
+    passent pas).
+  - `backend/production/views.py::DailyOpeningConfirmationView.post()` — après la persistance de
+    la confirmation (inchangée), pour chaque ligne soumise : verrouillage de la ligne `BreadStock`
+    via `BreadStock.objects.get_or_create(...)` puis `select_for_update().get(pk=...)` DANS la
+    même transaction atomique (CLAUDE.md §4 — jamais de lecture de solde sans verrou avant mise à
+    jour), calcul du delta `qty_confirmed - qty_available_courant`, application via
+    `_adjust_bread_stock(node, bread_price, adjusted=delta)` si le delta est non nul (no-op sinon).
+    Le delta est recalculé par rapport à l'état COURANT de `BreadStock` à CHAQUE soumission (pas
+    par rapport à l'ancienne valeur confirmée mémorisée) : une resoumission/correction le même
+    jour n'applique donc jamais l'ajustement deux fois cumulativement. Journalisation via
+    `log_activity` pour chaque ajustement effectif (nœud, équipe, catégorie, avant/après/delta,
+    utilisateur) ; pas de `create_notification` ajoutée (pas de seuil d'alerte existant à
+    respecter pour cet usage, et le ticket ne justifie pas d'en introduire un nouveau — simple
+    `log_activity` systématique jugé suffisant).
+  - `backend/production/serializers.py::BreadStockSerializer` — `qty_adjusted` ajouté aux champs
+    exposés (lecture seule, comme les autres composantes), pour transparence sur l'écran
+    « Production & Stocks » si le frontend souhaite l'afficher (purement additif, aucun champ
+    existant renommé ni retiré).
+  - `backend/production/migrations/0020_breadstock_qty_adjusted.py` — `AddField` simple,
+    `default=0`, aucune donnée existante à migrer.
+- Non-régression vérifiée :
+  - `DailyBreadStockSnapshot.reste_du_hier()`/`_build_daily_closure_report` (BUG-118/120/135) :
+    aucune modification de leur logique de calcul — ce ticket ajoute un effet de bord sur
+    `BreadStock`, ne touche pas à l'agrégation du rapport de clôture ; vérifié par les tests
+    existants `test_confirmed_value_overrides_reste_du_hier_in_daily_closure_report` et
+    `test_confirmed_reste_du_hier_matches_auto_derived_in_total_du_jour`, toujours verts
+    (ils confirment des valeurs ≠ du stock produit réel, donc déclenchent désormais un ajustement
+    de stock en coulisses, sans que leurs assertions sur `reste_du_hier`/`facture_mvm_interne`
+    n'en soient affectées).
+  - Tous les autres consommateurs de `BreadStock.qty_available` recensés par recherche (`grep
+    qty_available`) : ventes (`sales/views.py`, déstockage à la livraison via
+    `_adjust_bread_stock(..., sent=...)`), production (fournée via `produced=...`), transferts
+    inter-boulangeries (`sent=...`/`received=...`), disposals (`disposed=...`) — tous passent par
+    la même propriété `qty_available` qui inclut désormais `+ qty_adjusted` (par défaut 0, donc
+    strictement neutre pour tout nœud/catégorie n'ayant jamais eu de confirmation BUG-136) ; aucun
+    de ces appelants n'écrit lui-même dans `qty_adjusted`. Suites `production`, `sales`, `finance`
+    toujours vertes (voir test de non-régression ci-dessous).
+  - Idempotence de la double confirmation : `test_resubmission_does_not_double_apply_adjustment`
+    — confirmer 120→100 puis 100→90 le même jour pour la même équipe amène `qty_available` à 90,
+    pas 80 (preuve que le delta est recalculé sur l'état courant, pas cumulé sur l'ancienne
+    confirmation mémorisée).
+  - Équipe B voit l'ajustement fait par équipe A : `test_second_team_get_reflects_first_team_adjustment`
+    — après confirmation de A (120→90), le `GET` pour B renvoie `qty_proposed = 90` (comportement
+    naturel, `qty_proposed` relit `BreadStock.qty_available` au moment du GET).
+  - Isolation par catégorie et par nœud : `test_adjustment_does_not_affect_other_category_stock`,
+    `test_adjustment_does_not_affect_other_node_stock`.
+- Test de non-régression (échouaient avant, passent après — nouveau fichier étendu, pas de
+  `@expectedFailure` préexistant sur ce point précis puisque le comportement n'existait pas) :
+  `backend/production/tests/test_daily_opening_confirmation.py` —
+  `test_post_with_corrected_value_adjusts_real_stock_exactly`,
+  `test_post_validating_proposed_value_as_is_is_a_stock_noop`,
+  `test_post_with_higher_value_than_proposed_increases_real_stock`,
+  `test_resubmission_does_not_double_apply_adjustment`,
+  `test_second_team_get_reflects_first_team_adjustment`,
+  `test_adjustment_does_not_affect_other_category_stock`,
+  `test_adjustment_does_not_affect_other_node_stock`.
+  `python manage.py test production.tests.test_daily_opening_confirmation` → 30 tests, OK.
+  `python manage.py test production sales finance` → 192 tests, OK. `python manage.py test`
+  (suite complète) → 534 tests, OK. `python manage.py makemigrations --check --dry-run` → propre.
+  Migration `0020_breadstock_qty_adjusted` appliquée sur `backend/db.sqlite3` (base de dev
+  partagée) via `python manage.py migrate production`.
+- Impact API / frontend : **additif, non cassant**. `GET /api/production/breadstock/...`
+  (`BreadStockSerializer`) expose désormais un champ supplémentaire `qty_adjusted` (lecture seule) ;
+  aucun champ existant renommé/retiré. `POST /api/production/opening-confirmation/` renvoie
+  désormais en plus `stock_adjustments` (liste `{bread_price_id, before, after, delta}` des
+  ajustements effectivement appliqués, vide si tout était déjà à jour) — additif, le frontend
+  actuel (BUG-134) n'en dépend pas et continue de fonctionner sans modification. **Sous-ticket
+  proposé pour `dev-frontend`** (non implémenté ici, consigne CLAUDE.md §7 règle 2 — les devs
+  n'implémentent pas le frontend d'un autre module) : afficher un message de confirmation du type
+  « le stock disponible a été ajusté de X à Y » dans la boîte modale `OpeningStockConfirmationModal.tsx`
+  en consommant `stock_adjustments` de la réponse POST, et/ou afficher la composante
+  `qty_adjusted` sur l'écran « Production & Stocks » (`BreadStockSerializer`) pour la traçabilité
+  visuelle de l'écart manquant/excédent.
+- Fichiers modifiés :
+  - `backend/production/models.py` (champ `qty_adjusted`, propriété `qty_available`,
+    `_adjust_bread_stock()`).
+  - `backend/production/views.py` (`DailyOpeningConfirmationView.post()`, docstring de classe).
+  - `backend/production/serializers.py` (`BreadStockSerializer`).
+  - `backend/production/migrations/0020_breadstock_qty_adjusted.py` (nouveau).
+  - `backend/production/tests/test_daily_opening_confirmation.py` (7 nouveaux tests).
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — `qty_adjusted`/`_adjust_bread_stock`/
+  verrouillage `select_for_update()` relus ; delta exact vérifié catégorie par catégorie, y compris
+  multi-catégorie avec hausse/baisse/inchangé simultanés
+  (`test_bug137_stock_adjustments_matches_exact_delta_multi_category`), et via le parcours E2E
+  « Production & Stocks » reflète la valeur validée).
+
+### BUG-137 — Affichage du bandeau de confirmation d'ajustement de stock (`stock_adjustments`) dans la boîte modale « stock de départ »
+
+- Contexte : sous-ticket proposé par `dev-backend` en clôturant BUG-136 (voir note ci-dessus).
+  `POST /api/production/opening-confirmation/` renvoie désormais en plus `stock_adjustments`
+  (liste `{bread_price_id, before, after, delta}`, vide/absente quand le gérant valide la valeur
+  proposée telle quelle — no-op, cas normal). Rien côté frontend ne consommait ce champ : le
+  gérant n'avait aucun retour visuel que sa correction manuelle avait effectivement synchronisé
+  `BreadStock.qty_available`.
+- Cause : `OpeningStockConfirmationModal.tsx` ignorait le corps de la réponse du POST
+  (`productionApi.openingConfirmation.submit()`) au-delà de reposer le GET ; le type TypeScript
+  `OpeningConfirmationSubmitResponse` (`src/api/services.ts`) ne déclarait même pas le champ
+  `stock_adjustments` (additif côté backend, donc jusqu'ici simplement non typé/non lu).
+- Correction :
+  - `src/api/services.ts` : nouveau type `OpeningConfirmationStockAdjustment` (`bread_price_id`,
+    `before`, `after`, `delta` — quantités entières de pains, toujours positives ou nulles, pas
+    de logique de signe) ; `OpeningConfirmationSubmitResponse` déclare désormais
+    `stock_adjustments: OpeningConfirmationStockAdjustment[]`. Aucun appel HTTP direct ajouté
+    (toujours via `productionApi.openingConfirmation.submit()`), aucun nouveau `any`.
+  - `OpeningStockConfirmationModal.tsx` : après un `submit()` réussi, si `stock_adjustments`
+    n'est pas vide, résolution du libellé de chaque catégorie (via `report.categories`, capturé
+    AVANT que `fetchReport()` ne remplace `report`) et affichage d'un bandeau vert temporaire
+    (style succès, `--color-success`, cohérent avec le bandeau d'erreur existant) listant chaque
+    ajustement : « Stock [Pain 500 FC] ajusté de 42 à 50. ». Le bandeau disparaît automatiquement
+    après 7 secondes (`setTimeout`, nettoyé au démontage et à chaque nouvelle soumission) ou à la
+    fermeture manuelle de la boîte modale. Si la liste est vide/absente (validation telle que
+    proposée, cas normal), aucun message — comportement inchangé.
+  - Cas limite traité : si la soumission confirme la DERNIÈRE équipe manquante (les deux équipes
+    deviennent `confirmed: true` dans le GET reposé juste après), la boîte modale restait
+    auparavant ouverte uniquement tant qu'il restait une confirmation à faire
+    (`needsConfirmation`) — elle se serait démontée avant que le bandeau soit lisible. La
+    condition d'ouverture (`isOpen`) et le rendu du pied de modale ont été ajustés pour laisser la
+    boîte ouverte (bouton « Fermer » au lieu du formulaire de saisie) le temps d'afficher le
+    bandeau, sans réafficher un formulaire de saisie devenu obsolète.
+- Fichiers modifiés :
+  - `frontend/src/api/services.ts` (type `OpeningConfirmationStockAdjustment`, extension de
+    `OpeningConfirmationSubmitResponse`).
+  - `frontend/src/components/production/OpeningStockConfirmationModal.tsx` (bandeau de
+    confirmation, gestion du cas « deux équipes confirmées par cette soumission »).
+- Vérification effectuée : `npx tsc --noEmit` (aucune erreur) et `npm run build` (tsc + vite
+  build, succès, seul avertissement présent est préexistant — taille du chunk legacy > 500 kB,
+  sans rapport avec ce ticket). Aucun fichier backend touché (conforme à la consigne — le champ
+  `stock_adjustments` existe déjà côté serveur depuis BUG-136).
+- Vérification manuelle suggérée pour le testeur (aucun test E2E dédié trouvé pour ce parcours) :
+  1. Se connecter en gérant d'une boulangerie non-HQ, un jour où la confirmation « stock de
+     départ » n'a pas encore été faite pour une équipe.
+  2. Dans la boîte modale, modifier la quantité proposée d'au moins une catégorie (par exemple
+     +8 pains) et valider pour l'équipe concernée.
+  3. Vérifier l'apparition immédiate d'un bandeau vert « Stock [<catégorie>] ajusté de <avant> à
+     <après>. » pour chaque catégorie modifiée, et l'absence de bandeau pour les catégories
+     laissées identiques.
+  4. Revalider ensuite SANS rien changer (valeurs déjà à jour) : aucun bandeau ne doit apparaître
+     (no-op, `stock_adjustments` vide).
+  5. Si c'était la dernière équipe à confirmer pour la journée : vérifier que la boîte modale
+     reste affichée quelques secondes avec le bandeau et un bouton « Fermer » (pas de formulaire de
+     saisie résiduel), puis se ferme sans réapparaître au changement de page suivant.
+  6. Vérifier le rendu à 360 px (POS) et 768 px (tablette) : bandeau lisible, pas de défilement de
+     la page nécessaire pour le voir (la boîte modale reste visible intégralement).
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — bandeau confirmé fonctionnellement correct
+  par lecture de code (`stock_adjustments` résolu avant `fetchReport()` ne remplace `report`,
+  disparition à 7 s, bouton « Fermer » quand c'est la dernière confirmation requise du jour) et par
+  le test backend dédié ci-dessus prouvant que la liste `stock_adjustments` consommée par ce
+  composant correspond exactement au delta réel. **Nuance** : le test E2E dédié
+  (`e2e/tests/11-stock-depart-confirmation.spec.ts`, scénario FACTURIER) n'a pas pu rejouer
+  l'apparition du bandeau en conditions réelles de navigateur aujourd'hui — K1 et K2 étaient déjà
+  confirmés pour la journée dans la base de dev partagée avant le début de cette session (K1) ou
+  dès la première tentative de ce test (K2, delta nul rencontré par le test lui-même, corrigé en
+  incrément plutôt que décrément dans le spec — voir rapport) ; il n'existe aucune fonctionnalité de
+  « dé-confirmation » pour forcer une nouvelle vérification le même jour (comportement voulu,
+  CLAUDE.md §5.4 — une confirmation n'est pas réversible). À rejouer un autre jour calendaire, ou
+  avec un 3ᵉ compte facturier/nœud dédié, pour obtenir une preuve E2E live du bandeau — non
+  bloquant pour ce ticket (couverture backend + lecture de code jugées suffisantes).
+
+### BUG-138 — FACTURIER ne peut jamais confirmer le stock de départ du jour, contrairement à remarque.md l.398
+
+- Module : Production
+- Composant : backend/frontend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ (volet backend corrigé par dev-backend, volet frontend corrigé en BUG-140 par
+  dev-frontend, les deux volets vérifiés ensemble par testeur-production le 2026-11-09)
+- Ouvert par : testeur-production, 2026-11-09, en vérifiant BUG-133/134/135/136 (demande explicite
+  de la mission : « revérifie-le toi-même indépendamment plutôt que de faire confiance au
+  rapport », et relecture complète de `remarque.md` autour de la ligne citée par BUG-133/134).
+- Référence métier : `remarque.md` l.398 (texte exact, non coché `[]` à ce jour) : « Après
+  confirmation des restes d'hier, les valeurs renseignées doivent remplacer les valeurs [...] dans
+  "Production & Stocks" et non additionner, on le fait une fois le matin, [pas] pour l'équipe A ou
+  B, juste une fois au créneau d'ouverture (premier créneau), **le facturier peut aussi faire
+  ça**. ». CLAUDE.md : « remarque.md prioritaire sur le cahier des charges en cas de conflit »,
+  et plus généralement document de référence le plus récent pour ce module.
+- Constat : `DailyOpeningConfirmationView` (`backend/production/views.py`) déclare
+  `permission_classes = [IsGerant]` — `IsGerant` (`backend/core/permissions.py`) n'autorise que
+  `ADMIN`/`DIRECTION`/`COMPTABLE`/`GERANT` (+ superuser), **jamais** `FACTURIER`. Testé et confirmé
+  par un test dédié écrit pour cette vérification
+  (`backend/production/tests/test_opening_confirmation_verification.py::
+  OpeningConfirmationPermissionBoundaryTests::test_facturier_post_refused_entirely_no_side_effect`,
+  OK — FACTURIER reçoit 403 et ne déclenche aucune confirmation ni aucun ajustement de stock,
+  même sur son propre nœud) — comportement actuel confirmé exact, mais **contraire à la demande
+  du client**. Côté frontend, `DashboardLayout.tsx` ne monte `OpeningStockConfirmationModal` que
+  pour `user.role === 'GERANT' && !user.can_access_all_nodes` : un FACTURIER n'a donc, de toute
+  façon, pas accès à la boîte modale même si l'API l'autorisait.
+- Aucune des fiches BUG-133 ou BUG-134 ne mentionne avoir lu, discuté ou tranché ce point
+  (« le facturier peut aussi faire ça ») — les deux fiches ne citent que « le gérant » comme
+  utilisateur de la fonctionnalité. Ce n'est pas une ambiguïté de formulation du client (la phrase
+  est explicite) : il s'agit d'un point de remarque.md qui semble avoir été omis lors de
+  l'implémentation plutôt que tranché.
+- Pas une correction ici (CLAUDE.md §7 règle 2, les testeurs ne corrigent pas) — ticket ouvert
+  pour `dev-backend`/`dev-frontend` : étendre l'accès à `DailyOpeningConfirmationView` (nouvelle
+  permission ou élargissement d'`IsGerant` à `FACTURIER` pour cette vue précise — à trancher selon
+  si d'autres vues utilisant `IsGerant` ne doivent, elles, surtout pas s'ouvrir à FACTURIER) et au
+  montage de la boîte modale côté `DashboardLayout.tsx` (actuellement restreint au seul rôle
+  GERANT). Prévoir un test de permission dédié (FACTURIER doit désormais obtenir 200, avec les
+  mêmes garanties de scope nœud/équipe qu'un GERANT — ne jamais permettre à un FACTURIER de K1 de
+  confirmer pour K2).
+- Impact sur BUG-133/134/135/136 : tant que ce ticket est ouvert, BUG-133/134 ne couvrent pas
+  entièrement la demande de remarque.md l.398 — **non passés à VÉRIFIÉ** (voir note de clôture de
+  session testeur-production, 2026-11-09).
+
+#### Correction
+- Par : dev-backend le 2026-11-09.
+- Cause : `DailyOpeningConfirmationView.permission_classes = [IsGerant]` excluait purement et
+  simplement FACTURIER, contrairement à remarque.md l.398 (« le facturier peut aussi faire ça »).
+  Le client a confirmé directement au coordinateur (ligne remarque.md l.398) que le FACTURIER doit
+  avoir le même accès que le GERANT sur ce point précis.
+- Fichiers modifiés :
+  - `backend/production/views.py` : import `IsFacturier` (déjà existant dans
+    `core/permissions.py` — « FACTURIER ou supérieur », englobe déjà GERANT+, aucune nouvelle
+    classe de permission nécessaire) ; `DailyOpeningConfirmationView.permission_classes =
+    [IsFacturier]` (au lieu de `[IsGerant]`) ; docstring complétée (section « BUG-138 »).
+    `_opening_confirmation_resolve_node` est inchangée et s'applique identiquement à FACTURIER
+    (même garantie BUG-022/025/056 : `can_access_all_nodes=False` pour FACTURIER comme pour
+    GERANT, jamais d'accès à un autre nœud via `node` forgé).
+  - `backend/production/tests/test_daily_opening_confirmation.py` : remplace
+    `test_facturier_cannot_access_opening_confirmation` (403, comportement désormais changé
+    intentionnellement) par `test_facturier_can_access_opening_confirmation_on_own_node` (200 sur
+    GET/POST sur son nœud, `node` forgé toujours ignoré).
+  - `backend/production/tests/test_opening_confirmation_verification.py` : remplace
+    `test_facturier_post_refused_entirely_no_side_effect` par
+    `test_facturier_post_allowed_on_own_node_refused_on_other_node` (200 + effet de bord réel sur
+    son propre nœud, `node` forgé toujours sans effet sur l'autre nœud).
+- Test de non-régression : les deux tests ci-dessus échouaient (403 attendu par l'ancien contrat)
+  avant le correctif de permission et passent désormais (200) après ; `test_livreur_post_refused_entirely`
+  et `test_hq_role_comptable_is_treated_as_headquarters_not_refused_but_cannot_act_implicitly`
+  (inchangés) confirment que LIVREUR reste bloqué et que le périmètre HQ n'a pas changé.
+- Impact API/frontend : **changement de contrat** — `DailyOpeningConfirmationView`
+  (`GET`/`POST /api/production/opening-confirmation/`) renvoie désormais 200 pour un utilisateur
+  FACTURIER (auparavant 403 systématique). Ticket lié ouvert pour `dev-frontend` : monter
+  `OpeningStockConfirmationModal` également pour `user.role === 'FACTURIER'` (actuellement
+  restreint à `user.role === 'GERANT'` dans `DashboardLayout.tsx`) — voir BUG-140 ci-dessous.
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — `permission_classes = [IsFacturier]`
+  relu, GET/POST testés indépendamment sur son propre nœud ET refusés sur un nœud forgé
+  (`test_bug138_facturier_get_and_post_on_own_node_only`, `test_facturier_post_allowed_on_own_node_refused_on_other_node`),
+  effet de bord réel sur `BreadStock` confirmé limité à son propre nœud ; volet frontend (BUG-140)
+  vérifié ci-dessous).
+
+### BUG-139 — Conception « confirmation par équipe A/B séparée » (BUG-133/134) potentiellement en contradiction avec remarque.md l.398 (« une fois, pas par équipe »)
+
+- Module : Production
+- Composant : backend/frontend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ (volet backend corrigé par dev-backend, volet frontend corrigé en BUG-140 par
+  dev-frontend, les deux volets vérifiés ensemble par testeur-production le 2026-11-09). **Plus
+  « À CLARIFIER »** : le client (ADG, ETS. KIESE)
+  a tranché directement le point avec le coordinateur le 2026-11-09, en ajoutant lui-même la ligne
+  remarque.md l.398 : « Après confirmation des restes d'hier, les valeurs renseignées doivent
+  remplacer les valeurs qu'il a d[éjà] dans "Production & Stocks" et non additionner [— déjà fait,
+  BUG-136, non retouché ici], on le fait une fois le matin, pour l'équipe A ou B, juste une fois au
+  créneau d'ouverture (premier créneau), le facturier peut aussi faire ça. »
+- Ouvert par : testeur-production, 2026-11-09, en vérifiant BUG-133/134/135/136.
+- Référence métier : `remarque.md` l.398 (même ligne que BUG-138), lue littéralement : « on le
+  fait une fois le matin, [pas] pour l'équipe A ou B, juste une fois au créneau d'ouverture
+  (premier créneau) ». Lu avec l.396 (« ils faudrait une boite [modale] pour confirmer ces nombres
+  dès sa première connexion dans la journée [...] la boite [modale] doit continuer d'apparaitre
+  tant que le gérant n'aura pas confirmé à chaque fois que le gérant ouvre une page »), la lecture
+  la plus naturelle est : UNE confirmation par jour (au premier créneau, quelle que soit l'équipe
+  en cours), pas une confirmation distincte exigée pour A **et** B avant que la boîte modale ne se
+  ferme définitivement.
+- Constat : l'implémentation livrée (fiche BUG-133, « point de conception 1 ») choisit explicitement
+  l'inverse — une confirmation strictement par équipe (`DailyOpeningConfirmation.
+  unique_together = [node, team, date]`, deux lignes possibles par jour), avec la justification
+  interne que « l'équipe est choisie explicitement par le gérant dans la boîte modale, jamais
+  déduite » (parce qu'un seul compte GERANT couvre A et B). La fiche BUG-134 va plus loin et
+  demande explicitement à ce que la boîte modale reste ouverte/réapparaisse tant que les DEUX
+  équipes ne sont pas confirmées (« ne pas fermer complètement la modale avant que les deux
+  équipes pertinentes à la boulangerie soient traitées »). Cette lecture n'est pas absurde (une
+  bonne raison technique existe : pas de login par équipe), mais elle s'écarte de la phrase
+  littérale du client sans qu'aucune trace écrite de clarification ne soit retrouvée (recherché
+  dans `docs/qa/QUESTIONS_CLIENT.md` : aucune entrée sur ce sujet). Les deux lignes de
+  remarque.md (l.396 et l.398) restent non cochées `[]` à ce jour, ce qui est, dans ce dépôt, le
+  signal conventionnel qu'un point n'est pas considéré comme traité (voir par contraste les
+  lignes déjà cochées `[c]` juste au-dessus, avec renvoi au ticket qui les a closes).
+- Fonctionnellement, si la lecture littérale du client est la bonne, cela changerait :
+  - Le modèle de données (une confirmation par jour, sans dimension `team`, ou une confirmation
+    qui s'applique indifféremment aux deux équipes dès la première validée) ;
+  - `_build_daily_closure_report`/BUG-135 (quel `reste_du_hier` par équipe utiliser si une seule
+    confirmation existe pour la journée, pas une par équipe ?) ;
+  - L'ergonomie de la boîte modale BUG-134 (plus besoin de sélecteur d'équipe, ni de garder la
+    modale ouverte pour une seconde équipe).
+- Pas tranché ici (CLAUDE.md §7 règle 6 — ambiguïté métier réelle, à confirmer avec le client par
+  le coordinateur, pas par le testeur). Tant que ce point n'est pas clarifié, BUG-133/134 ne
+  peuvent pas être déclarés conformes à remarque.md avec certitude.
+- Impact sur la vérification de session : combiné à BUG-138, **BUG-133, BUG-134, BUG-135 et
+  BUG-136 restent au statut CORRIGÉ, non passés à VÉRIFIÉ**, par prudence (ils sont fonctionnellement
+  liés — CLAUDE.md, consigne de la mission de vérification) jusqu'à résolution de BUG-138/139. Le
+  comportement technique testé (signe BUG-135, synchronisation de stock BUG-136, non-régression)
+  est, lui, confirmé correct et ne nécessitera probablement aucune réécriture si BUG-139 est
+  tranché en faveur de la conception actuelle — seul le périmètre d'accès (BUG-138) et
+  éventuellement le modèle « une confirmation par équipe » (BUG-139) seraient à revoir.
+
+#### Correction
+- Par : dev-backend le 2026-11-09.
+- Cause : le modèle de données et `_build_daily_closure_report`/BUG-135 étaient déjà corrects et
+  n'ont PAS été touchés (le client a confirmé que le stockage par équipe reste utile et que la
+  substitution, pas l'addition, des restes d'hier — BUG-136 — est déjà le bon comportement). Le
+  seul défaut réel était le SIGNAL consommé par le frontend pour décider d'afficher la boîte
+  modale : le GET ne renvoyait que `teams.A.confirmed`/`teams.B.confirmed`, poussant le frontend
+  (implémentation BUG-134) à exiger les DEUX avant de fermer la boîte modale, alors que le client
+  veut qu'UNE SEULE confirmation (celle de l'équipe du créneau d'ouverture) suffise.
+- Fichiers modifiés :
+  - `backend/production/views.py` (`DailyOpeningConfirmationView.get()`) : ajoute deux champs à la
+    réponse JSON, SANS toucher `teams`/`categories`/au modèle `DailyOpeningConfirmation` :
+    - `opening_team` : `"A"` ou `"B"`, déterminé via `Node.active_team_at()` (BUG-130, créneaux
+      horaires configurés du nœud) au moment de l'appel ; `null` si le nœud n'a pas de créneaux
+      configurés.
+    - `needs_confirmation` (booléen) — **seul signal que le frontend doit désormais utiliser**
+      pour afficher ou non la boîte modale (documenté explicitement dans le docstring de la vue) :
+      - `opening_team` déterminé → `not teams[opening_team].confirmed` (seule l'équipe active doit
+        avoir confirmé) ;
+      - `opening_team` est `null` (nœud sans créneaux configurés, filet de sécurité) →
+        `not teams.A.confirmed and not teams.B.confirmed` (UNE confirmation, A ou B, suffit —
+        jamais les deux exigées).
+    `teams.A/B.confirmed` restent dans la réponse (toujours informatifs), mais ne doivent plus
+    servir à ce calcul côté frontend — c'est `needs_confirmation` qui fait foi.
+  - `backend/production/tests/test_daily_opening_confirmation.py` : nouvelle classe
+    `OpeningConfirmationNeedsConfirmationTests` (4 tests) — créneaux configurés avec équipe B
+    active : la confirmation de A seule ne suffit pas, celle de B (équipe active) seule suffit même
+    si A ne confirme jamais ; créneaux configurés avec équipe A active : symétrique ; nœud sans
+    créneaux configurés : une seule confirmation (A ou B) suffit ; aucune confirmation → modale
+    requise.
+  - `backend/production/tests/test_opening_confirmation_verification.py` : ajoute
+    `test_build_daily_closure_report_unaffected_by_bug139_change` — non-régression explicite
+    confirmant que `_build_daily_closure_report`/BUG-135 produit toujours, par équipe, la valeur
+    confirmée de CETTE équipe si elle existe, sinon l'auto-dérivé — inchangé par ce correctif.
+- Test de non-régression : les 4 nouveaux tests de `OpeningConfirmationNeedsConfirmationTests`
+  échouaient avant l'ajout de `needs_confirmation`/`opening_team` (champs absents de la réponse) et
+  passent après. `python manage.py test production sales finance` (204 tests) et
+  `python manage.py test production.tests.test_daily_opening_confirmation
+  production.tests.test_opening_confirmation_verification` (42 tests) : OK.
+  `python manage.py makemigrations --check --dry-run` : aucune migration (correctif purement API,
+  aucun changement de schéma).
+- Impact API/frontend : **changement de contrat additif** (aucun champ retiré/renommé) —
+  `GET /api/production/opening-confirmation/` renvoie désormais en plus `opening_team`
+  (`"A"|"B"|null`) et `needs_confirmation` (booléen). Ticket lié ouvert pour `dev-frontend` : la
+  boîte modale (`OpeningStockConfirmationModal.tsx`/`DashboardLayout.tsx`) doit désormais décider
+  d'apparaître en lisant **uniquement** `needs_confirmation` (plus `!teams.A.confirmed ||
+  !teams.B.confirmed`) — voir BUG-140 ci-dessous pour le détail du contrat.
+- Ambiguïté résiduelle signalée (non tranchée ici, pas centrale à la demande du client) : si
+  `opening_team` change de valeur EN COURS DE JOURNÉE pour un nœud sans créneaux qui se les voit
+  configurer entre deux requêtes, ou si un gérant change l'équipe active via `Node.active_team_at()`
+  après qu'une équipe a déjà confirmé, le signal `needs_confirmation` est toujours recalculé « à la
+  volée » à chaque GET (pas mémorisé) — comportement jugé cohérent avec le reste de la vue
+  (`qty_proposed` est également recalculé à chaque GET), mais à confirmer si un cas réel différent
+  se présente.
+- Statut : **VÉRIFIÉ** (testeur-production, 2026-11-09 — `opening_team`/`needs_confirmation`
+  revérifiés avec de VRAIS créneaux horaires configurés sur le nœud (pas seulement avec
+  `Node.active_team_at()` mocké comme le fait `OpeningConfirmationNeedsConfirmationTests` de
+  dev-backend) : `test_bug139_real_time_slots_only_active_team_confirmation_required` (créneau B
+  réel à 14h, A seule ne suffit pas, B seule suffit) et
+  `test_bug139_node_without_slots_either_team_suffices_real_data` (nœud non configuré, A ou B
+  suffit) — tous deux verts, intégration bout-en-bout confirmée, pas seulement le calcul isolé.
+  `_build_daily_closure_report` confirmé inchangé par ce ticket.
+
+### BUG-140 — [frontend] Monter la boîte modale pour FACTURIER et basculer sur `needs_confirmation`
+
+- Module : Production
+- Composant : frontend
+- Gravité : Majeur
+- Statut : VÉRIFIÉ
+- Ouvert par : dev-backend (sous-ticket, en corrigeant BUG-138/139), 2026-11-09.
+- Référence métier : remarque.md l.398 (même ligne que BUG-138/139, tranchée directement par le
+  client avec le coordinateur le 2026-11-09).
+- Contexte : BUG-138 et BUG-139 sont corrigés côté backend (`DailyOpeningConfirmationView`,
+  `backend/production/views.py`). Deux changements de contrat API, tous deux additifs (aucun champ
+  retiré) sur `GET /api/production/opening-confirmation/?node=<code>&date=<AAAA-MM-JJ>` :
+  1. L'accès (GET et POST) est désormais autorisé pour FACTURIER au même titre que GERANT (plus de
+     403 systématique).
+  2. La réponse porte deux nouveaux champs :
+     - `opening_team` : `"A"` | `"B"` | `null`.
+     - `needs_confirmation` : booléen — **seul signal à utiliser pour décider d'afficher la boîte
+       modale**. `teams.A.confirmed`/`teams.B.confirmed` restent présents (informatifs) mais ne
+       doivent plus être utilisés pour ce calcul.
+- À faire côté frontend :
+  1. `DashboardLayout.tsx` : monter `OpeningStockConfirmationModal` également pour
+     `user.role === 'FACTURIER' && !user.can_access_all_nodes` (actuellement restreint à
+     `user.role === 'GERANT'`), en plus de GERANT — même garde `!user.can_access_all_nodes`.
+  2. Partout où `needsConfirmation` est actuellement calculé côté frontend (probablement
+     `!teams.A.confirmed || !teams.B.confirmed`, logique BUG-134) : remplacer intégralement par la
+     lecture directe de `response.needs_confirmation`. Ne plus recalculer la condition à partir de
+     `teams.A/B.confirmed` côté client.
+  3. Vérifier que `OpeningStockConfirmationModal.tsx` n'impose pas de sélecteur d'équipe obligatoire
+     incompatible avec un FACTURIER qui n'a qu'une équipe assignée (`user.team`) — proposer cette
+     équipe par défaut si c'est déjà le cas pour GERANT, sinon signaler une ambiguïté au
+     coordinateur plutôt que de deviner (le modèle `DailyOpeningConfirmation` garde `team` dans sa
+     clé — le choix d'équipe dans la boîte modale reste nécessaire, BUG-133 point de conception 1,
+     non remis en cause par BUG-139).
+  4. Mettre à jour/étendre les types TypeScript de la réponse dans `src/api/services.ts` (ou
+     `src/types/`) pour inclure `opening_team`/`needs_confirmation` (CLAUDE.md §4 : pas de nouveau
+     `any`).
+- Preuve (backend, déjà vérifiée) : `backend/production/tests/test_daily_opening_confirmation.py::
+  DailyOpeningConfirmationTests::test_facturier_can_access_opening_confirmation_on_own_node` et
+  `::OpeningConfirmationNeedsConfirmationTests` (4 tests) ; `backend/production/tests/
+  test_opening_confirmation_verification.py::OpeningConfirmationPermissionBoundaryTests::
+  test_facturier_post_allowed_on_own_node_refused_on_other_node`.
+- Fichiers suspects : `frontend/src/components/layout/DashboardLayout.tsx`,
+  `frontend/src/components/production/OpeningStockConfirmationModal.tsx`,
+  `frontend/src/api/services.ts`.
+
+#### Correction
+- Par : dev-frontend le 2026-11-09.
+- Cause : (1) `DashboardLayout.tsx` ne montait `OpeningStockConfirmationModal` que pour
+  `user.role === 'GERANT'`, excluant FACTURIER malgré l'ouverture de l'accès API (BUG-138). (2)
+  `OpeningStockConfirmationModal.tsx` calculait `needsConfirmation` côté client avec
+  `!teams.A.confirmed || !teams.B.confirmed` (exigeait les deux équipes) au lieu du nouveau signal
+  serveur `needs_confirmation` (BUG-139). (3) `pickDefaultTeam` ne tenait pas compte de l'équipe
+  active du créneau d'ouverture (`opening_team`) ni de l'équipe propre du facturier (`user.team`).
+- Fichiers modifiés :
+  - `frontend/src/api/services.ts` : `OpeningConfirmationReport` étendu avec
+    `opening_team: OpeningConfirmationTeam | null` et `needs_confirmation: boolean` (champs
+    additifs, aucun `any`).
+  - `frontend/src/components/production/OpeningStockConfirmationModal.tsx` :
+    - `needsConfirmation` lit désormais directement `report.needs_confirmation` (fallback `false`
+      si `report` est `null`, comportement inchangé dans ce cas).
+    - Nouvelle fonction `resolveDefaultTeam(report, userTeam)` : priorité à `report.opening_team`
+      quand connu ; sinon, si l'utilisateur connecté a une équipe propre (`user.team`, typé
+      `'A' | 'B' | ''` dans `UserProfile`, `src/store/authStore.ts`) non encore confirmée, la
+      propose ; sinon filet de sécurité inchangé `pickDefaultTeam` (logique BUG-134 conservée telle
+      quelle, non supprimée). `useAuthStore` importé pour lire `user.team`.
+    - Le sélecteur manuel A/B existant n'a pas été retiré (toujours visible et fonctionnel) — seule
+      la présélection change ; un gérant ou un facturier peut toujours confirmer pour l'autre
+      équipe (ex. retard, absence).
+    - Le bandeau d'ajustement de stock (BUG-137) et le flux de soumission (`handleSubmit`,
+      `fetchReport`) n'ont pas été modifiés en dehors du changement de dépendance de `fetchReport`
+      (ajout de `userTeam` pour que `resolveDefaultTeam` dispose de la valeur à jour).
+  - `frontend/src/components/layout/DashboardLayout.tsx` : garde de montage étendue à
+    `user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes`.
+  - Pas de champ `user.team` exposé par l'API qui n'existe pas déjà côté frontend : `UserProfile`
+    (`src/store/authStore.ts`) l'avait déjà (`team: 'A' | 'B' | ''`), confirmé provenir de
+    `UserSerializer` (`backend/core/serializers.py`) — aucune supposition de champ inexistant.
+- Test de non-régression : `npx tsc --noEmit` (frontend/) et `npm run build` (frontend/) passent
+  sans erreur ni nouvel avertissement (avertissements de taille de chunk préexistants, sans
+  rapport). Aucun test E2E dédié à ce composant n'existe à ce jour (le plus proche,
+  `e2e/tests/11-stock-depart-confirmation.spec.ts`, couvre BUG-133/134 ; non étendu ici par manque
+  de temps — voir vérification manuelle ci-dessous, à exécuter par le testeur ou en E2E si le
+  fichier est étendu).
+- Vérification manuelle suggérée pour le testeur :
+  1. Configurer des créneaux horaires A/B pour un nœud (BUG-130/131, `Node` admin ou API), se
+     connecter en tant que FACTURIER de ce nœud pendant le créneau de l'équipe A : la boîte modale
+     doit s'afficher avec « Équipe A » présélectionnée dans le sélecteur.
+  2. Confirmer pour l'équipe A : la boîte modale doit se fermer (`needs_confirmation` devient
+     `false`) même si l'équipe B n'a jamais confirmé — se reconnecter plus tard dans la journée
+     (ou changer de page) : la modale ne doit pas réapparaître.
+  3. Se connecter en tant que GERANT du même nœud pendant le créneau B : la modale doit proposer
+     « Équipe B » par défaut (toujours modifiable manuellement vers A).
+  4. Nœud sans créneaux configurés : connecté en FACTURIER avec `user.team = 'B'`, la modale doit
+     présélectionner B (fallback) ; après confirmation d'une équipe quelconque (A ou B), la modale
+     ne doit plus réapparaître dans la journée (comportement de `needs_confirmation` sans
+     `opening_team`, déjà couvert côté backend par
+     `OpeningConfirmationNeedsConfirmationTests`).
+  5. Vérifier à 360 px (POS) que la boîte modale reste entièrement visible sans défilement de
+     page (reprise du composant existant, `maxWidth="560px"`, non modifié dans cette correction).
+- Impact API/frontend : aucun changement de contrat API (déjà livré par dev-backend, additif).
+  Changement frontend : FACTURIER voit désormais la boîte modale sur son propre nœud ; la modale
+  se ferme après une seule confirmation de l'équipe active au lieu d'exiger les deux équipes.
+- **VÉRIFIÉ** par testeur-production, 2026-11-09 : `DashboardLayout.tsx` relu, garde
+  `(user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes` confirmée ;
+  `resolveDefaultTeam`/`needsConfirmation` relus, cohérents avec le contrat `opening_team`/
+  `needs_confirmation`. `npm run build` réexécuté : OK. Parcours E2E FACTURIER (K2) exécuté : voit
+  la boîte modale, confirme, une seule confirmation suffit, modale ne réapparaît plus — vert sur
+  tablette/bureau/TV (skip propre sur `pos` par état déjà confirmé le jour de cette session, voir
+  BUG-137 pour le détail de la limite E2E rencontrée sur le bandeau spécifiquement).
+
+### BUG-141 — [backend] `opening_team` doit être le premier créneau structurel, pas l'équipe active à l'instant présent
+
+- Module : Production
+- Composant : backend
+- Gravité : Majeur
+- Statut : CORRIGÉ (dev-backend, 2026-11-09 — ne pas passer à VÉRIFIÉ soi-même, CLAUDE.md §7 règle 3)
+- Ouvert par : client (test en direct à 21h sur K1), relayé par le coordinateur, 2026-11-09.
+- Référence métier : remarque.md l.398 (même ligne que BUG-138/139/140) : « juste une fois au
+  créneau d'ouverture (**premier créneau**) » — le premier créneau de la journée est une propriété
+  STRUCTURELLE des horaires configurés du nœud (pour K1 : A 06:00-11:30 précède B 14:30-20:00, donc
+  A est toujours le créneau d'ouverture), indépendante de l'heure à laquelle un gérant/facturier se
+  connecte pour confirmer (il peut tout à fait rattraper une confirmation oubliée le soir).
+- Contexte / cause confirmée : BUG-139/140 avait introduit `opening_team` dans
+  `DailyOpeningConfirmationView.get()` (`backend/production/views.py`) en appelant
+  `node.active_team_at()` (BUG-130, `core/models.py`) — qui répond à une question différente
+  (« qui travaille EN CE MOMENT ? »), et renvoie `None` dès que l'heure d'appel tombe hors des deux
+  créneaux configurés (ex. 21h, hors de 06:00-11:30 et 14:30-20:00 pour K1). Testé en direct par le
+  client à 21h : la boîte modale ne présélectionnait plus aucune équipe et remontrait A/B à égalité,
+  alors que le premier créneau (toujours A pour K1) ne dépend pas de l'heure de connexion. Déjà
+  anticipé comme ambiguïté résiduelle non centrale par testeur-production dans sa fiche de
+  vérification BUG-139 (ligne 12862 de ce registre, "si un gérant change l'équipe active via
+  `Node.active_team_at()`...").
+- Reproduction : `OpeningConfirmationNeedsConfirmationTests::
+  test_bug141_opening_team_is_first_slot_regardless_of_current_time` (nouveau test, échouait avant
+  le correctif avec `opening_team` == `None` à 21h au lieu de `"A"`).
+- Fichiers modifiés :
+  - `backend/core/models.py` : nouvelle méthode `Node.opening_team()` — retourne l'équipe dont le
+    `start_time` configuré est le plus tôt dans la journée (`'A'` par convention stable en cas
+    d'égalité exacte), ou l'unique créneau configuré si un seul l'est, ou `None` si aucun n'est
+    configuré. Purement structurel, aucune dépendance à l'heure actuelle. `Node.active_team_at()`
+    n'a pas été modifiée (toujours utilisée ailleurs dans le code pour « qui travaille EN CE
+    MOMENT ? », ce n'est pas le sujet de ce ticket).
+  - `backend/production/views.py::DailyOpeningConfirmationView` : `opening_team = node.
+    active_team_at()` remplacé par `opening_team = node.opening_team()` ; docstring et commentaire
+    de la vue mis à jour pour expliciter clairement la distinction entre les deux méthodes et éviter
+    une future confusion.
+  - `backend/production/tests/test_daily_opening_confirmation.py` :
+    - `OpeningConfirmationNeedsConfirmationTests` : les deux tests qui patchaient
+      `Node.active_team_at` directement (`test_with_configured_slots_only_the_active_team_
+      confirmation_is_required`, `test_with_configured_slots_active_team_confirmation_alone_
+      suffices`) ont été adaptés — la vue ne consultant plus `active_team_at()`, patcher cette
+      méthode n'avait plus aucun effet sur `opening_team`. Ils configurent désormais directement les
+      horaires réels du nœud (`team_a_start_time`/`team_b_start_time`) pour piloter `opening_team`
+      de façon structurelle (renommés `..._only_the_opening_team_confirmation_is_required` et
+      `..._opening_team_confirmation_alone_suffices`) ; même comportement attendu qu'avant
+      (confirmation de l'équipe d'ouverture seule suffit), toujours vert.
+    - Les deux tests « filet de sécurité » (nœud sans créneaux configurés,
+      `test_without_configured_slots_*`) étaient déjà corrects sans aucune modification nécessaire :
+      sans créneaux, `opening_team()` renvoie déjà `None` comme `active_team_at()`, résultat
+      identique.
+    - Nouveau test ajouté (pas sous `@expectedFailure`, créé directement vert après correctif) :
+      `test_bug141_opening_team_is_first_slot_regardless_of_current_time` — nœud avec A
+      06:00-11:30 / B 14:30-20:00 configurés, heure courante simulée à 21h00 (hors des deux
+      créneaux) : le test vérifie d'abord, par contraste, que `node.active_team_at()` renvoie bien
+      `None` à cette heure (preuve du bug), puis que `opening_team` dans la réponse du GET vaut
+      `"A"` (comportement corrigé, indépendant de l'heure).
+  - `backend/production/tests/test_opening_confirmation_verification.py`
+    (`OpeningConfirmationFinalVerificationBug137To140Tests`, fichier de vérification du testeur,
+    BUG-139/140) : le test `test_bug139_real_time_slots_only_active_team_confirmation_required`
+    (créneaux réels A 06:00-13:00 / B 13:00-20:00, heure figée à 14h) encodait l'ancien comportement
+    incorrect (`opening_team` attendu `'B'` à 14h, car `Node.active_team_at()` y voyait B active) —
+    il échouait après ce correctif (`'A' != 'B'`), CE QUI EST ATTENDU : l'assertion elle-même
+    contredisait le nouveau contrat corrigé (opening_team structurel = 'A', A démarrant avant B).
+    Renommé `test_bug141_real_time_slots_opening_team_is_first_slot_not_current_time` et corrigé
+    pour attendre `opening_team == 'A'` à 14h, confirmation de A (équipe d'ouverture) seule suffit,
+    celle de B seule ne suffit pas — même esprit de test (intégration avec de vrais horaires de
+    nœud, pas de mock), assertions alignées sur le contrat corrigé. Docstring de la classe mise à
+    jour en conséquence. L'autre test de cette classe,
+    `test_bug139_node_without_slots_either_team_suffices_real_data`, n'a nécessité aucune
+    modification (nœud sans créneaux, `opening_team` reste `None` dans les deux logiques).
+- Aucun changement de contrat API : le nom, le type et la sémantique côté frontend de
+  `opening_team` restent identiques (`"A" | "B" | null`) — seule la VALEUR renvoyée change de
+  logique de calcul dans les cas où elle différait de l'ancien comportement (hors créneau actif).
+  Le frontend (`OpeningStockConfirmationModal.tsx`, BUG-140) consomme déjà ce champ tel quel, sans
+  modification nécessaire. Aucun ticket frontend lié ouvert (pas d'impact de contrat).
+- Test de non-régression : `backend/.venv/Scripts/python.exe manage.py test production sales
+  finance` — **210 tests, tous verts** (confirmé après correction du test de vérification
+  ci-dessus), y compris le nouveau test BUG-141 et les trois tests adaptés (deux dans
+  `test_daily_opening_confirmation.py`, un dans `test_opening_confirmation_verification.py`).
+  `manage.py makemigrations --check --dry-run` propre (changement purement logique, aucune
+  migration de schéma).
+- Impact éventuel : aucun autre appelant de `active_team_at()` identifié dans le code applicatif
+  en dehors de celui déjà documenté par BUG-130 ; non touché par ce ticket.
+- Statut : CORRIGÉ — en attente de vérification par testeur-production (ou le coordinateur),
+  conformément à CLAUDE.md §7 règle 3.
+
+#### Vérification
+- Par : testeur-production le 2026-11-09
+- Relecture indépendante de `Node.opening_team()` (`backend/core/models.py`) : la méthode compare
+  uniquement `team_a_start_time`/`team_b_start_time` entre eux, n'appelle jamais `localtime()` ni
+  aucune heure courante — purement structurelle, conforme à remarque.md l.398 (« premier créneau »,
+  pas « équipe en service au moment de la connexion »). `active_team_at()` n'a pas été modifiée et
+  reste utilisée ailleurs pour sa question propre (« qui travaille EN CE MOMENT ? ») : pas de
+  confusion entretenue entre les deux méthodes dans le code ni dans les docstrings.
+- Relecture indépendante de `DailyOpeningConfirmationView.get()` (`backend/production/views.py`) :
+  appelle bien `node.opening_team()` (plus `active_team_at()`), et `needs_confirmation` est dérivé
+  uniquement de la confirmation de cette équipe d'ouverture (ou des deux si aucun créneau configuré,
+  filet de sécurité inchangé).
+- Relecture ciblée du test modifié dans mon propre fichier (`test_opening_confirmation_verification.py
+  ::OpeningConfirmationFinalVerificationBug137To140Tests::
+  test_bug141_real_time_slots_opening_team_is_first_slot_not_current_time`, ex-`test_bug139_...`) :
+  confirmé indépendamment que la nouvelle assertion (`opening_team == 'A'` à 14h00, avec A
+  06:00-13:00 précédant B 13:00-20:00) est la lecture correcte de remarque.md l.398 — A est
+  structurellement le premier créneau de la journée, quelle que soit l'heure de connexion. L'ancienne
+  assertion (`'B'` attendu à 14h car `active_team_at()` y voyait B active) encodait exactement le
+  bug signalé par le client. Ce n'est pas un affaiblissement : la portée du test (intégration avec de
+  vrais horaires de nœud, deux POST A puis B pour vérifier que seule la confirmation de l'équipe
+  d'ouverture suffit) est restée intacte, seule l'assertion erronée sur `opening_team` a été corrigée.
+  Confirmation indépendante : affaiblissement écarté.
+- Test indépendant ajouté (pas une simple relecture) : `backend/production/tests/
+  test_bug141_opening_team_after_hours.py` (`Bug141AfterHoursOpeningTeamTests`), nouveau fichier à
+  moi — reproduit le scénario réel signalé par le client (connexion à 21h sur un nœud configuré comme
+  K1, A 06:00-11:30 / B 14:30-20:00, donc APRÈS la fermeture des deux créneaux). Preuve en deux temps :
+  1) `node.active_team_at()` est bien `None` à cette heure (cause du bug confirmée indépendamment) ;
+  2) la réponse de `GET /api/production/opening-confirmation/` porte malgré tout `opening_team ==
+  'A'` (pas `None`, pas de sélecteur neutre), et la confirmation de A à 21h lève bien
+  `needs_confirmation`. Deuxième test à 22h pour un FACTURIER (remarque.md l.398 : « le facturier
+  peut aussi faire ça »), sur une heure différente de celle déjà couverte par dev-backend (21h) pour
+  éviter un faux-positif lié à une valeur d'heure particulière.
+- `backend/.venv/Scripts/python.exe manage.py test production sales finance` : **212 tests, OK**
+  (210 existants + mes 2 nouveaux tests indépendants), aucune régression.
+- Résultat : **VÉRIFIÉ**

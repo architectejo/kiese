@@ -199,6 +199,38 @@ class Node(models.Model):
             return 'B'
         return None
 
+    def opening_team(self):
+        """
+        Retourne 'A', 'B' ou None : l'équipe du PREMIER créneau de la
+        journée pour cette boulangerie, déterminée STRUCTURELLEMENT à
+        partir des horaires configurés (`team_a_start_time`,
+        `team_b_start_time`) — PAS à partir de l'heure actuelle.
+
+        Ne pas confondre avec `active_team_at()` qui répond à une question
+        différente (« qui travaille EN CE MOMENT ? »). BUG-141
+        (docs/qa/REGISTRE_BUGS.md) : la confirmation d'ouverture de stock
+        (remarque.md l.398) doit toujours cibler l'équipe du premier
+        créneau, quelle que soit l'heure à laquelle le gérant/facturier se
+        connecte (il peut rattraper une confirmation oubliée le soir).
+
+        Règles :
+        - Les deux créneaux configurés → l'équipe dont `start_time` est le
+          plus tôt. En cas d'égalité exacte (cas limite improbable), 'A'
+          est retournée par convention stable.
+        - Un seul créneau configuré → cette équipe.
+        - Aucun créneau configuré → None (filet de sécurité, inchangé).
+        """
+        a_start = self.team_a_start_time
+        b_start = self.team_b_start_time
+
+        if a_start is not None and b_start is not None:
+            return 'B' if b_start < a_start else 'A'
+        if a_start is not None:
+            return 'A'
+        if b_start is not None:
+            return 'B'
+        return None
+
     def is_sync_degraded(self, threshold_hours=None):
         """
         True si ce nœud n'a pas réussi de synchronisation Cloud récente

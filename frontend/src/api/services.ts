@@ -320,6 +320,66 @@ export interface DailyClosureReport {
   totals: DailyClosureTotals;
 }
 
+// BUG-133/134 : boîte modale « stock de départ » — GET/POST
+// /api/production/opening-confirmation/ (voir docs/qa/REGISTRE_BUGS.md).
+export type OpeningConfirmationTeam = 'A' | 'B';
+
+export interface OpeningConfirmationCategory {
+  bread_price: number;
+  label: string;
+  unit_price: string | number;
+  qty_proposed: number;
+}
+
+export interface OpeningConfirmationTeamLine {
+  bread_price: number;
+  qty_confirmed: number;
+}
+
+export interface OpeningConfirmationTeamState {
+  confirmed: boolean;
+  confirmed_at: string | null;
+  confirmed_by: string | null;
+  lines: OpeningConfirmationTeamLine[] | null;
+}
+
+export interface OpeningConfirmationReport {
+  node: string;
+  date: string;
+  categories: OpeningConfirmationCategory[];
+  teams: Record<OpeningConfirmationTeam, OpeningConfirmationTeamState>;
+  /** BUG-139/140 : équipe active au créneau d'ouverture (Node.active_team_at(),
+   *  BUG-130), ou `null` si le nœud n'a pas de créneaux horaires configurés. */
+  opening_team: OpeningConfirmationTeam | null;
+  /** BUG-139/140 : SEUL signal à utiliser pour décider d'afficher la boîte
+   *  modale (remplace l'ancien calcul frontend `!teams.A.confirmed ||
+   *  !teams.B.confirmed`). */
+  needs_confirmation: boolean;
+}
+
+export interface OpeningConfirmationSubmitPayload {
+  team: OpeningConfirmationTeam;
+  lines: Array<{ bread_price: number; qty: number }>;
+}
+
+/** BUG-136/137 : un ajustement réel de `BreadStock.qty_available` appliqué
+ *  par la confirmation (absent de la liste quand le gérant valide la
+ *  valeur proposée telle quelle — delta nul, no-op). */
+export interface OpeningConfirmationStockAdjustment {
+  bread_price_id: number;
+  before: number;
+  after: number;
+  delta: number;
+}
+
+export interface OpeningConfirmationSubmitResponse {
+  detail: string;
+  node: string;
+  team: OpeningConfirmationTeam;
+  date: string;
+  stock_adjustments: OpeningConfirmationStockAdjustment[];
+}
+
 export interface BreadStock {
   id: number;
   node: string;
@@ -1080,6 +1140,14 @@ export const productionApi = {
   dailyClosure: {
     get: (node: string, date: string) =>
       apiClient.get<DailyClosureReport>('/api/production/daily-closure/', { params: { node, date } }),
+  },
+  // BUG-133/134 : boîte modale « stock de départ » — pas de paramètre `node`
+  // pour un GERANT non-HQ (le backend le force à son nœud, jamais forgeable).
+  openingConfirmation: {
+    get: () =>
+      apiClient.get<OpeningConfirmationReport>('/api/production/opening-confirmation/'),
+    submit: (payload: OpeningConfirmationSubmitPayload) =>
+      apiClient.post<OpeningConfirmationSubmitResponse>('/api/production/opening-confirmation/', payload),
   },
 };
 

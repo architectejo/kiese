@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ProductionSessionViewSet, BreadStockViewSet, ConsumableTypeViewSet, ConsumableStockViewSet,
     ConsumableMovementViewSet, ConsumableCountViewSet, BreadTransferViewSet, BreadDisposalViewSet,
-    DailyClosureReportView,
+    DailyClosureReportView, DailyOpeningConfirmationView,
 )
 
 router = DefaultRouter()
@@ -21,5 +21,8 @@ urlpatterns = [
     # BUG-120 : rapport de clôture journalier consolidé — avant le routeur
     # (chemin littéral, aucun conflit possible avec les routes du routeur).
     path('daily-closure/', DailyClosureReportView.as_view(), name='daily-closure-report'),
+    # BUG-133 : boîte modale « stock de départ » — avant le routeur, chemin
+    # littéral, aucun conflit possible.
+    path('opening-confirmation/', DailyOpeningConfirmationView.as_view(), name='daily-opening-confirmation'),
     path('', include(router.urls)),
 ]

@@ -91,9 +91,9 @@ class BreadStockSerializer(serializers.ModelSerializer):
         model  = BreadStock
         fields = [
             'id', 'node', 'node_display', 'bread_price', 'bread_price_display', 'unit_price',
-            'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_available',
+            'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted', 'qty_available',
         ]
-        read_only_fields = ['id', 'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed']
+        read_only_fields = ['id', 'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted']
 
 
 class ConsumableTypeSerializer(serializers.ModelSerializer):
