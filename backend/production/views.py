@@ -1,6 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from rest_framework import viewsets, status, filters
@@ -43,7 +43,8 @@ def _record_consumable_exits(session, user, extra_consumables=None):
     - Flour is auto-derived from session.flour_sacks_used.
     - extra_consumables: list of {consumable_type, quantity} dicts for salt/yeast/oil.
     Each creation triggers ConsumableMovement.save() which decrements ConsumableStock
-    (BUG-041 : refuse — ValidationError — si la sortie dépasse le stock disponible).
+    (BUG-143, annule BUG-041 : la sortie n'est plus jamais refusée si elle dépasse le
+    stock disponible — le stock devient négatif, signalé par une notification).
 
     Retourne la liste des (consumable_type, quantity) effectivement traités,
     pour que l'appelant puisse en déduire l'alerte de surconsommation (BUG-040).
@@ -226,6 +227,22 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        """
+        BUG-142 (remarque.md) : une déclaration supplémentaire de fournée le
+        même jour pour la même équipe (node, team, date) ne doit plus être
+        rejetée (ancien comportement : `IntegrityError` sur
+        `unique_together` → 400) — elle s'AJOUTE désormais à la session du
+        jour existante : les lignes `DECLARED` sont incrémentées catégorie
+        par catégorie (ou créées si la catégorie n'avait encore aucune
+        quantité ce jour) et `flour_sacks_used` s'additionne. `sac_value_fc_
+        used` (BUG-038) n'est JAMAIS réécrit sur un ajout — il reste figé à
+        la toute première déclaration du jour pour ce (node, team), qu'elle
+        soit une vraie déclaration ou une session déjà créée par la
+        confirmation du stock de départ (BUG-133/136, voir
+        `_sync_carryover_session_lines`). Une session déjà clôturée
+        (`is_closed=True`, BUG-093) refuse tout ajout, sans contourner la
+        clôture — même message qu'avant pour une session clôturée.
+        """
         config = Config.get_instance()
         user   = self.request.user
         if not user.can_access_all_nodes:
@@ -238,24 +255,87 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             node = serializer.validated_data.get('node') or user.node
         if node is None:
             raise ValidationError({'node': 'Compte non assigné à une boulangerie. Précisez le nœud.'})
-        try:
-            session = serializer.save(
-                declared_by=user,
-                node=node,
-                node_origin=node.code,
-            )
-        except IntegrityError:
-            team = serializer.validated_data.get('team', '?')
-            date = serializer.validated_data.get('date', '?')
-            raise ValidationError(
-                f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
-            )
-        session.compute_totals(_effective_sac_value(node, config))
-        session.save(update_fields=_SESSION_COMPUTED_FIELDS)
 
-        for line in session.lines.select_related('bread_price').all():
-            _adjust_bread_stock(session.node, line.bread_price, produced=line.quantity)
+        team = serializer.validated_data.get('team')
+        date = serializer.validated_data.get('date')
+        lines_data = serializer.validated_data.get('lines') or []
+        flour_add = serializer.validated_data.get('flour_sacks_used')
 
+        new_declared_lines = []
+        with transaction.atomic():
+            existing = ProductionSession.objects.select_for_update().filter(
+                node=node, team=team, date=date,
+            ).first()
+
+            if existing is not None:
+                if existing.is_closed:
+                    raise ValidationError({
+                        'detail': (
+                            f"Session de production clôturée pour l'Équipe {team} le {date} "
+                            f"à la boulangerie {node.code} — déclaration impossible."
+                        )
+                    })
+                session = existing
+                if flour_add:
+                    session.flour_sacks_used = session.flour_sacks_used + flour_add
+                    session.save(update_fields=['flour_sacks_used'])
+                for line_data in lines_data:
+                    qty = line_data.get('quantity', 0)
+                    if qty <= 0:
+                        continue
+                    bread_price = line_data['bread_price']
+                    existing_line = session.lines.filter(
+                        bread_price=bread_price, source=ProductionSessionLine.Source.DECLARED,
+                    ).first()
+                    if existing_line:
+                        ProductionSessionLine.objects.filter(pk=existing_line.pk).update(
+                            quantity=F('quantity') + qty,
+                        )
+                    else:
+                        ProductionSessionLine.objects.create(
+                            session=session, bread_price=bread_price, quantity=qty,
+                            source=ProductionSessionLine.Source.DECLARED,
+                        )
+                    new_declared_lines.append((bread_price, qty))
+                # BUG-038 : ne JAMAIS relire _effective_sac_value() sur un
+                # ajout — on réutilise la valeur déjà figée sur la session.
+                session.compute_totals(session.sac_value_fc_used)
+            else:
+                try:
+                    session = ProductionSession.objects.create(
+                        node=node, team=team, date=date,
+                        declared_by=user, node_origin=node.code,
+                        flour_sacks_used=flour_add if flour_add else '0.00',
+                        notes=serializer.validated_data.get('notes', ''),
+                    )
+                except IntegrityError:
+                    raise ValidationError(
+                        f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
+                    )
+                for line_data in lines_data:
+                    qty = line_data.get('quantity', 0)
+                    if qty > 0:
+                        ProductionSessionLine.objects.create(
+                            session=session, bread_price=line_data['bread_price'], quantity=qty,
+                            source=ProductionSessionLine.Source.DECLARED,
+                        )
+                        new_declared_lines.append((line_data['bread_price'], qty))
+                session.compute_totals(_effective_sac_value(node, config))
+
+            session.save(update_fields=_SESSION_COMPUTED_FIELDS)
+
+        serializer.instance = session
+
+        for bread_price, qty in new_declared_lines:
+            _adjust_bread_stock(session.node, bread_price, produced=qty)
+
+        # BUG-143 (annule BUG-041, demande client directe 2026-11-10) :
+        # `ConsumableMovement.save()` n'empêche plus jamais une sortie pour
+        # cause de stock insuffisant — elle n'est désormais plus censée lever
+        # de `ValidationError` pour cette raison (le stock peut devenir
+        # négatif). Le `try/except` est conservé par prudence pour toute
+        # AUTRE erreur de validation du modèle (non liée au stock), mais ne
+        # traduit plus jamais un refus pour stock insuffisant en 400.
         from django.core.exceptions import ValidationError as DjangoValidationError
         try:
             processed_entries = _record_consumable_exits(
@@ -263,8 +343,6 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                 extra_consumables=self.request.data.get('consumables_used', []),
             )
         except DjangoValidationError as exc:
-            # BUG-041 : une sortie de consommable dépassant le stock
-            # disponible est refusée — traduite en 400 propre.
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
 
         _check_overconsumption(session, processed_entries)
@@ -297,10 +375,16 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             raise ValidationError({
                 'detail': "Session de production clôturée — modification impossible."
             })
-        # Snapshot old lines BEFORE serializer.save() wipes them
+        # Snapshot old DECLARED lines BEFORE serializer.save() wipes them
+        # (BUG-142 : seules les lignes DECLARED sont réaffectées par
+        # `ProductionSessionSerializer.update()` — les lignes CARRYOVER,
+        # BUG-133/136, ne sont ni touchées ici ni réajustées sur
+        # `BreadStock`, déjà géré une fois par la confirmation elle-même).
         old_lines = {
             line.bread_price_id: (line.bread_price, line.quantity)
-            for line in serializer.instance.lines.select_related('bread_price').all()
+            for line in serializer.instance.lines.filter(
+                source=ProductionSessionLine.Source.DECLARED,
+            ).select_related('bread_price').all()
         }
         user = self.request.user
         if not user.can_access_all_nodes:
@@ -321,7 +405,9 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         # Reverse old, apply new (delta keeps stock accurate on edits)
         for bp_id, (bp, old_qty) in old_lines.items():
             _adjust_bread_stock(session.node, bp, produced=-old_qty)
-        for line in session.lines.select_related('bread_price').all():
+        for line in session.lines.filter(
+            source=ProductionSessionLine.Source.DECLARED,
+        ).select_related('bread_price').all():
             _adjust_bread_stock(session.node, line.bread_price, produced=line.quantity)
 
     @action(detail=False, methods=['get'])
@@ -553,9 +639,12 @@ class ConsumableMovementViewSet(viewsets.ModelViewSet):
                 node_origin=node.code if node else 'CLOUD',
             )
         except DjangoValidationError as exc:
-            # BUG-041 : ConsumableMovement.save() refuse une sortie qui
-            # dépasserait le stock disponible — on la traduit en 400 propre
-            # plutôt que de laisser remonter une erreur serveur.
+            # BUG-143 (annule BUG-041) : ConsumableMovement.save() ne refuse
+            # plus une sortie qui dépasserait le stock disponible (le stock
+            # devient négatif, signalé par notification). Ce `try/except`
+            # est conservé pour toute AUTRE `ValidationError` du modèle,
+            # traduite en 400 propre plutôt que de laisser remonter une
+            # erreur serveur.
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
@@ -870,6 +959,165 @@ class BreadStockViewSet(viewsets.ReadOnlyModelViewSet):
         return qs
 
 
+class BreadStockByDateView(APIView):
+    """
+    BUG-144 (remarque.md, ligne ajoutée après l.396 ; coordinateur, 2026-11-10) :
+    `BreadStockViewSet` (`GET /api/production/bread-stocks/`) ne renvoie que
+    le solde COURANT cumulatif par catégorie (`BreadStock.qty_available`) —
+    aucune manière de consulter ce que le stock de pains valait à une date
+    PASSÉE. Ce nouvel endpoint de LECTURE SEULE comble ce manque pour que le
+    frontend (ticket BUG-145, `dev-frontend`, séparé) puisse ajouter un
+    sélecteur de date aux sections « Stock Pains Actuel »/« Stock Pains du
+    Jour » et « Historique des Fournées » de Production & Stocks.
+
+    `GET /api/production/bread-stocks/by-date/?node=<code ou pk>&date=<AAAA-MM-JJ, optionnel>`
+
+    Permissions : `IsAuthenticated`, comme `BreadStockViewSet` (lecture
+    seule, tous rôles authentifiés) ; isolation par nœud identique à
+    `DailyClosureReportView`/`_opening_confirmation_resolve_node`
+    (BUG-022/025/056/120/133) : un non-HQ (`not user.can_access_all_nodes`)
+    ne voit jamais que son propre nœud — toute valeur `node` reçue dans la
+    requête est IGNORÉE, jamais une fuite ; un HQ doit préciser `node`
+    explicitement.
+
+    Règles selon `date` :
+      - Omise, ou égale à aujourd'hui → `source: "live"` — catégories =
+        `BreadStock.qty_available` COURANT pour ce nœud, un enregistrement
+        par catégorie déjà suivie (mêmes lignes que `BreadStockViewSet`
+        filtré sur ce nœud). Comportement RIGOUREUSEMENT identique à
+        l'existant pour ce cas (non-régression explicite demandée par le
+        ticket) : aucune catégorie ajoutée ou retirée par rapport à ce que
+        `BreadStockViewSet` renvoie déjà pour ce nœud.
+      - Strictement dans le passé → `source: "snapshot"` — catégories
+        reconstituées à partir de `DailyBreadStockSnapshot` (BUG-118/120/135,
+        déjà vérifié) : pour chaque catégorie ayant au moins une ligne
+        (node, bread_price, date) côté équipe A OU B, `qty_available` = somme
+        de `qty_at_close` sur les deux équipes — une équipe SANS ligne ce
+        jour-là compte pour 0 (convention déjà documentée sur
+        `DailyBreadStockSnapshot`, pas une absence de valeur). Une catégorie
+        sans AUCUNE ligne ce jour-là (ni A ni B n'ont clôturé) est absente de
+        la réponse — même convention que le cas « live », qui ne renvoie que
+        les catégories ayant une ligne `BreadStock` effective pour ce nœud.
+      - Dans le futur → 400, `{"detail": "..."}` en français. Volontairement
+        SANS passer par `core.utils.validate_requested_date` : cet utilitaire
+        conditionne aussi le refus d'une date PASSÉE à
+        `Config.allow_backdated_sales`, une règle d'ÉCRITURE (BUG-083) sans
+        rapport avec la simple LECTURE d'un historique déjà enregistré — un
+        gérant doit pouvoir consulter n'importe quel jour passé que la saisie
+        de ventes passées soit activée ou non. Seul le refus du futur
+        (universel, même esprit que BUG-128/`CalendarPicker.tsx`) est repris
+        ici.
+
+    Contrat de réponse, volontairement identique dans les deux cas pour que
+    le frontend ait un seul format à consommer :
+        {
+          "node": <pk>, "node_display": "<code> — <nom>",
+          "date": "AAAA-MM-JJ", "source": "live" | "snapshot",
+          "categories": [
+            {"bread_price": <pk>, "bread_price_display": "<label>",
+             "unit_price": <int>, "qty_available": <int>},
+            ...
+          ]
+        }
+    Contrat détaillé (mise à jour, exemples complets) :
+    `docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md`.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.utils.dateparse import parse_date
+
+        user = request.user
+        node_param = request.query_params.get('node')
+        if not user.can_access_all_nodes:
+            if not user.node_id:
+                return Response(
+                    {'detail': "Compte non assigné à une boulangerie."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            node = user.node
+        else:
+            if not node_param:
+                return Response(
+                    {'detail': "Le paramètre `node` (code ou identifiant) est requis."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            node = _resolve_node(node_param)
+            if node is None:
+                return Response(
+                    {'detail': f"Boulangerie « {node_param} » introuvable."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        today = timezone.localdate()
+        date_str = request.query_params.get('date')
+        if date_str:
+            requested_date = parse_date(date_str)
+            if requested_date is None:
+                return Response(
+                    {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            requested_date = today
+
+        if requested_date > today:
+            return Response(
+                {
+                    'detail': (
+                        f"La date demandée ({requested_date}) ne peut pas être "
+                        f"dans le futur (aujourd'hui : {today})."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if requested_date == today:
+            source = 'live'
+            categories = [
+                {
+                    'bread_price': bs.bread_price_id,
+                    'bread_price_display': str(bs.bread_price),
+                    'unit_price': bs.bread_price.unit_price,
+                    'qty_available': bs.qty_available,
+                }
+                for bs in (
+                    BreadStock.objects
+                    .select_related('bread_price')
+                    .filter(node=node)
+                    .order_by('bread_price__unit_price')
+                )
+            ]
+        else:
+            source = 'snapshot'
+            totals, bp_by_id = {}, {}
+            snapshots = (
+                DailyBreadStockSnapshot.objects
+                .select_related('bread_price')
+                .filter(node=node, date=requested_date)
+            )
+            for snap in snapshots:
+                totals[snap.bread_price_id] = totals.get(snap.bread_price_id, 0) + snap.qty_at_close
+                bp_by_id[snap.bread_price_id] = snap.bread_price
+            categories = [
+                {
+                    'bread_price': bp_id,
+                    'bread_price_display': str(bp_by_id[bp_id]),
+                    'unit_price': bp_by_id[bp_id].unit_price,
+                    'qty_available': totals[bp_id],
+                }
+                for bp_id in sorted(bp_by_id, key=lambda i: bp_by_id[i].unit_price)
+            ]
+
+        return Response({
+            'node': node.pk,
+            'node_display': str(node),
+            'date': requested_date.isoformat(),
+            'source': source,
+            'categories': categories,
+        })
+
+
 class BreadDisposalViewSet(viewsets.ModelViewSet):
     queryset = BreadDisposal.objects.select_related('node', 'session', 'bread_price').all()
     serializer_class = BreadDisposalSerializer
@@ -996,8 +1244,17 @@ def _build_daily_closure_report(node, report_date):
     ecart_production_fc = sessions_qs.aggregate(t=Sum('yield_gap'))['t'] or 0
     total_breads_produced = sessions_qs.aggregate(t=Sum('total_breads'))['t'] or 0
 
+    # BUG-142 : exclut les lignes CARRYOVER (reste d'hier confirmé,
+    # BUG-133/136) — ce rapport (« produit » par catégorie, déjà vérifié
+    # formule à formule contre les Excel réels, BUG-120) ne doit afficher
+    # que la vraie production (lignes DECLARED), jamais le reste d'hier
+    # (qui est déjà représenté séparément via `reste_du_hier`/`reste_du_jour`
+    # ci-dessous) — sous peine de faire apparaître deux fois la même
+    # quantité sous deux rubriques différentes du même rapport.
     produced_by_bp = dict(
-        ProductionSessionLine.objects.filter(session__in=sessions_qs)
+        ProductionSessionLine.objects.filter(
+            session__in=sessions_qs, source=ProductionSessionLine.Source.DECLARED,
+        )
         .values('bread_price_id').annotate(qty=Sum('quantity'))
         .values_list('bread_price_id', 'qty')
     )
@@ -1392,6 +1649,74 @@ def _opening_confirmation_resolve_node(request, node_param):
     return node, None
 
 
+def _sync_carryover_session_lines(node, team, date, user, parsed_lines, sac_value_fc):
+    """
+    BUG-142 (remarque.md) : la confirmation du stock de départ (BUG-133/136)
+    doit créer OU compléter la `ProductionSession` du jour pour (node, team,
+    date) avec des lignes `CARRYOVER` miroir de CETTE confirmation — pour
+    qu'elle apparaisse comme une fournée de l'équipe dans « Production &
+    Stocks ». Remplacement COMPLET des lignes CARRYOVER à chaque appel (la
+    confirmation elle-même est idempotente/remplace intégralement ses
+    propres lignes, BUG-136) — PAS additif, contrairement aux lignes
+    DECLARED d'une vraie fournée (`ProductionSessionViewSet.perform_create`,
+    cas A du même ticket), qui ne sont jamais touchées ici.
+
+    Les lignes CARRYOVER ne déclenchent JAMAIS `_adjust_bread_stock` : le
+    stock physique est déjà synchronisé une fois par l'appelant (BUG-136,
+    `BreadStock.qty_adjusted`) — un appel supplémentaire ici compterait le
+    stock en double.
+
+    `sac_value_fc` n'est utilisé que si une NOUVELLE session est créée ici
+    (aucune session DECLARED ou CARRYOVER préexistante ce jour pour cette
+    équipe) — pour que la valeur du sac figée (BUG-038) soit la valeur
+    effective de la boulangerie au moment de cette toute première ligne du
+    jour, et non une valeur par défaut arbitraire, si une VRAIE fournée est
+    déclarée plus tard dans la même session.
+
+    Renvoie `(session, None)` ou `(None, Response(...))` si la session du
+    jour est déjà clôturée (BUG-093) — ne contourne jamais une clôture.
+    """
+    session = ProductionSession.objects.select_for_update().filter(
+        node=node, team=team, date=date,
+    ).first()
+    if session is not None and session.is_closed:
+        return None, Response(
+            {
+                'detail': (
+                    f"Session de production clôturée pour l'Équipe {team} le {date} "
+                    f"à la boulangerie {node.code} — confirmation du stock de départ impossible."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if session is None:
+        session = ProductionSession.objects.create(
+            node=node, team=team, date=date,
+            declared_by=user, node_origin=node.code,
+            sac_value_fc_used=sac_value_fc,
+        )
+
+    submitted_bp_ids = {bp_id for bp_id, qty in parsed_lines if qty > 0}
+    session.lines.filter(
+        source=ProductionSessionLine.Source.CARRYOVER,
+    ).exclude(bread_price_id__in=submitted_bp_ids).delete()
+    for bread_price_id, qty in parsed_lines:
+        if qty <= 0:
+            continue
+        ProductionSessionLine.objects.update_or_create(
+            session=session, bread_price_id=bread_price_id,
+            source=ProductionSessionLine.Source.CARRYOVER,
+            defaults={'quantity': qty},
+        )
+
+    # BUG-038 : ne jamais relire _effective_sac_value() si la session
+    # existait déjà — réutilise la valeur déjà figée (vraie fournée
+    # déclarée avant, ou précédent appel de cette même fonction).
+    session.compute_totals(session.sac_value_fc_used)
+    session.save(update_fields=_SESSION_COMPUTED_FIELDS)
+    return session, None
+
+
 class DailyOpeningConfirmationView(APIView):
     """
     BUG-133 (docs/qa/REGISTRE_BUGS.md) : boîte modale « stock de départ » —
@@ -1662,8 +1987,20 @@ class DailyOpeningConfirmationView(APIView):
         # `BreadStock` (pas par rapport à l'ancienne valeur confirmée
         # mémorisée) : une resoumission/correction le même jour n'applique
         # donc jamais l'ajustement deux fois cumulativement (idempotence).
+        # BUG-142 (remarque.md) : la confirmation du stock de départ doit
+        # créer/compléter la fournée du jour (lignes CARRYOVER) pour cette
+        # équipe — refuse si cette session est déjà clôturée (BUG-093), sans
+        # jamais contourner la clôture.
+        config = Config.get_instance()
         stock_adjustments = []
         with transaction.atomic():
+            carryover_session, carryover_err = _sync_carryover_session_lines(
+                node, team, confirmation_date, request.user, parsed_lines,
+                _effective_sac_value(node, config),
+            )
+            if carryover_err is not None:
+                return carryover_err
+
             confirmation, _created = DailyOpeningConfirmation.objects.update_or_create(
                 node=node, team=team, date=confirmation_date,
                 defaults={'confirmed_by': request.user},
@@ -1697,6 +2034,12 @@ class DailyOpeningConfirmationView(APIView):
             request.user, "Confirmation Stock de Départ",
             f"{node.code} Éq.{team} {confirmation_date} : stock de départ confirmé "
             f"({len(parsed_lines)} catégorie(s)).",
+            node_origin=node.code,
+        )
+        log_activity(
+            request.user, "Fournée Reste d'Hier (Confirmation)",
+            f"{node.code} Éq.{team} {confirmation_date} : fournée du jour alimentée avec le "
+            f"reste d'hier confirmé ({len(parsed_lines)} catégorie(s), session #{carryover_session.pk}, BUG-142).",
             node_origin=node.code,
         )
         for adj in stock_adjustments:

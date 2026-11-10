@@ -82,17 +82,37 @@ class ProductionSession(SyncableModel):
         que de retomber sur une valeur par défaut arbitraire — l'historique
         d'une fournée ne doit jamais être recalculé avec une valeur de sac
         différente de celle en vigueur au moment de sa déclaration.
+
+        BUG-142 (remarque.md — confirmation du stock de départ alimente la
+        fournée du jour) : les pains issus d'un reste d'hier confirmé
+        (`ProductionSessionLine.source == CARRYOVER`, BUG-133/136) ne
+        consomment aucune farine (ce n'est pas une nouvelle production) et
+        doivent donc être EXCLUS du calcul de rendement — `total_fc_produced`
+        (et donc `yield_gap`/l'alerte « Manquant de Rendement ») ne somme
+        QUE les lignes `source == DECLARED` (vraie fournée). `total_breads`
+        et les champs legacy `breads_300/400/500/1000` restent, eux,
+        calculés sur TOUTES les lignes (DECLARED + CARRYOVER) : c'est le
+        total réel de pains disponibles ce jour pour cette équipe qu'on
+        affiche dans « Production & Stocks », pas seulement la part
+        produite.
         """
         if sac_value_fc is not None:
             self.sac_value_fc_used = sac_value_fc
-        lines = self.lines.select_related('bread_price').all()
-        total_fc = sum(line.quantity * line.bread_price.unit_price for line in lines)
+        lines = list(self.lines.select_related('bread_price').all())
+        declared_lines = [l for l in lines if l.source == ProductionSessionLine.Source.DECLARED]
+        total_fc = sum(line.quantity * line.bread_price.unit_price for line in declared_lines)
         self.total_breads      = sum(line.quantity for line in lines)
         self.total_fc_produced = total_fc
         self.theoretical_yield = int(float(self.flour_sacks_used) * self.sac_value_fc_used)
         self.yield_gap         = total_fc - self.theoretical_yield
-        # sync legacy per-price fields (best-effort, by unit_price)
-        price_map = {line.bread_price.unit_price: line.quantity for line in lines}
+        # sync legacy per-price fields (best-effort, by unit_price) — sommées
+        # sur TOUTES les lignes (DECLARED + CARRYOVER), jamais écrasées entre
+        # elles si deux lignes de sources différentes partagent le même
+        # unit_price (BUG-142 : auparavant écrasement silencieux, inoffensif
+        # tant qu'une seule ligne existait par bread_price/unit_price).
+        price_map = {}
+        for line in lines:
+            price_map[line.bread_price.unit_price] = price_map.get(line.bread_price.unit_price, 0) + line.quantity
         self.breads_300  = price_map.get(300, 0)
         self.breads_400  = price_map.get(400, 0)
         self.breads_500  = price_map.get(500, 0)
@@ -104,15 +124,33 @@ class ProductionSessionLine(models.Model):
     One bread type produced during a session.
     Replaces the hardcoded breads_300/400/500/1000 fields with a flexible
     FK to BreadPrice, supporting any price tier defined in the admin.
+
+    BUG-142 (remarque.md) : `source` distingue une ligne de VRAIE déclaration
+    de fournée (`DECLARED`, défaut — consomme de la farine, compte dans le
+    rendement, `ProductionSession.compute_totals()`) d'une ligne issue de la
+    confirmation du stock de départ (`CARRYOVER` — reste d'hier, BUG-133/136,
+    aucune farine consommée, exclue du calcul de rendement). Les deux
+    sources peuvent coexister pour le même `(session, bread_price)` — d'où
+    `unique_together` élargi à `source` plutôt que seulement
+    `[session, bread_price]`.
     """
+
+    class Source(models.TextChoices):
+        DECLARED  = 'DECLARED',  _("Déclarée (vraie fournée)")
+        CARRYOVER = 'CARRYOVER', _("Reste d'hier confirmé (BUG-133/136)")
+
     session     = models.ForeignKey(ProductionSession, on_delete=models.CASCADE, related_name='lines', verbose_name=_("Session"))
     bread_price = models.ForeignKey(BreadPrice, on_delete=models.PROTECT, verbose_name=_("Catégorie Pain"))
     quantity    = models.PositiveIntegerField(verbose_name=_("Quantité produite"))
+    source      = models.CharField(
+        max_length=10, choices=Source.choices, default=Source.DECLARED,
+        verbose_name=_("Origine"),
+    )
 
     class Meta:
         verbose_name = _("Ligne de Production")
         verbose_name_plural = _("Lignes de Production")
-        unique_together = [['session', 'bread_price']]
+        unique_together = [['session', 'bread_price', 'source']]
         ordering = ['bread_price__unit_price']
 
     def __str__(self):
@@ -524,7 +562,6 @@ class ConsumableMovement(SyncableModel):
 
     def save(self, *args, **kwargs):
         from decimal import Decimal
-        from django.core.exceptions import ValidationError
         from django.db import transaction
 
         # self.quantity peut arriver comme str/float/int si l'appelant ne
@@ -536,18 +573,22 @@ class ConsumableMovement(SyncableModel):
         is_new = self._state.adding
 
         if is_new and self.movement_type == self.MovementType.EXIT:
-            # BUG-041 : une sortie ne doit jamais faire passer le stock en
-            # négatif silencieusement — on refuse l'opération (cohérence
-            # comptable, CLAUDE.md §5.4), contrairement au stock de pains qui
-            # lui est volontairement autorisé en négatif (choix produit
-            # différent, remarque.md l.196).
+            # BUG-143 (demande client directe, 2026-11-10, prioritaire sur
+            # tout document de référence antérieur — CLAUDE.md §1) : ANNULE
+            # le refus posé par BUG-041. Une sortie de consommable ne doit
+            # plus JAMAIS bloquer l'enregistrement d'une fournée, même si le
+            # stock disponible est nul ou insuffisant (cas réel constaté :
+            # base réinitialisée, aucun stock de consommable encore saisi) —
+            # le stock est désormais autorisé à devenir négatif, exactement
+            # comme `BreadStock.qty_available` l'est déjà (choix produit
+            # différent documenté par remarque.md l.196). On ne refuse plus
+            # rien ici ; on se contente de signaler le passage en négatif par
+            # une notification (même pattern que le manquant de rendement
+            # `yield_gap < 0` dans `production/views.py::perform_create`),
+            # sans bloquer quoi que ce soit.
             with transaction.atomic():
                 stock = type(self.stock).objects.select_for_update().get(pk=self.stock_id)
-                if stock.quantity < self.quantity:
-                    raise ValidationError(
-                        f"Stock insuffisant pour cette sortie de {self.stock.consumable_type} : "
-                        f"disponible {stock.quantity}, demandé {self.quantity}."
-                    )
+                resulting_quantity = stock.quantity - self.quantity
                 # BUG-123 (Q-005) : une sortie n'a pas de « prix d'achat » qui
                 # lui soit propre — elle est valorisée au Coût Unitaire Moyen
                 # Pondéré (CUMP) du stock au moment de la sortie, comme
@@ -558,6 +599,18 @@ class ConsumableMovement(SyncableModel):
                 super().save(*args, **kwargs)
                 stock.quantity = models.F('quantity') - self.quantity
                 stock.save(update_fields=['quantity'])
+                if resulting_quantity < 0:
+                    from core.utils import create_notification
+                    create_notification(
+                        title=f"Stock négatif — {self.stock.consumable_type} {self.node.code}",
+                        message=(
+                            f"Sortie de {self.quantity} {self.stock.consumable_type} à "
+                            f"{self.node.code} alors que {stock.quantity} seulement "
+                            f"étai(en)t disponible(s) : stock désormais à {resulting_quantity} "
+                            f"(BUG-143, sortie autorisée en négatif sur demande client)."
+                        ),
+                        severity='WARNING', node_origin=self.node.code,
+                    )
             return
 
         if is_new and self.movement_type == self.MovementType.ENTRY:

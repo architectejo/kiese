@@ -7,10 +7,15 @@ class ProductionSessionLineSerializer(serializers.ModelSerializer):
     bread_price_display = serializers.StringRelatedField(source='bread_price', read_only=True)
     unit_price = serializers.IntegerField(source='bread_price.unit_price', read_only=True)
     line_fc = serializers.IntegerField(read_only=True)
+    # BUG-142 : exposé en lecture seule — distingue une ligne de vraie
+    # déclaration de fournée (DECLARED) d'une ligne issue de la confirmation
+    # du stock de départ (CARRYOVER, BUG-133/136). Champ additif, non cassant
+    # pour le frontend existant (ignoré tel quel s'il n'est pas consommé).
+    source = serializers.CharField(read_only=True)
 
     class Meta:
         model = ProductionSessionLine
-        fields = ['bread_price', 'bread_price_display', 'unit_price', 'quantity', 'line_fc']
+        fields = ['bread_price', 'bread_price_display', 'unit_price', 'quantity', 'line_fc', 'source']
 
 
 class ProductionSessionSerializer(serializers.ModelSerializer):
@@ -49,17 +54,12 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
         return obj.declared_by.get_full_name() if obj.declared_by else None
 
     def validate(self, attrs):
-        node = attrs.get('node')
-        team = attrs.get('team')
-        date = attrs.get('date')
-        if node and team and date:
-            qs = ProductionSession.objects.filter(node=node, team=team, date=date)
-            if self.instance:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                raise serializers.ValidationError(
-                    "Une session existe déjà pour cette boulangerie, cette équipe et cette date."
-                )
+        # BUG-142 (remarque.md) : une session existante pour (node, team,
+        # date) n'est plus un rejet — `ProductionSessionViewSet.
+        # perform_create()` l'ADDITIONNE désormais à la session du jour
+        # existante (sauf si elle est déjà clôturée, cas traité là-bas avec
+        # le bon message d'erreur). Ne plus bloquer ici, sous peine
+        # d'empêcher perform_create() de même voir le payload.
         return attrs
 
     def create(self, validated_data):
@@ -67,17 +67,26 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
         session = ProductionSession.objects.create(**validated_data)
         for line in lines_data:
             if line.get('quantity', 0) > 0:
-                ProductionSessionLine.objects.create(session=session, **line)
+                ProductionSessionLine.objects.create(
+                    session=session, source=ProductionSessionLine.Source.DECLARED, **line,
+                )
         return session
 
     def update(self, instance, validated_data):
         lines_data = validated_data.pop('lines', None)
         instance = super().update(instance, validated_data)
         if lines_data is not None:
-            instance.lines.all().delete()
+            # BUG-142 : ne remplace que les lignes DECLARED (vraie fournée
+            # éditée) — ne jamais effacer les lignes CARRYOVER (reste d'hier
+            # confirmé, BUG-133/136) qui peuvent coexister sur la même
+            # session, sous peine de perdre silencieusement cette donnée à
+            # la moindre édition d'une fournée le même jour.
+            instance.lines.filter(source=ProductionSessionLine.Source.DECLARED).delete()
             for line in lines_data:
                 if line.get('quantity', 0) > 0:
-                    ProductionSessionLine.objects.create(session=instance, **line)
+                    ProductionSessionLine.objects.create(
+                        session=instance, source=ProductionSessionLine.Source.DECLARED, **line,
+                    )
         return instance
 
 

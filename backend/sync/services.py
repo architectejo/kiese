@@ -523,7 +523,13 @@ def _push_production_session_line(node, record):
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
-    kwargs = dict(session=session, bread_price=bread_price, quantity=record.get('quantity', 0))
+    # BUG-142 : propage `source` (DECLARED/CARRYOVER) si le nœud source l'a
+    # envoyé ; sinon le défaut du modèle (DECLARED) s'applique — compatible
+    # avec un nœud distant pas encore mis à jour (champ absent du payload).
+    kwargs = dict(
+        session=session, bread_price=bread_price, quantity=record.get('quantity', 0),
+        source=record.get('source', 'DECLARED'),
+    )
     if record_id:
         kwargs['id'] = record_id
     try:
@@ -626,14 +632,23 @@ def _push_consumable_movement(node, record):
     try:
         movement.save(_sync_bypass=True)
     except ValidationError as exc:
-        # BUG-041 : une sortie ne fait jamais passer le stock consolidé
-        # Cloud en négatif. Si l'ENTRÉE correspondante n'est pas encore
-        # synchronisée (ou arrive dans un lot ultérieur), on NE DEVINE
-        # jamais : on rejette comme une dépendance manquante classique
-        # (SYNC.md §3.4) — retenté automatiquement au prochain cycle, une
-        # fois le stock reconstitué par les mouvements encore en attente.
+        # BUG-143 (annule BUG-041, demande client directe 2026-11-10) :
+        # `ConsumableMovement.save()` n'empêche plus une sortie de faire
+        # passer le stock consolidé Cloud en négatif — ce `except` n'est
+        # donc plus déclenché pour ce motif précis. Conservé par prudence
+        # pour toute AUTRE `ValidationError` du modèle. Conséquence notée
+        # pour `architecte-sync`/`auditeur-comptable` (pas tranchée ici,
+        # hors périmètre de ce ticket) : une sortie (EXIT) qui arrive avant
+        # son entrée (ENTRY) correspondante est maintenant ACCEPTÉE tout de
+        # suite plutôt que retentée au cycle suivant, valorisée au CUMP
+        # courant du stock consolidé (0 si la ligne vient d'être créée
+        # paresseusement) — risque de valorisation provisoirement incorrecte
+        # sur `finance.views` (BUG-123/COGS) tant que l'ordre réel des
+        # mouvements n'est pas rejoué. Non traité ici : décision
+        # d'architecture de synchronisation distincte de la demande client
+        # sur l'enregistrement local d'une fournée.
         reason = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
-        return _record_result(record_id, False, f"dépendance manquante (stock insuffisant) : {reason}")
+        return _record_result(record_id, False, f"dépendance manquante : {reason}")
     return _record_result(record_id, True)
 
 

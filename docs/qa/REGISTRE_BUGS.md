@@ -151,6 +151,13 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-139 | Vérification BUG-133/134/135/136 (testeur-production) : remarque.md l.398 dit explicitement que la confirmation du stock de départ se fait « **une fois le matin, [pas] pour l'équipe A ou B, juste une fois au créneau d'ouverture (premier créneau)** » — l'implémentation livrée (BUG-133/134) exige au contraire une confirmation EXPLICITE et DISTINCTE par équipe (A **et** B). Tranché directement par le client avec le coordinateur le 2026-11-09 (ligne remarque.md l.398 ajoutée par le client lui-même) : une seule confirmation (équipe du créneau d'ouverture) suffit | Production | backend/frontend | Majeur | VÉRIFIÉ | testeur-production (vérification BUG-133/134/135/136), 2026-11-09 | dev-backend, 2026-11-09 (backend) ; dev-frontend, 2026-11-09 (BUG-140, frontend) | testeur-production (vérification finale du lot), 2026-11-09 |
 | BUG-140 | Sous-ticket frontend ouvert par dev-backend en corrigeant BUG-138/139 : `DashboardLayout.tsx` ne monte `OpeningStockConfirmationModal` que pour `user.role === 'GERANT'` (doit inclure FACTURIER, BUG-138) et la logique d'affichage de la boîte modale doit utiliser **uniquement** le nouveau champ `needs_confirmation` de `GET /api/production/opening-confirmation/` (plus `!teams.A.confirmed \|\| !teams.B.confirmed`, BUG-139) | Production | frontend | Majeur | VÉRIFIÉ | dev-backend (sous-ticket, en corrigeant BUG-138/139), 2026-11-09 | dev-frontend, 2026-11-09 | testeur-production (vérification finale du lot), 2026-11-09 |
 | BUG-141 | `opening_team` (BUG-139/140) était calculé via `Node.active_team_at()` (« qui travaille EN CE MOMENT ? ») au lieu du premier créneau structurel de la journée — testé en direct par le client à 21h (hors des deux créneaux K1), la boîte modale ne présélectionnait plus aucune équipe alors que le premier créneau (toujours A pour K1) ne dépend pas de l'heure de connexion | Production | backend | Majeur | VÉRIFIÉ | client (test en direct), 2026-11-09 | dev-backend, 2026-11-09 | testeur-production, 2026-11-09 |
+| BUG-142 | remarque.md (ligne ajoutée par le client juste après l.394) : « Lors de la confirmation de reste des pains, une fournée doit être créée pour l'équipe en question dans "Production & Stocks" [...] et lors de la déclaration de fournée [...] les nombres des pains déclarés doit s'ajouter à la fournée selon l'équipe, en cas de plusieurs déclarations dans la journée on ne crée pas plusieurs fournées mais on ajoute à la fournée existante » — ni la confirmation du stock de départ (BUG-133/136) ni les déclarations répétées de fournée (`ProductionSessionViewSet`) n'avaient ce comportement (2e déclaration le même jour/équipe = 400 par `unique_together` ; confirmation n'alimentait jamais `ProductionSession`) | Production | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-143 | Demande client directe (test en direct, base fraîchement réinitialisée le matin même, aucun stock de consommable encore saisi) : NE PAS empêcher l'enregistrement d'une fournée à cause de « Stock insuffisant pour cette sortie de FLOUR : disponible 0.000, demandé ... » — **ANNULE explicitement BUG-041** (qui refusait toute sortie de consommable dépassant le stock disponible), sur instruction client prioritaire sur tout document de référence antérieur (CLAUDE.md §1) | Production | backend | Majeur | VÉRIFIÉ | client (test en direct), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-146 | Sync Cloud : une sortie (EXIT) de consommable arrivant avant son entrée (ENTRY) correspondante est valorisée au CUMP courant (souvent 0 sur une ligne `ConsumableStock` Cloud créée paresseusement) — le `ConsumableMovement.unit_price` déjà écrit pour cette sortie ne se corrige JAMAIS rétroactivement une fois l'entrée réellement synchronisée, alors que `finance/views.py` (COGS, BUG-123) agrège directement `ConsumableMovement.unit_price × quantity` des EXIT par année | Sync / Finance | sync | Majeur | OUVERT | testeur-production, 2026-11-10 (en examinant la conséquence de BUG-143 sur `sync/services.py::_push_consumable_movement`, signalée par dev-backend) | — | — |
+| BUG-147 | Si aucune ligne `ConsumableStock` n'existe du tout pour un (nœud, consommable) au moment d'une déclaration de fournée (ligne jamais auto-créée — elle ne l'est que par une visite de la page « Stocks Consommables », `ConsumableStockViewSet._ensure_stock_accounts()` —, ni approvisionnée), `_record_consumable_exits` (`production/views.py`) fait un `.filter(...).first()` qui renvoie `None` et `continue` silencieusement : la fournée est enregistrée (201) mais la consommation de farine/consommable n'est ni tracée (aucun `ConsumableMovement`), ni stockée (aucune `ConsumableStock` créée), ni signalée (aucune notification) — comportement préexistant à BUG-143 (déjà vrai avec BUG-041, car ce chemin n'était jamais atteint), donc pas une régression de BUG-143, mais distinct et plus grave : une perte silencieuse et totale de traçabilité, pas juste un stock négatif | Production | backend | Majeur | OUVERT | testeur-production, 2026-11-10 (scénario construit indépendamment lors de la vérification de BUG-143) | — | — |
+| BUG-144 | remarque.md (ligne ajoutée après l.396) : « Au niveau de "Production & Stocks" pour les sections "Stock Pains Actuel" et "Historique des Fournées" on doit pouvoir sélectionner un jour et voir les résultats du jour [...] » — volet backend uniquement : `BreadStockViewSet` ne renvoie que le solde COURANT cumulatif, aucun moyen d'interroger le stock de pains d'un jour PASSÉ | Production | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-145 | remarque.md (même ligne que BUG-144, l.397) — volet frontend : `Production.tsx` n'offrait aucun sélecteur de date pour « Stock Pains Actuel » (toujours le solde courant, libellé trompeur) ni pour « Historique des Fournées » (toujours les 15 fournées les plus récentes toutes dates confondues) | Production | frontend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-148 | `e2e/tests/05-production.spec.ts` (test existant, 1er scénario) échoue de façon reproductible : la boîte modale « Stock de départ du jour » (`OpeningStockConfirmationModal.tsx`, BUG-133/134) peut rester ouverte ou se rouvrir avec un délai (après résolution asynchrone de `GET /api/production/opening-confirmation/`) et son `.modal-backdrop` intercepte alors le clic sur « Enregistrer la Fournée », faisant échouer le test avec un timeout — sans rapport avec BUG-144/145 | Production | frontend (test E2E) | Mineur | OUVERT | testeur-production, 2026-11-10 (découvert en vérifiant BUG-144/145, en relançant la suite E2E officielle du module) | — | — |
 
 ## Fiches détaillées
 
@@ -13104,4 +13111,732 @@ compte, pas tranché unilatéralement.
   éviter un faux-positif lié à une valeur d'heure particulière.
 - `backend/.venv/Scripts/python.exe manage.py test production sales finance` : **212 tests, OK**
   (210 existants + mes 2 nouveaux tests indépendants), aucune régression.
-- Résultat : **VÉRIFIÉ**
+
+### BUG-142 — [backend] Confirmation du stock de départ doit alimenter la fournée du jour ; plusieurs déclarations le même jour/équipe doivent s'additionner
+
+- Module : Production
+- Composant : backend
+- Gravité : Majeur
+- Statut : CORRIGÉ (dev-backend, 2026-11-10 — ne pas passer à VÉRIFIÉ soi-même, CLAUDE.md §7 règle 3)
+- Ouvert par : client (remarque.md, ligne ajoutée juste après l.394), relayé par le coordinateur,
+  2026-11-10.
+- Référence métier : remarque.md (nouvelle ligne, l.394+) : « Lors de la confirmation de reste des
+  pains, une fournée doit être créée pour l'équipe en question dans "Production & Stocks" pour
+  l'équipe choisie et lors de la déclaration de fournée dans "Production & Stocks" les nombres des
+  pains déclarés doit s'ajouter à la fournée selon l'équipe, en cas de plusieurs déclarations dans
+  la journée on ne crée pas plusieurs fournées mais on ajoute à la fournée existante de la journée
+  selon l'équipe. » Deux volets liés par le même modèle de données, traités dans un seul ticket (vu
+  leur dépendance directe) :
+  - A) Accumulation des déclarations de fournée (`ProductionSessionViewSet`, pas de doublon par
+    jour/équipe).
+  - B) La confirmation du stock de départ (BUG-133/136) doit créer/alimenter la fournée du jour.
+- Contrainte financière CRITIQUE tranchée directement par le client avec le coordinateur (pas
+  redemandée, CLAUDE.md §7 règle 6) : les pains issus d'un reste d'hier confirmé (aucune farine
+  consommée, ce n'est pas une nouvelle production) doivent être exclus du calcul de rendement
+  (`theoretical_yield`/`yield_gap`/l'alerte « Manquant de Rendement »), et ne jamais provoquer un
+  double comptage sur `BreadStock.qty_available` (déjà ajusté une fois par BUG-136).
+- Contexte / cause confirmée :
+  - A) `ProductionSession.Meta.unique_together = [['node', 'team', 'date']]` et
+    `ProductionSessionSerializer.validate()` rejetaient (400, « Une session existe déjà... ») toute
+    2e déclaration le même jour pour la même équipe, au lieu de l'additionner à la session
+    existante.
+  - B) `DailyOpeningConfirmationView.post()` (BUG-133/136) ne créait/ne modifiait jamais de
+    `ProductionSession` — la confirmation ne synchronisait que `BreadStock.qty_available`
+    (`qty_adjusted`), sans jamais apparaître comme une fournée dans « Production & Stocks ».
+- Reproduction : `backend/production/tests/test_bug142_fournee_carryover_accumulation.py` (nouveau
+  fichier, créé directement avec les tests — pas de `@expectedFailure` préexistant puisque le
+  comportement n'existait pas du tout avant ce ticket) :
+  - `FourneeAccumulationSameDayTeamTests::test_second_declaration_same_day_team_adds_instead_of_rejecting`
+    échouait avant (400 au lieu de 201) — après correctif : 201, une seule `ProductionSession`,
+    ligne DECLARED incrémentée (150 au lieu de 100+50 séparés), `flour_sacks_used` additionné (2.00).
+  - `OpeningConfirmationFeedsProductionSessionTests::test_confirmation_alone_creates_a_production_session_with_carryover_line`
+    échouait avant (aucune `ProductionSession` créée) — après correctif : une session existe, avec
+    une ligne `source=CARRYOVER`.
+- Fichiers modifiés :
+  - `backend/production/models.py` :
+    - `ProductionSessionLine` : nouveau champ `source` (`CharField`, choix `DECLARED` (défaut) /
+      `CARRYOVER`), et `unique_together` élargi à `['session', 'bread_price', 'source']` (au lieu de
+      `['session', 'bread_price']`) — une catégorie de pain peut désormais avoir deux lignes
+      distinctes sur la même session (une vraie déclaration ET un reste d'hier confirmé).
+    - `ProductionSession.compute_totals()` : `total_fc_produced` (et donc `theoretical_yield`/
+      `yield_gap`) ne somme plus QUE les lignes `source=DECLARED` (exclusion du rendement pour le
+      reste d'hier, tranché avec le client). `total_breads` et les champs legacy
+      `breads_300/400/500/1000` restent calculés sur TOUTES les lignes (DECLARED + CARRYOVER) — total
+      réel de pains disponibles ce jour. Le `price_map` legacy est désormais additionné par
+      `unit_price` (plutôt qu'écrasé) pour ne jamais perdre une ligne CARRYOVER qui partagerait le
+      même `unit_price` qu'une ligne DECLARED du même bread_price.
+  - `backend/production/migrations/0021_bug142_production_line_source.py` (nouvelle migration,
+    générée par `makemigrations`) : ajoute `source` avec `default='DECLARED'` (rétro-compatibilité
+    totale — aucune ligne historique ne change de sens) et met à jour `unique_together`. Aucune
+    migration déjà appliquée n'a été modifiée.
+  - `backend/production/serializers.py` (`ProductionSessionLineSerializer`,
+    `ProductionSessionSerializer`) :
+    - Nouveau champ `source` exposé en lecture seule sur `ProductionSessionLineSerializer` (additif,
+      non cassant).
+    - `ProductionSessionSerializer.validate()` ne bloque plus la soumission quand une session
+      (node, team, date) existe déjà — c'est désormais `ProductionSessionViewSet.perform_create()`
+      qui décide (ajout si ouverte, rejet explicite si clôturée).
+    - `create()` tague systématiquement les nouvelles lignes `source=DECLARED`.
+    - `update()` ne remplace que les lignes `DECLARED` d'une session (édition d'une fournée déjà
+      déclarée) — ne touche jamais les lignes `CARRYOVER` existantes, pour ne pas les effacer
+      silencieusement si un gérant édite la fournée le même jour qu'une confirmation.
+  - `backend/production/views.py` :
+    - `ProductionSessionViewSet.perform_create()` réécrite (cas A) : verrouille
+      (`select_for_update()`) la session existante pour (node, team, date) le cas échéant ; si elle
+      est déjà clôturée, refuse (même message qu'avant, 400) ; sinon incrémente les lignes `DECLARED`
+      existantes (`F('quantity') + qty`) ou en crée de nouvelles, additionne `flour_sacks_used`, et
+      ne réécrit JAMAIS `sac_value_fc_used` (BUG-038, valeur figée à la toute première déclaration du
+      jour pour ce node/team — y compris si cette première ligne provient d'une session déjà créée
+      par la confirmation du stock de départ, cas B). Si aucune session n'existe, comportement
+      inchangé (création, `sac_value_fc_used` = valeur effective du nœud).
+    - `ProductionSessionViewSet.perform_update()` : le snapshot « avant » et la boucle de
+      réajustement `BreadStock` (reprise/réapplication) ne portent plus que sur les lignes
+      `DECLARED` — les lignes `CARRYOVER` ne sont jamais réajustées ici (déjà géré une fois par
+      BUG-136, double comptage sinon).
+    - Nouvelle fonction `_sync_carryover_session_lines(node, team, date, user, parsed_lines,
+      sac_value_fc)` (cas B) : verrouille la session du jour (`select_for_update()`), refuse si elle
+      est déjà clôturée (même esprit que le cas A), la crée si elle n'existe pas (avec
+      `sac_value_fc_used` = valeur effective du nœud, pour que BUG-038 reste correct si une vraie
+      fournée est déclarée plus tard dans la même session), puis remplace intégralement les lignes
+      `CARRYOVER` de cette session par le contenu de CETTE confirmation (remplacement, pas additif —
+      même sémantique idempotente que la confirmation elle-même, BUG-136) ; ne touche jamais les
+      lignes `DECLARED`. N'appelle jamais `_adjust_bread_stock` (évite le double comptage avec
+      l'ajustement `qty_adjusted` déjà fait par BUG-136 plus haut dans `post()`).
+    - `DailyOpeningConfirmationView.post()` : appelle `_sync_carryover_session_lines` à l'intérieur
+      de la transaction atomique existante, avant la création/mise à jour de la
+      `DailyOpeningConfirmation` — si la session est clôturée, retourne l'erreur 400 sans écrire ni
+      confirmation ni ajustement de stock (transaction annulée dans son ensemble, aucune écriture
+      partielle). Ajoute un `log_activity` dédié (« Fournée Reste d'Hier (Confirmation) »).
+    - `_build_daily_closure_report()` : `produced_by_bp` (rubrique « produit » par catégorie,
+      BUG-120, déjà vérifiée formule à formule contre les Excel réels) filtre désormais explicitement
+      `source=DECLARED` — correctif de cohérence découvert en cours de ticket (voir ambiguïté
+      signalée ci-dessous), pour que les pains du reste d'hier ne soient jamais comptés deux fois
+      dans ce rapport (une fois dans `reste_du_hier`, une seconde fois dans `produit` si on avait
+      laissé l'agrégat brut sommer toutes les sources).
+  - `backend/production/tests/test_bug142_fournee_carryover_accumulation.py` (nouveau fichier, 13
+    tests) : couvre les deux cas A et B, l'ordre confirmation-puis-fournée et fournée-puis-
+    confirmation, l'absence de fausse alerte de rendement sur une session 100 % carryover, l'absence
+    de double comptage sur `BreadStock.qty_available`, le refus sur session clôturée (pour les deux
+    points d'entrée), et BUG-038 (valeur du sac figée) y compris dans le cas où la session a été
+    créée en premier par une confirmation plutôt que par une vraie déclaration.
+- Ambiguïté signalée (pas tranchée seule, CLAUDE.md §7 règle 6) : en relisant `_build_daily_closure_report`
+  (BUG-120, déjà vérifié formule à formule contre les Excel réels du client), j'ai trouvé que
+  `produced_by_bp` (rubrique « produit » par catégorie) agrégeait brutalement
+  `ProductionSessionLine.objects.filter(session__in=sessions_qs)` SANS distinction de source — avec
+  les nouvelles lignes `CARRYOVER`, cela aurait fait apparaître le reste d'hier confirmé une seconde
+  fois dans la colonne « produit » du rapport (le rapport affiche déjà le reste d'hier séparément via
+  `reste_du_hier`/`reste_du_jour`, calculé à partir de `DailyOpeningConfirmation`/
+  `DailyBreadStockSnapshot`, pas de `ProductionSessionLine`). Ce N'ÉTAIT PAS un point explicitement
+  tranché par le brief (qui ne portait que sur le rendement de `ProductionSession` et le double
+  comptage de `BreadStock`). J'ai choisi de filtrer `produced_by_bp` sur `source=DECLARED` pour
+  préserver EXACTEMENT le comportement déjà vérifié de ce rapport (aucune ligne CARRYOVER n'existait
+  avant ce ticket, donc ce filtre ne change rien pour tout jour/équipe sans confirmation — rétro-
+  compatibilité totale), plutôt que de laisser une régression silencieuse s'introduire dans un
+  rapport financier déjà audité. Je signale ce choix explicitement pour relecture par
+  auditeur-comptable/testeur-production plutôt que de le considérer tranché unilatéralement : si le
+  client souhaite au contraire voir le reste d'hier apparaître aussi dans « produit » de ce rapport
+  spécifique, c'est un changement de contrat distinct à discuter, pas une conséquence automatique de
+  ce ticket.
+- Impact éventuel sur le contrat d'API (à transmettre à `dev-frontend`, sous-ticket proposé — PAS
+  ouvert ni implémenté ici, CLAUDE.md §4/§7) :
+  - `ProductionSessionLineSerializer` expose maintenant un nouveau champ `source` (`"DECLARED"` |
+    `"CARRYOVER"`) sur chaque ligne de `GET/POST/PATCH /api/production/sessions/...` — additif, ne
+    casse aucun contrat existant (ignoré par le frontend actuel). Suggestion pour `dev-frontend` :
+    distinguer visuellement dans « Production & Stocks » les lignes « reste d'hier » (CARRYOVER) des
+    lignes « produit » (DECLARED), par exemple un badge ou une colonne séparée, pour que le gérant
+    comprenne pourquoi `total_breads` peut dépasser ce que les sacs de farine déclarés justifient.
+  - Le message d'erreur 400 d'une déclaration ou d'une confirmation sur une session clôturée a
+    légèrement changé de formulation (toujours `{"detail": "..."}`, toujours 400) — aucun changement
+    de code HTTP ni de clé, pas d'impact de contrat à proprement parler.
+- Test de non-régression : `backend/.venv/Scripts/python.exe manage.py test production sales
+  finance` — voir résultat ci-dessous. `manage.py makemigrations --check --dry-run` propre après la
+  migration `0021_bug142_production_line_source`.
+- Statut : **VÉRIFIÉ**
+
+#### Vérification
+- Par : testeur-production le 2026-11-10
+- Résultat : **VÉRIFIÉ**. Relecture complète du code final (`backend/production/views.py` :
+  `perform_create`, `perform_update`, `_sync_carryover_session_lines`,
+  `DailyOpeningConfirmationView.post`, `_build_daily_closure_report`) et scénarios bout-en-bout
+  construits indépendamment des 13 tests de dev-backend
+  (`backend/production/tests/test_verif_bug142_testeur_production.py`, 3 nouveaux tests, tous
+  verts) :
+  1. **Non-régression BUG-120 sans carryover** : pour un jour sans aucune ligne CARRYOVER, le
+     filtre `source=DECLARED` introduit sur `produced_by_bp` est un no-op strict (vérifié par
+     calcul indépendant et par l'assertion explicite qu'aucune ligne CARRYOVER n'existe en base
+     dans ce scénario) — `test_daily_closure_report_aggregates_exact_totals` (déjà existant,
+     toujours vert) reste la bonne ancre de non-régression pour ce rapport, puisqu'il ne crée
+     jamais de confirmation BUG-133. Les chiffres de référence 240 500/840 000 (audit BUG-120,
+     2026-11-02) portent sur `facture_mvm_interne`/`total_du_jour_fc`, qui n'agrègent JAMAIS
+     `produced_by_bp` dans leur formule (confirmé en relisant la formule ligne à ligne) — le
+     filtre BUG-142 ne peut donc pas les affecter, avec ou sans carryover.
+  2. **Scénario confirmation + fournée réelle le même jour/équipe** (bout-en-bout, via les
+     endpoints HTTP, pas seulement les modèles) : la session apparaît bien dans
+     `/api/production/sessions/` avec une ligne `CARRYOVER` (15) et une ligne `DECLARED` (100),
+     `yield_gap`/`theoretical_yield` ne comptent que le déclaré (confirmé), et
+     `_build_daily_closure_report` ne double-compte pas le reste d'hier : `produit` = 100 (jamais
+     115), `reste_du_hier` = -15 une seule fois, `facture_mvm_interne` recalculé à la main concorde
+     à l'identique.
+  3. **Absence de double comptage sur `BreadStock.qty_available`**, testée dans l'ordre inverse de
+     celui de dev-backend (déclaration réelle PUIS confirmation, avec un stock physique
+     préexistant non nul) : le stock passe bien de 40 → 140 (fournée) → 140 (confirmation
+     telle-que-proposée, delta nul) — jamais 280.
+  4. **Accumulation (cas A)** et **refus sur session clôturée (BUG-093)**, pour la déclaration
+     comme pour la confirmation : déjà couverts par les 13 tests de dev-backend, relus et jugés
+     corrects (verrou `select_for_update()`, `sac_value_fc_used` jamais réécrit, transaction
+     annulée intégralement sur refus — pas de test supplémentaire nécessaire, pas de faille
+     trouvée en cherchant un contournement).
+  - Suite complète relancée moi-même (pas seulement le chiffre rapporté par dev-backend) :
+    `backend/.venv/Scripts/python.exe manage.py test production sales finance sync` →
+    **285/285 OK** (inclut les 3 nouveaux tests de vérification).
+  - **Point signalé, non bloquant pour BUG-142** (trouvé en relisant `_build_daily_closure_report`,
+    documenté par un test dédié) : `totals.repartition_pct_par_quantite` divise
+    `produit.quantity` (désormais filtré `DECLARED`, BUG-142) par `totals.total_breads_produced`
+    (champ `ProductionSession.total_breads`, resté sur TOUTES les lignes par décision client,
+    BUG-142). Dès qu'une ligne CARRYOVER existe un jour donné, la somme des pourcentages de
+    `repartition_pct_par_quantite` ne vaut plus 100 % (ex. scénario testé : 100/115 = 86,96 % pour
+    une seule catégorie produite ce jour). Ce n'est pas une régression de BUG-142 (qui ne touche
+    pas `repartition_pct_*`, feature indépendante déjà vérifiée sous BUG-120 avant l'existence des
+    lignes CARRYOVER) ni un double comptage sur une valeur financière déjà auditée — seulement une
+    incohérence de dénominateur dans un indicateur secondaire (répartition en %), qui ne devient
+    visible qu'à partir du jour où un carryover existe. À ouvrir comme ticket séparé si le
+    coordinateur/auditeur-comptable juge que ce indicateur doit rester exact à 100 % même les
+    jours avec reste d'hier confirmé.
+
+### BUG-143 — Une sortie de consommable ne doit plus jamais être refusée pour stock insuffisant (ANNULE BUG-041)
+- Module : Production · Composant : backend · Gravité : Majeur · Statut : CORRIGÉ
+- Ouvert par : client (test en direct sur la base fraîchement réinitialisée le matin même, aucun
+  stock de consommable encore saisi), relayé par le coordinateur, le 2026-11-10.
+- Référence métier : CLAUDE.md §1 (remarque.md/demande client directe prioritaire sur tout document
+  de référence antérieur en cas de conflit) et CLAUDE.md §5.4. **Ce ticket ANNULE explicitement
+  BUG-041** (choix délibéré documenté le 2026-10-22 : refuser toute sortie de consommable qui ferait
+  passer le stock en négatif, « cohérence comptable »). Le client, en test direct, a demandé
+  explicitement : « Ne pas empêcher l'enregistrement de fournée à cause de "Stock insuffisant pour
+  cette sortie de FLOUR : disponible 0.000, demandé ..." fait la négation si il faut. »
+- Étapes pour reproduire (avant correction) :
+  1. Base fraîchement réinitialisée, aucun `ConsumableStock.quantity` saisi pour FLOUR (= 0) à un
+     nœud.
+  2. `POST /api/production/sessions/` avec `flour_sacks_used` > 0 (déclaration de fournée).
+  3. Résultat observé avant correction : `400 {"detail": "Stock insuffisant pour cette sortie de
+     FLOUR : disponible 0.000, demandé ..."}` — la fournée n'est PAS enregistrée (ni la session, ni
+     les lignes, ni les pains produits), transaction entièrement annulée par le refus de
+     `ConsumableMovement.save()` (BUG-041).
+- Preuve (avant correction) : `backend/production/tests/test_bug143_consumable_exit_allows_negative_stock.py`
+  (nouveau fichier, écrit directement sans `@expectedFailure` puisque la correction a été appliquée
+  dans le même geste — vérifié localement en réintroduisant temporairement le `raise` de BUG-041 : les
+  3 tests échouaient bien (`ValidationError`/HTTP 400) avant le retrait, conformément à CLAUDE.md §7
+  règle 4).
+- Fichiers suspects : `backend/production/models.py::ConsumableMovement.save()` (le `raise
+  ValidationError` posé par BUG-041).
+
+#### Correction
+- Par : dev-backend le 2026-11-10.
+- Cause : confirmée — `ConsumableMovement.save()` (branche `EXIT`, `is_new`) comparait
+  `stock.quantity < self.quantity` et levait une `django.core.exceptions.ValidationError` avant toute
+  écriture, bloquant intégralement l'enregistrement de la fournée (transaction annulée).
+- Décision : le client tranche explicitement et inverse le choix produit de BUG-041, en priorité sur
+  tout document de référence antérieur (CLAUDE.md §1) — aucune ambiguïté à clarifier, c'est une
+  instruction directe et sans équivoque reçue en test en direct.
+- Fichiers modifiés :
+  - `backend/production/models.py::ConsumableMovement.save()` — retiré le `raise ValidationError` sur
+    la branche `EXIT`/`is_new` ; le reste du comportement est intact (verrou `select_for_update()`
+    dans `transaction.atomic()`, valorisation au CUMP `average_unit_cost` du stock avant la sortie —
+    BUG-123, mise à jour atomique `F('quantity') - self.quantity`). Ajouté : si la sortie fait passer
+    le stock en négatif, une `SystemNotification` (sévérité `WARNING`) est créée — même pattern que
+    l'alerte de manquant de rendement (`yield_gap < 0`) déjà en place dans
+    `production/views.py::perform_create` — pour signaler sans jamais bloquer. Commentaire mis à jour
+    pour documenter BUG-143 et le fait qu'il annule BUG-041.
+  - `backend/production/views.py` : commentaires mis à jour à 3 endroits (`_record_consumable_exits`,
+    `ProductionSessionViewSet.perform_create`, `ConsumableMovementViewSet.perform_create`) pour ne
+    plus dire que la sortie « est refusée » — le `try/except DjangoValidationError` est conservé par
+    prudence pour toute AUTRE erreur de validation du modèle, mais ne se déclenche plus jamais pour un
+    stock insuffisant.
+  - `backend/sync/services.py::_push_consumable_movement` : commentaire mis à jour (le `except
+    ValidationError` ne se déclenche plus pour ce motif). **Conséquence signalée, non traitée dans ce
+    ticket** (hors périmètre — décision d'architecture de synchronisation distincte de la demande
+    client sur l'enregistrement local d'une fournée, CLAUDE.md §7 règle 6) : une sortie (EXIT) qui
+    arrive côté Cloud avant son entrée (ENTRY) correspondante est maintenant ACCEPTÉE immédiatement
+    (stock consolidé négatif) plutôt que rejetée comme « dépendance manquante » et retentée au cycle
+    suivant — elle est valorisée au CUMP courant du stock consolidé (0 si la ligne vient d'être créée
+    paresseusement), ce qui peut introduire une valorisation provisoirement incorrecte dans
+    `finance.views` (BUG-123/COGS) tant que l'ordre réel des mouvements n'est pas rejoué par la
+    synchronisation. **Proposition pour `architecte-sync`/`auditeur-comptable`** (à discuter avec le
+    coordinateur, pas tranché ici) : si ce risque de valorisation est jugé inacceptable, envisager un
+    mécanisme de détection de dépendance manquante indépendant du signe du stock (ex. vérifier
+    l'existence d'au moins une `ConsumableMovement` ENTRY déjà synchronisée pour ce stock avant
+    d'accepter une EXIT), plutôt que de réutiliser l'ancienne règle de BUG-041 — non implémenté ici
+    pour ne pas sur-ingénierer un ticket scopé sur l'enregistrement local d'une fournée.
+  - `backend/sync/tests/test_sync_bug004_extension.py::ConsumableMovementSyncTests` : le test
+    `test_exit_without_matching_entry_is_rejected_as_missing_dependency_then_retried` est remplacé par
+    `test_exit_without_matching_entry_is_accepted_and_stock_goes_negative` — il attendait un rejet
+    (`REJECTED`, « dépendance manquante ») qui ne se produit plus par construction (BUG-143 s'applique
+    aussi au Cloud, même méthode `save()`) ; le nouveau test vérifie l'acceptation immédiate et le
+    stock consolidé négatif, puis sa remise à niveau une fois l'entrée correspondante synchronisée.
+  - `backend/production/tests/test_consumables.py::NegativeConsumableStockTests::test_exit_exceeding_stock_is_rejected_or_flagged`
+    : ce test (déjà écrit pour accepter indifféremment un refus OU une notification — jamais modifié,
+    toujours en l'état) passe maintenant par la branche « signalé par notification » plutôt que par le
+    `return` anticipé sur `ValidationError` (comportement d'origine, avant même BUG-041, retrouvé).
+  - `backend/production/tests/test_bug143_consumable_exit_allows_negative_stock.py` (nouveau fichier)
+    : 3 tests — sortie EXIT sur stock à 0 (cas réel du client), sortie dépassant un stock positif
+    existant, et le parcours API complet `POST /api/production/sessions/` (déclaration de fournée)
+    avec un stock de farine à 0 — vérifie que la fournée est enregistrée (201), que
+    `ConsumableStock.quantity` devient négatif, que le CUMP est préservé, et qu'une notification est
+    créée.
+- Test de non-régression : `backend/.venv/Scripts/python.exe manage.py test production sales
+  finance` → voir résultat ci-dessous (exécuté par dev-backend). `manage.py makemigrations --check
+  --dry-run` propre (aucun changement de schéma pour ce ticket).
+- Impact éventuel sur le contrat d'API (sous-ticket proposé pour `dev-frontend`, PAS ouvert ni
+  implémenté ici) : `POST /api/production/sessions/` et `POST /api/production/movements/` ne
+  renvoient plus JAMAIS `400 {"detail": "Stock insuffisant pour cette sortie de ... : disponible ...,
+  demandé ..."}` pour ce motif — ce message n'existe plus comme cas d'échec possible. La page
+  `frontend/src/pages/dashboard/Production.tsx` traite spécifiquement ce message depuis la correction
+  de **BUG-050** (fonction `isStockInsufficientError`, formulaire « Déclaration de Fournée » et modale
+  « Approvisionnement Consommable ») : ce traitement devient obsolète/mort (ne se déclenchera plus
+  jamais) sans être trompeur en soi (il ne s'affichera simplement jamais). Suggestion pour
+  `dev-frontend`, à la discrétion du coordinateur : retirer cet affichage devenu sans objet, ou le
+  remplacer par l'affichage de la nouvelle notification « Stock négatif » (sévérité `WARNING`, déjà
+  consommée par le mécanisme de notifications existant côté frontend) pour que le gérant comprenne
+  qu'une fournée a été enregistrée malgré un stock de consommable insuffisant.
+- Statut : CORRIGÉ — en attente de vérification par testeur-production (ou le coordinateur),
+  conformément à CLAUDE.md §7 règle 3.
+
+#### Vérification
+- Par : testeur-production le 2026-11-10.
+- Méthode : relecture critique indépendante de `ConsumableMovement.save()`
+  (`backend/production/models.py`, branche `EXIT`/`is_new`), de
+  `ProductionSessionViewSet.perform_create()`, `_record_consumable_exits()` et
+  `_check_overconsumption()` (`backend/production/views.py`), puis
+  construction d'un scénario bout-en-bout indépendant (pas une relecture des
+  3 tests déjà livrés par dev-backend) dans
+  `backend/production/tests/test_verif_bug143_testeur_production.py` : fournée
+  déclarée via `POST /api/production/sessions/` avec `flour_sacks_used=4.50`
+  alors que `ConsumableStock.quantity` est déjà à `0.000` pour ce (nœud,
+  FLOUR) → `201`, stock → `-4.500`, `ConsumableMovement.unit_price` figé au
+  CUMP (`average_unit_cost`) déjà présent sur le stock avant la sortie (BUG-123
+  intact), `SystemNotification` WARNING créée (sans bloquer). Confirmé :
+  **plus aucun chemin ne peut bloquer une déclaration de fournée pour cause de
+  stock de consommable insuffisant** — le seul `raise ValidationError` qui
+  existait pour ce motif a bien été retiré, et les `try/except
+  DjangoValidationError` restants dans `production/views.py` ne sont plus
+  jamais déclenchés pour cette raison précise (vérifié par lecture : aucune
+  autre branche du modèle ne lève encore cette exception pour une quantité
+  insuffisante).
+- Point 3 de la mission — examen du risque sync signalé par dev-backend
+  (`sync/services.py::_push_consumable_movement`) : **confirmé réel**, pas
+  seulement théorique, et documenté séparément en **BUG-144** (voir fiche
+  dédiée ci-dessous) plutôt que traité ici, conformément à CLAUDE.md §7 règle
+  6 (je ne tranche pas une question d'architecture de synchronisation qui
+  dépasse le périmètre strict de BUG-143). Reproduit moi-même par un test
+  indépendant (`SyncConsumableValuationRiskTests`, même fichier) : un EXIT
+  Cloud de farine arrivant avant son ENTRY correspondante est accepté avec
+  `unit_price=0.0000` (CUMP d'une ligne `ConsumableStock` Cloud créée
+  paresseusement) ; une fois l'ENTRY réellement synchronisée, le **stock**
+  redevient correct en quantité (déjà couvert par dev-backend) mais le
+  `unit_price` du mouvement EXIT déjà écrit **reste figé à 0** — jamais
+  recalculé rétroactivement. Or `finance/views.py` (COGS, BUG-123) agrège
+  directement `ConsumableMovement.unit_price × quantity` des EXIT par année :
+  ce risque touche donc potentiellement des calculs déjà vérifiés
+  (BUG-123/finance). Ce n'est **pas** une fonctionnalité théorique non
+  utilisée : le module `sync/` (push/pull/handshake, `backend/sync/`) et
+  l'application desktop Electron (`desktop/`, packagée avec
+  `electron-builder` — `desktop/dist-installer/` existe, `packaging-desktop`
+  et `testeur-installation` ont déjà livré/vérifié des rapports d'installation
+  réels le 2026-10-23) sont construits et testés activement ; l'item n°4 du
+  backlog initial de CLAUDE.md §6 (« synchronisation non implémentée ») est
+  **obsolète** — signalé ici pour mémoire, ce n'est pas une contradiction
+  entre documents de référence à arbitrer, juste un backlog de départ déjà
+  largement dépassé par `architecte-sync`/`packaging-desktop`. Le risque est
+  donc réel pour le déploiement multi-nœuds à venir, mais n'affecte
+  **personne aujourd'hui** : à la date du 2026-11-10 aucun nœud local n'est
+  encore synchronisé en continu en production (le test en direct du matin
+  qui a motivé BUG-143 se faisait directement sur le Cloud, pas via un nœud
+  desktop déployé) — je n'ai trouvé aucune trace (logs, `SyncLog`,
+  `SyncConflict` en base) d'un flux de synchronisation réel déjà en
+  fonctionnement contre `backend/db.sqlite3`. **Conclusion : ne bloque pas
+  BUG-143**, qui est correctement scopé sur l'enregistrement local d'une
+  fournée et fonctionne — mais BUG-144 doit être traité par
+  `architecte-sync`/`auditeur-comptable` avant toute mise en service réelle
+  de la synchronisation multi-boulangeries, pour ne pas corrompre
+  silencieusement le COGS une fois les nœuds desktop effectivement
+  déployés sur le terrain.
+- Non-régression : `backend/.venv/Scripts/python.exe manage.py test
+  production sales finance sync` → `303 tests, OK` (731.6s ; relancé indépendamment,
+  inclut `sync` que dev-backend n'avait pas inclus dans sa propre commande).
+  `makemigrations --check --dry-run` : aucun changement de schéma détecté.
+- Découverte additionnelle indépendante, hors du périmètre strict de BUG-143
+  mais trouvée en construisant mon propre scénario bout-en-bout (mission
+  point 2) : documentée séparément en **BUG-145** ci-dessous (perte silencieuse
+  totale de traçabilité d'une consommation si aucune ligne `ConsumableStock`
+  n'existe du tout — pas seulement à 0 — pour ce nœud/consommable). Confirmé
+  par lecture que ce comportement préexistait déjà à BUG-143 (le même
+  `if stock:` empêchait déjà d'atteindre le `raise ValidationError` de
+  BUG-041) : ce n'est donc pas une régression introduite par la correction
+  vérifiée ici, mais un bug distinct et plus grave, à traiter séparément.
+- Résultat : **VÉRIFIÉ**. BUG-143 fonctionne comme spécifié par la demande
+  client : plus aucune fournée n'est bloquée pour stock de consommable
+  insuffisant, le stock négatif est correctement valorisé et signalé.
+  Non-régression confirmée sur `production sales finance sync` (303/303).
+  Deux tickets distincts ouverts en conséquence de cet examen (BUG-144 — réel
+  mais non bloquant aujourd'hui, pour `architecte-sync` — et BUG-145 — pour
+  `dev-backend`), aucun des deux ne remettant en cause la correction de
+  BUG-143 elle-même.
+
+### BUG-146 — Sync Cloud : valorisation COGS incorrecte et non corrigée rétroactivement sur un EXIT de consommable arrivé avant son ENTRY
+- Module : Sync / Finance · Composant : sync · Gravité : Majeur · Statut : OUVERT
+- Ouvert par : testeur-production le 2026-11-10, en examinant la conséquence de BUG-143 sur
+  `sync/services.py::_push_consumable_movement` (signalée mais non tranchée par dev-backend, voir
+  fiche BUG-143 ci-dessus).
+- Référence métier : CLAUDE.md §5.4 (consommables, valorisation), §5.6/finance (états N/N-1) ;
+  BUG-123 (CUMP/COGS).
+- Étapes pour reproduire :
+  1. Deux boulangeries locales A et B (ou une boulangerie et le Cloud) poussent des
+     `ConsumableMovement` pour le même (nœud, FLOUR) dans le désordre : un EXIT de 5 sacs arrive au
+     Cloud AVANT l'ENTRY de 10 sacs qui le précède chronologiquement en réalité.
+  2. `_push_consumable_movement` (`backend/sync/services.py`) fait
+     `ConsumableStock.objects.get_or_create(...)` : la ligne Cloud est créée paresseusement avec
+     `average_unit_cost=0.0000` (valeur par défaut du modèle).
+  3. L'EXIT est enregistré via `ConsumableMovement.save(_sync_bypass=True)` (BUG-143 : accepté
+     immédiatement, pas de rejet) : `unit_price` figé au CUMP courant du stock, soit `0.0000`.
+  4. L'ENTRY arrive ensuite et recalcule correctement le CUMP du stock Cloud ; la quantité du stock
+     redevient correcte (déjà testé par dev-backend). Mais le `ConsumableMovement` EXIT déjà écrit à
+     l'étape 3 garde `unit_price=0.0000` pour toujours — rien ne le recalcule après coup.
+- Résultat attendu : soit l'EXIT désordonné est retardé jusqu'à ce que sa dépendance (ENTRY) soit
+  connue (ancien mécanisme, basé sur BUG-041, retiré par BUG-143), soit sa valorisation est corrigée
+  rétroactivement une fois l'ENTRY synchronisée — dans tous les cas, `finance/views.py` (COGS,
+  BUG-123) ne doit jamais agréger un coût à `0` pour une sortie de farine réellement achetée.
+- Résultat observé : `ConsumableMovement.unit_price=0.0000` reste figé indéfiniment sur ce mouvement
+  EXIT, alors que `finance/views.py` (l.61-63) calcule `COGS = Σ(quantity × unit_price)` sur tous les
+  EXIT de l'année — ce mouvement contribuera `0` au coût réel de production, sous-évaluant
+  silencieusement le COGS de l'année concernée tant qu'aucune correction manuelle n'est faite.
+- Preuve : `backend/production/tests/test_verif_bug143_testeur_production.py::SyncConsumableValuationRiskTests::test_exit_synced_before_entry_leaves_stale_unit_price_on_the_exit_movement`
+  (passe, documente le comportement actuel plutôt que de le bloquer — ce n'est pas un
+  `@expectedFailure` : BUG-143 n'a pas introduit de nouveau crash, seulement laissé ce risque de
+  valorisation ouvert, non couvert par un test avant non plus).
+- Fichiers suspects : `backend/sync/services.py::_push_consumable_movement` (l.606-614, `get_or_create`
+  paresseux sans CUMP connu), `backend/production/models.py::ConsumableMovement.save()` (valorisation
+  au CUMP courant sans mécanisme de rattrapage), `backend/finance/views.py` (l.51-63, agrégation COGS).
+- Portée réelle à la date du 2026-11-10 : le module `sync/` et l'application desktop sont construits et
+  testés (`packaging-desktop`/`testeur-installation`, rapports du 2026-10-23 ; `architecte-sync`,
+  rapports jusqu'au 2026-11-02) — ce n'est pas une fonctionnalité morte. Mais aucun nœud desktop
+  n'est, à ma connaissance, encore synchronisé en continu contre la base de production actuelle
+  (`backend/db.sqlite3`, réinitialisée ce matin, testée directement sur le Cloud) : le risque est donc
+  réel pour la suite du déploiement, mais **non bloquant aujourd'hui** — ne doit pas retarder la
+  validation de BUG-143, mais doit être traité avant la mise en service réelle de la synchronisation
+  multi-boulangeries.
+- Proposition (non tranchée, à la décision d'`architecte-sync`/`auditeur-comptable`) : détecter une
+  dépendance manquante indépendamment du signe du stock résultant (ex. vérifier qu'au moins une
+  `ConsumableMovement` ENTRY existe déjà pour ce `ConsumableStock` avant d'accepter un EXIT dont la
+  quantité dépasse le stock connu), et/ou recalculer `unit_price` des EXIT affectés une fois l'ENTRY
+  manquante synchronisée (job de rattrapage).
+
+### BUG-147 — Fournée avec consommable sans aucune ligne ConsumableStock : perte silencieuse totale de traçabilité (pas de mouvement, pas de notification)
+- Module : Production · Composant : backend · Gravité : Majeur · Statut : OUVERT
+- Ouvert par : testeur-production le 2026-11-10, scénario construit indépendamment en vérifiant
+  BUG-143 (CLAUDE.md §7 règle 4/mission point 2 : construire son propre scénario, pas relire celui du
+  développeur).
+- Référence métier : CLAUDE.md §5.4 (« Une fournée décrémente tous les consommables utilisés »).
+- Étapes pour reproduire :
+  1. Base où AUCUNE ligne `ConsumableStock` n'existe pour (nœud, FLOUR) — pas même à quantité 0 : la
+     ligne n'est auto-créée que par une visite de la page « Stocks Consommables »
+     (`ConsumableStockViewSet._ensure_stock_accounts()`), jamais par `ProductionSessionViewSet`.
+  2. `POST /api/production/sessions/` avec `flour_sacks_used=2.00` pour ce nœud.
+  3. `_record_consumable_exits()` (`backend/production/views.py`) fait
+     `ConsumableStock.objects.filter(node=node, consumable_type=ct).first()` → `None` → `if stock:`
+     est faux → `continue` silencieux, sans créer ni la ligne de stock, ni le `ConsumableMovement`.
+- Résultat attendu : soit la ligne `ConsumableStock` est créée à la volée (comme le fait déjà
+  `_ensure_stock_accounts()` pour la page Stocks Consommables) avant d'enregistrer la sortie, soit
+  une notification signale que ce consommable n'a pas pu être décrémenté — dans tous les cas, la
+  consommation réelle de farine ne doit jamais disparaître silencieusement.
+- Résultat observé : la fournée est enregistrée (`201`), mais aucune trace de la consommation de
+  farine n'existe nulle part (ni `ConsumableStock`, ni `ConsumableMovement`, ni notification) — perte
+  de données silencieuse, plus grave qu'un simple stock négatif puisqu'il n'y a même pas de stock du
+  tout à corriger ensuite.
+- Preuve : `backend/production/tests/test_verif_bug143_testeur_production.py::NoStockRowAtAllTests::test_fournee_succeeds_but_flour_consumption_is_silently_not_recorded`
+  (passe en l'état actuel — documente le comportement plutôt que de le bloquer, puisque ce n'est pas
+  une régression de BUG-143 : ce chemin produisait déjà ce même silence avant, avec BUG-041, le
+  `if stock:` empêchant simplement d'atteindre le `raise`).
+- Fichiers suspects : `backend/production/views.py::_record_consumable_exits` (l.67-75, `if stock:`
+  sans `else`).
+- Note : indépendant de BUG-143/BUG-146, pas une régression de la correction vérifiée dans ce rapport
+  — simplement découvert en même temps par le même travail de vérification.
+
+### BUG-144 — Stock de pains par jour (volet backend) : interroger le stock à une date passée
+- Module : Production · Composant : backend · Gravité : Majeur · Statut : CORRIGÉ
+- Ouvert par : client (remarque.md, ligne ajoutée après l.396), relayé par le coordinateur, le
+  2026-11-10.
+- Demande client : « Au niveau de "Production & Stocks" pour les sections "Stock Pains Actuel" et
+  "Historique des Fournées" on doit pouvoir sélectionner un jour et voir les résultats du jour d'où le
+  terme "Stock Pains Actuel" devrait être "Stock Pains du Jour" ». **Ce ticket couvre uniquement le
+  volet backend** : fournir l'API nécessaire pour interroger le stock de pains d'un jour passé. Le
+  sélecteur de date et le renommage côté UI font l'objet d'un ticket séparé **BUG-145**
+  (`dev-frontend`).
+- Référence métier : CLAUDE.md §4 (permissions, filtrage par nœud) et §5.4 (production/stocks).
+- Cause (absence de fonctionnalité, pas une régression) : `BreadStock.qty_available`
+  (`backend/production/models.py`) est un solde COURANT cumulatif par `(node, bread_price)` — une
+  seule ligne, aucun historique par jour. `GET /api/production/bread-stocks/` (`BreadStockViewSet`,
+  `backend/production/views.py`) ne peut donc renvoyer que l'état présent, jamais celui d'un jour
+  passé.
+- Preuve (avant correction) : `backend/production/tests/test_bug144_bread_stock_by_date.py` — écrit
+  directement (sans `@expectedFailure`, l'endpoint n'existait pas encore) ; vérifié localement en
+  commentant temporairement le nouveau code (branche `source = 'snapshot'` et le refus des dates
+  futures) pour confirmer que les tests échouaient bien avant (404 sur l'URL inexistante / mauvaise
+  valeur), conformément à CLAUDE.md §7 règle 4.
+
+#### Correction
+- Par : dev-backend le 2026-11-10.
+- Décision d'architecture : nouvel endpoint dédié en lecture seule plutôt qu'une extension de
+  `BreadStockViewSet` — pour une non-régression totale et sans risque du comportement existant
+  (exigée explicitement par le ticket) : `BreadStockViewSet` n'est pas modifié. Réutilise la seule
+  source d'historique par jour déjà en place, `DailyBreadStockSnapshot` (BUG-118, déjà vérifié),
+  plutôt que de créer un nouveau modèle — aucune migration nécessaire.
+- Fichiers modifiés :
+  - `backend/production/views.py` : ajout de `BreadStockByDateView` (APIView, juste avant
+    `BreadDisposalViewSet`). `GET` avec `node` (optionnel pour non-HQ, requis pour HQ — même garde-fou
+    que `DailyClosureReportView`/`_opening_confirmation_resolve_node`, BUG-022/025/056/120/133 : un
+    non-HQ ne voit jamais que son propre nœud, toute valeur `node` forgée est ignorée) et `date`
+    (optionnel, défaut aujourd'hui). `date` = aujourd'hui/omise → `source: "live"`, catégories =
+    `BreadStock.qty_available` courant (identique à l'existant). `date` passée → `source: "snapshot"`,
+    catégories reconstituées en sommant `DailyBreadStockSnapshot.qty_at_close` sur les équipes A et B
+    pour `(node, bread_price, date)` (équipe sans ligne ce jour = 0, pas une absence de valeur — même
+    convention que le docstring de `DailyBreadStockSnapshot`). `date` future → `400` avec message en
+    français (refus universel du futur, volontairement SANS passer par
+    `core.utils.validate_requested_date`, qui conditionne aussi le refus d'une date passée à
+    `Config.allow_backdated_sales` — une règle d'ÉCRITURE, BUG-083, sans rapport avec la simple
+    LECTURE d'un historique déjà enregistré).
+  - `backend/production/urls.py` : route littérale `bread-stocks/by-date/` déclarée **avant**
+    `include(router.urls)` pour ne jamais être capturée par la route détail `bread-stocks/<pk>/` du
+    routeur DRF.
+  - `backend/production/tests/test_bug144_bread_stock_by_date.py` (nouveau fichier, 12 tests) :
+    `BreadStockByDateLiveTests` (date omise, et date = aujourd'hui comparée ligne à ligne à l'ancien
+    endpoint `GET /api/production/bread-stocks/` — non-régression explicite) ;
+    `BreadStockByDateSnapshotTests` (date passée une seule équipe, date passée deux équipes/somme,
+    date passée sans aucun snapshot → `categories: []`, date future → 400, date au format invalide →
+    400) ; `BreadStockByDatePermissionTests` (GERANT et FACTURIER ne peuvent jamais lire un autre
+    nœud même en forgeant `node` ; HQ doit préciser `node` explicitement, sinon 400 ; HQ peut alors
+    lire n'importe quel nœud ; requête non authentifiée refusée).
+  - `docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md` (nouveau rapport) :
+    contrat API détaillé (URL, paramètres, forme de la réponse `live`/`snapshot`, exemples JSON) pour
+    que `dev-frontend` (BUG-145) puisse l'implémenter sans deviner.
+- « Historique des Fournées » : **aucun changement backend nécessaire** — `GET
+  /api/production/sessions/?date=AAAA-MM-JJ&node=<pk>` fonctionne déjà (`ProductionSessionViewSet.
+  filterset_fields` inclut déjà `'date'`, isolation par nœud déjà dans `get_queryset()`).
+- Test de non-régression : `backend/production/tests/test_bug144_bread_stock_by_date.py` → 12/12 OK.
+  `backend/.venv/Scripts/python.exe manage.py test production sales finance` → **243 tests, OK** (0
+  échec, 0 erreur). `manage.py makemigrations --check --dry-run` → `No changes detected` (aucune
+  migration : ce ticket n'ajoute aucun champ de modèle, uniquement une vue agrégeant des données déjà
+  persistées).
+- Impact éventuel sur le contrat d'API : **aucune rupture** — `BreadStockViewSet` et
+  `ProductionSessionViewSet` sont inchangés, seul un NOUVEL endpoint est ajouté. Ticket lié ouvert
+  pour `dev-frontend` : **BUG-145** (sélecteur de date + renommage « Stock Pains Actuel » → « Stock
+  Pains du Jour », à consommer via le nouveau contrat documenté dans le rapport dev-backend ci-dessus).
+- Point signalé pour `dev-frontend`/le coordinateur (non bloquant, CLAUDE.md §7 règle 6) : si un jour
+  donné n'a de ligne `DailyBreadStockSnapshot` que pour UNE des deux équipes (l'autre n'ayant pas
+  clôturé ce jour-là), l'endpoint renvoie quand même une valeur « complète » en apparence (somme avec
+  0 pour l'équipe absente, convention déjà établie ailleurs dans le code) — le contrat actuel ne
+  distingue pas ce cas (pas de champ indiquant quelles équipes ont effectivement rapporté). À
+  envisager seulement si l'UI en a réellement besoin ; non implémenté ici pour ne pas sur-ingénierer
+  un besoin non exprimé.
+- Statut : **VÉRIFIÉ** par testeur-production le 2026-11-10 (voir note de vérification sous BUG-145
+  ci-dessous — les deux tickets ont été vérifiés ensemble de bout en bout, contrat API + UI).
+
+### BUG-145 — Stock de pains par jour (volet frontend) : sélecteur de date, renommage, historique des fournées filtré
+- Module : Production · Composant : frontend · Gravité : Majeur · Statut : CORRIGÉ
+- Ouvert par : client (remarque.md, même ligne que BUG-144, après l.396), relayé par le
+  coordinateur, le 2026-11-10.
+- Demande client : voir BUG-144 ci-dessus (même citation). Ce ticket couvre le volet frontend :
+  sélecteur de date, renommage « Stock Pains Actuel » → « Stock Pains du Jour », et filtrage de
+  « Historique des Fournées » par la date sélectionnée.
+- Contrat API consommé (volet backend déjà CORRIGÉ) : voir
+  `docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md`
+  (`GET /api/production/bread-stocks/by-date/?node=&date=` — nouvel endpoint, et
+  `GET /api/production/sessions/?date=&node=` — filtre déjà existant, aucun changement backend).
+- Reproduction (avant correction) : ouvrir « Production & Stocks », onglet « Fournées » — aucun
+  sélecteur de date visible ; « Stock Pains Actuel » affiche toujours le solde courant sans libellé
+  de date ; « Historique des Fournées » n'affiche que les 15 dernières fournées toutes dates
+  confondues, sans aucun moyen de se replacer un jour précis.
+
+#### Correction
+- Par : dev-frontend le 2026-11-10.
+- Fichiers modifiés/créés :
+  - `frontend/src/api/services.ts` : ajout du type `BreadStockByDateCategory`/`BreadStockByDate` et
+    de `productionApi.breadStocks.byDate({node, date})` (`GET
+    /api/production/bread-stocks/by-date/`). Aucun nouvel `any`.
+  - `frontend/src/components/production/StockDuJourSection.tsx` (nouveau, CLAUDE.md §4 : extraction
+    obligatoire pour une page > ~1000 lignes) : encapsule le titre renommé « Stock Pains du Jour »
+    (avec la date affichée en toutes lettres), le bouton + boîte modale de sélection de date
+    (réutilise `CalendarPicker.tsx`/`Modal.tsx`, même composant et même convention visuelle que la
+    boîte modale de Clôture Journalière, BUG-128 — jours futurs non sélectionnables), et le rendu de
+    la liste. Pour la date du jour (`source: "live"`), réutilise directement la liste `BreadStock[]`
+    déjà chargée par `Production.tsx` (aucun appel réseau supplémentaire, le clic « voir détail »
+    existant — avec le détail produit/reçu/sorti/disposé — continue de fonctionner à l'identique,
+    non-régression). Pour une date passée, appelle `byDate()` et affiche les catégories renvoyées
+    (plus pauvres : seulement `qty_available`/`unit_price`, pas de détail par type de mouvement — le
+    contrat API ne le permet pas pour un snapshot reconstitué) avec un badge discret « Historique
+    (reconstitué) » quand `source === "snapshot"` ; états de chargement, d'erreur (`detail` affiché)
+    et de liste vide gérés.
+  - `frontend/src/pages/dashboard/Production.tsx` :
+    - Nouvel état `selectedDate` (défaut aujourd'hui) qui pilote À LA FOIS `StockDuJourSection` et
+      « Historique des Fournées » — un seul sélecteur, pas deux, conformément à la demande.
+    - Nouvel état `historySessions`/`historyLoading`/`historyError`, alimenté par un `useEffect`
+      dédié appelant `productionApi.sessions.list({ node, date: selectedDate })` à chaque changement
+      de boulangerie ou de date. **Choix délibéré de ne PAS filtrer par date le `sessions` d'origine**
+      (chargé par `loadData`) : celui-ci alimente aussi les cartes KPI (« Fournées enregistrées »,
+      valeur FC) et le menu déroulant du formulaire « Sortie Non Standard » (filtré côté client sur
+      la date du jour réel, indépendamment de la date choisie dans le sélecteur) — les mélanger
+      aurait changé leur sens sans qu'aucune des deux fonctionnalités l'ait demandé. « Historique des
+      Fournées » (aperçu des 2 dernières + bouton « Voir plus » + boîte modale complète + modale de
+      détail avec commentaire/clôture) utilise désormais exclusivement `historySessions`.
+    - Renommage du libellé « Stock Pains Actuel » supprimé de `Production.tsx` (déplacé et renommé
+      « Stock Pains du Jour » dans le nouveau composant).
+- Vérifications effectuées :
+  - `cd frontend && npx tsc --noEmit` → aucune erreur.
+  - `cd frontend && npm run build` → build réussi (avertissements pré-existants sur la taille du
+    bundle legacy, sans rapport avec ce ticket).
+  - `e2e/tests/05-production.spec.ts` : aucune chaîne/sélecteur affecté par ce ticket (vérifié par
+    recherche de texte) ; **tentative d'exécution bloquée** par un problème d'environnement
+    indépendant de ce ticket — l'utilisateur de démonstration `demo_gerant_k1_e2e` attendu par
+    `e2e/fixtures/helpers.ts` n'existe pas dans la base partagée de cette session
+    (`User.objects.filter(username__icontains='demo_gerant_k1_e2e').exists()` → `False`), et les
+    identifiants `@gerant-k1`/`Kiese2026!` du script de seed (`seed_kiese.py`) sont refusés
+    (« Identifiants invalides » — probablement changés par une autre session). Signalé pour le
+    coordinateur ; pas un problème de code frontend.
+  - Étapes de vérification manuelle pour le testeur (faute d'E2E exécutable dans cette session) :
+    1. Se connecter en GÉRANT (ou DIRECTION), aller sur « Production & Stocks », onglet « Fournées ».
+    2. Vérifier le titre « Stock Pains du Jour — <date du jour en toutes lettres> » au-dessus de la
+       liste des pains, avec un bouton « Choisir un jour » (icône calendrier).
+    3. Cliquer sur « Choisir un jour » → une boîte modale s'ouvre avec un calendrier mensuel ; vérifier
+       que les jours futurs sont grisés/non cliquables, et que la boîte modale est visible sans
+       défilement de page (identique à la boîte modale de Clôture Journalière, BUG-128).
+    4. Sélectionner un jour passé ayant eu de la production → la boîte se ferme, le titre affiche la
+       nouvelle date, la liste change (quantités disponibles ce jour-là), un badge « Historique
+       (reconstitué) » apparaît si la source est un snapshot ; la section « Historique des Fournées »
+       juste en dessous se met AUSSI à jour pour ne montrer que les fournées de ce jour-là (même date,
+       un seul sélecteur).
+    5. Sélectionner un jour n'ayant eu aucune fournée → message « Aucune fournée ce jour-là » et
+       (si aucun stock snapshot) « Aucun stock de pains enregistré ce jour-là », pas d'erreur ni de
+       page blanche.
+    6. Revenir à aujourd'hui via le calendrier → le clic sur une ligne de pain rouvre le détail complet
+       (produits/reçus/sortis/disposés) comme avant ce ticket (non-régression) ; les cartes KPI du
+       haut et le formulaire « Sortie Non Standard » (onglet Réconciliation) ne sont pas affectés par
+       le sélecteur.
+    7. Vérifier l'affichage à 360 px (POS) et 768 px (tablette) : bouton + titre doivent rester lisibles
+       sans chevauchement (flex-wrap déjà en place).
+  - Résultat attendu identique dans les deux rapports `dev-backend`/`dev-frontend` : aucune rupture de
+    contrat, non-régression du comportement « aujourd'hui » confirmée par relecture de code (le composant
+    réutilise la liste déjà chargée par `Production.tsx` pour ce cas, sans appel réseau supplémentaire).
+- Aucune modification backend (hors scope de ce ticket, déjà traité sous BUG-144).
+- Rapport complet : `docs/qa/rapports/dev-frontend-2026-11-10-bug145-selecteur-date-production.md`.
+
+#### Vérification (testeur-production, 2026-11-10)
+- Comptes `demo_*_e2e` recréés par le coordinateur confirmés utilisables : connexion réelle réussie
+  via `POST /api/core/auth/login/` pour `demo_gerant_k1_e2e`/`demo_gerant_k2_e2e`/`demo_direction_e2e`
+  (mot de passe `DemoE2E2026!`), et via l'UI (`e2e/fixtures/helpers.ts::seConnecter`).
+- Relecture complète du code final des deux côtés (pas seulement les rapports) :
+  `backend/production/views.py::BreadStockByDateView` (l.962-1118), `backend/production/urls.py`
+  (route littérale avant le routeur, pas de conflit avec `bread-stocks/<pk>/`),
+  `frontend/src/components/production/StockDuJourSection.tsx`,
+  `frontend/src/pages/dashboard/Production.tsx` (nouveaux états `selectedDate`/`historySessions`,
+  `useEffect` dédié), `frontend/src/api/services.ts` (`productionApi.breadStocks.byDate`).
+- **Vérification backend bout en bout contre le serveur de dev réel** (`http://127.0.0.1:8000`,
+  déjà lancé par une autre session — non perturbé, aucune donnée `@gerant-kX`/`@pierre` réelle
+  touchée) : création d'une catégorie `BreadPrice` fictive (`E2E_BUG144`, 123 FC) et de 2
+  `ProductionSession` fictives (K1, 2026-11-07, équipe A = 7 pains remis en stock restant, équipe B =
+  2 pains), clôturées pour générer de vrais `DailyBreadStockSnapshot` via
+  `DailyBreadStockSnapshot.record_snapshot()` (même mécanisme que `POST .../close/`) :
+  - `GET .../by-date/?date=2026-11-07` (sans `node`, compte GERANT K1) → `200`,
+    `source: "snapshot"`, `qty_available: 7` (= 5 + 2, somme des deux équipes) — **conforme au
+    contrat**.
+  - `GET .../by-date/?date=2026-11-10` (aujourd'hui) → `200`, `source: "live"`.
+  - `GET .../by-date/?date=2099-01-01` → `400` français, refus du futur.
+  - Isolation par nœud confirmée EN DIRECT contre le serveur réel (pas seulement par les tests
+    Django) : `demo_gerant_k2_e2e` forgeant `node=K1` → `200` mais `node: 5` (K2, son propre nœud,
+    valeur forgée ignorée), `categories: []` (K2 n'a aucune donnée ce jour-là) — jamais de fuite vers
+    K1. `demo_direction_e2e` (HQ) sans `node` → `400` (paramètre requis) ; avec `node=K1` → `200`,
+    données K1 complètes.
+  - `GET /api/production/sessions/?date=2026-11-07&node=K1` → les 2 fournées fictives, confirmant le
+    filtre déjà existant consommé par BUG-145.
+- **Vérification frontend E2E réelle** (Playwright, comptes `demo_*_e2e`, serveurs de dev existants
+  `:5173`/`:8000`, non relancés) : script temporaire (non committé, supprimé après usage) reproduisant
+  le parcours complet décrit dans la mission — connexion GERANT K1, dismissal de la boîte modale
+  « Stock de départ du jour » (BUG-133/134, sans rapport avec ce ticket), ouverture du sélecteur
+  « Choisir un jour » (réutilise bien `CalendarPicker`/`Modal` de BUG-128), sélection du 07/11/2026 :
+  - Titre « Stock Pains du Jour — 07 novembre 2026 » avec badge « HISTORIQUE (RECONSTITUÉ) » affiché.
+  - Catégorie fictive affichée avec `7 dispo` / `861 FC` (= 7 × 123 FC) — calcul correct.
+  - « Historique des Fournées », piloté par le MÊME sélecteur, affiche bien les 2 fournées du
+    07/11/2026 (Éq. A 7 pains / 0,10 sacs / 861 FC, Éq. B visible juste en dessous) et seulement
+    celles-ci.
+  - Retour à aujourd'hui (10/11/2026) via le calendrier : badge « Historique (reconstitué) » disparaît
+    (`source: "live"` repris, non-régression confirmée en conditions réelles, pas seulement par
+    relecture de code).
+  - Capture d'écran à 360 px (POS) : titre + bouton « Choisir un jour » restent lisibles, pas de
+    chevauchement, boîte modale du calendrier pleinement visible sans défilement.
+  - Toutes les données fictives (catégorie `BreadPrice`, 2 `ProductionSession`, leurs
+    `ProductionSessionLine`/`BreadDisposal`, les 2 `DailyBreadStockSnapshot`) supprimées après
+    vérification — base remise dans l'état où elle a été trouvée, confirmé par requête de contrôle
+    (`BreadPrice.objects.filter(category='E2E_BUG144').count() == 0`,
+    `ProductionSession.objects.filter(date='2026-11-07').count() == 0`).
+- `backend/.venv/Scripts/python.exe manage.py test production sales finance` → **246 tests, OK**
+  (243 de dev-backend + 3 tests de vérification déjà présents dans cette session, antérieurs à ce
+  ticket — voir fichiers `test_verif_bug142_testeur_production.py`/`test_verif_bug143_testeur_production.py`).
+  `cd frontend && npm run build` → build réussi (mêmes avertissements pré-existants sans rapport avec
+  ce ticket, legacy chunk/minifieur).
+- **Point découvert en marge, sans rapport avec BUG-144/145 elles-mêmes** (voir **BUG-148** ci-dessous) :
+  `e2e/tests/05-production.spec.ts` (test existant, non modifié par BUG-144/145) échoue car la boîte
+  modale « Stock de départ du jour » (BUG-133/134) peut rester ouverte/se rouvrir après un délai
+  (chargement asynchrone de `GET .../opening-confirmation/`) et intercepte le clic sur
+  « Enregistrer la Fournée » — le test ne laisse pas assez de temps avant d'interagir avec le
+  formulaire. N'affecte ni BUG-144 ni BUG-145 (dont la propre vérification en tient compte, voir
+  ci-dessus), mais casse la suite E2E officielle du module Production en l'état.
+- Conclusion : **BUG-144 et BUG-145 fonctionnent exactement comme spécifié dans les deux rapports de
+  correction**, contrat API respecté à la lettre, non-régression du cas « aujourd'hui » confirmée en
+  conditions réelles (pas seulement par les tests unitaires), isolation par nœud correcte pour
+  GERANT/FACTURIER/HQ. **Passés à VÉRIFIÉ.**
+- Statut : **VÉRIFIÉ** par testeur-production, 2026-11-10.
+
+### BUG-148 — `e2e/tests/05-production.spec.ts` cassé par la boîte modale « Stock de départ du jour » (timing)
+- Module : Production (test E2E) · Composant : frontend · Gravité : Mineur · Statut : OUVERT
+- Ouvert par : testeur-production le 2026-11-10, en relançant la suite E2E officielle du module
+  Production pendant la vérification de BUG-144/145 (CLAUDE.md §7 règle 4 : construire son propre
+  scénario / relancer l'existant plutôt que de se fier uniquement aux rapports des développeurs).
+- Référence : `OpeningStockConfirmationModal.tsx` (BUG-133/134), monté une seule fois par
+  `DashboardLayout` pour tout compte GERANT non-HQ, interroge `GET
+  /api/production/opening-confirmation/` au montage et à chaque changement de route
+  (`routeKey={location.pathname}`).
+- Étapes pour reproduire :
+  1. `cd e2e && npx playwright test tests/05-production.spec.ts --project=bureau` contre les serveurs
+     de dev réels (`:5173`/`:8000`), avec un compte GERANT K1 pour qui le stock de départ du jour
+     n'est pas encore confirmé (ex. `demo_gerant_k1_e2e` un jour où personne n'a encore confirmé).
+  2. Le test se connecte, va sur `/production`, remplit le formulaire « §3.1 — Déclaration de
+     Fournée », puis clique « Enregistrer la Fournée ».
+  3. Le `GET /api/production/opening-confirmation/` déclenché par `OpeningStockConfirmationModal`
+     peut résoudre avec un léger délai (variable) APRÈS que le reste de la page (et donc le
+     formulaire) soit déjà interactif — la boîte modale « Stock de départ du jour » apparaît alors
+     PENDANT que le test interagit avec le formulaire, et son `.modal-backdrop` intercepte le clic
+     sur « Enregistrer la Fournée ».
+- Résultat attendu : le test devrait dismiss (ou attendre la résolution de) cette boîte modale avant
+  d'interagir avec le formulaire de fournée, ou le composant devrait garantir qu'elle apparaît assez
+  tôt (avant que la page ne soit considérée interactive) pour que le test puisse la gérer de façon
+  déterministe.
+- Résultat observé : `TimeoutError: locator.click: Timeout 10000ms exceeded` sur le clic
+  « Enregistrer la Fournée », `<div class="modal-backdrop">` intercepte les événements pointeur — le
+  test échoue de façon reproductible (confirmé par une re-exécution identique). Reproduit aussi dans
+  mon propre script de vérification temporaire pour BUG-144/145 (contournable en ajoutant un sondage
+  répété du bouton « Plus tard » avant toute interaction, voir note de vérification BUG-145
+  ci-dessus) — donc pas un problème d'environnement isolé à une seule exécution.
+- Analyse : ce n'est pas une régression de BUG-144/145 (ce ticket ne touche ni
+  `OpeningStockConfirmationModal.tsx` ni `05-production.spec.ts`) — la boîte modale existe depuis
+  BUG-133/134 (2026-11-10, plus tôt dans la journée) et `05-production.spec.ts` n'a jamais été mis à
+  jour pour en tenir compte. Signalé comme ticket séparé plutôt que traité sous BUG-144/145
+  (périmètre différent, CLAUDE.md §7 règle 1).
+- Fichiers suspects : `e2e/tests/05-production.spec.ts` (le test ne gère pas cette boîte modale) ;
+  éventuellement `frontend/src/components/production/OpeningStockConfirmationModal.tsx` si l'on
+  souhaite plutôt garantir un affichage plus tôt/plus prévisible côté application (à trancher par le
+  coordinateur — option purement test possible aussi, pas de défaut fonctionnel réel pour un
+  utilisateur humain, qui n'a pas le même timing qu'un script automatisé).
+- Proposition (non tranchée) : dans `05-production.spec.ts`, attendre/dismiss la boîte modale «Stock
+  de départ du jour» (si présente) avant d'interagir avec le formulaire de fournée — même motif que
+  le contournement utilisé dans mon script de vérification temporaire (sondage avec petites attentes
+  répétées avant de considérer la page stable).
+- Portée : n'affecte que la fiabilité de la suite E2E automatisée, pas un défaut applicatif pour un
+  utilisateur réel (qui voit et dismiss la boîte modale normalement, sans contrainte de timeout de
+  10 s). Priorité Mineure.

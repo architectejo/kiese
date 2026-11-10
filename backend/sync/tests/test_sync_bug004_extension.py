@@ -234,11 +234,11 @@ class ConsumableMovementSyncTests(TestCase):
         stock = ConsumableStock.objects.get(node=self.node, consumable_type='FLOUR')
         self.assertEqual(stock.quantity, Decimal('6.000'))
 
-    def test_exit_without_matching_entry_is_rejected_as_missing_dependency_then_retried(self):
-        """BUG-041 côté Cloud : une sortie ne doit jamais faire passer le
-        stock consolidé en négatif — rejetée (dépendance manquante), jamais
-        acceptée silencieusement, et acceptée sans doublon une fois
-        l'entrée correspondante arrivée."""
+    def test_exit_without_matching_entry_is_accepted_and_stock_goes_negative(self):
+        """BUG-143 (annule BUG-041, demande client directe 2026-11-10) : une
+        sortie ne doit plus jamais être rejetée pour stock insuffisant, même
+        côté Cloud — elle est acceptée immédiatement et fait passer le stock
+        consolidé en négatif, sans attendre une entrée correspondante."""
         exit_id = str(uuid.uuid4())
         exit_record = {
             'id': exit_id, 'node': 'K1', 'consumable_type': 'SEL', 'unit': 'g',
@@ -248,8 +248,10 @@ class ConsumableMovementSyncTests(TestCase):
             'batch_id': str(uuid.uuid4()),
             'records': {'production.ConsumableMovement': [exit_record]},
         }, format='json')
-        self.assertEqual(resp1.data['results']['production.ConsumableMovement'][0]['status'], 'REJECTED')
-        self.assertFalse(ConsumableMovement.objects.filter(pk=exit_id).exists())
+        self.assertEqual(resp1.data['results']['production.ConsumableMovement'][0]['status'], 'ACCEPTED')
+        self.assertTrue(ConsumableMovement.objects.filter(pk=exit_id).exists())
+        stock = ConsumableStock.objects.get(node=self.node, consumable_type='SEL')
+        self.assertEqual(stock.quantity, Decimal('-500.000'))
 
         entry_id = str(uuid.uuid4())
         self.api.post('/api/sync/push/', {
@@ -261,15 +263,17 @@ class ConsumableMovementSyncTests(TestCase):
                 }],
             },
         }, format='json')
+        stock.refresh_from_db()
+        self.assertEqual(stock.quantity, Decimal('500.000'))
 
+        # Rejouer le même lot (idempotence) : pas de doublon, le mouvement
+        # existe déjà (upsert UUID), accepté tel quel.
         resp2 = self.api.post('/api/sync/push/', {
             'batch_id': str(uuid.uuid4()),
             'records': {'production.ConsumableMovement': [exit_record]},
         }, format='json')
         self.assertEqual(resp2.data['results']['production.ConsumableMovement'][0]['status'], 'ACCEPTED')
         self.assertEqual(ConsumableMovement.objects.filter(pk=exit_id).count(), 1)
-        stock = ConsumableStock.objects.get(node=self.node, consumable_type='SEL')
-        self.assertEqual(stock.quantity, Decimal('500.000'))
 
 
 class BreadTransferSyncTests(TestCase):

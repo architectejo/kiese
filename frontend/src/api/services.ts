@@ -394,6 +394,27 @@ export interface BreadStock {
   qty_available: number;
 }
 
+/** BUG-144/BUG-145 : catégorie renvoyée par `GET /api/production/bread-stocks/by-date/`
+ *  — shape plus pauvre que `BreadStock` (pas de détail produit/reçu/sorti/disposé) car la
+ *  source change radicalement selon la date (solde courant vs agrégat de snapshots de
+ *  clôture) ; voir docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md. */
+export interface BreadStockByDateCategory {
+  bread_price: number;
+  bread_price_display?: string;
+  unit_price: number;
+  qty_available: number;
+}
+
+export interface BreadStockByDate {
+  node: number;
+  node_display?: string;
+  date: string;
+  /** "live" = date = aujourd'hui (identique au solde courant `BreadStock`) ;
+   *  "snapshot" = date passée reconstituée à partir de `DailyBreadStockSnapshot`. */
+  source: 'live' | 'snapshot';
+  categories: BreadStockByDateCategory[];
+}
+
 export interface ConsumableType {
   id: number;
   code: string;
@@ -1091,6 +1112,11 @@ export const productionApi = {
   breadStocks: {
     list: (params?: Record<string, string>) =>
       getList<BreadStock>('/api/production/bread-stocks/', params),
+    // BUG-145 : « Stock Pains du Jour » — sélecteur de date (remarque.md l.397).
+    // `date` optionnel (défaut aujourd'hui) ; `node` requis explicitement pour un
+    // utilisateur HQ, ignoré/forcé à `user.node` côté serveur sinon.
+    byDate: (params?: { node?: string; date?: string }) =>
+      apiClient.get<BreadStockByDate>('/api/production/bread-stocks/by-date/', { params }),
   },
   consumableTypes: {
     list: (params?: Record<string, string>) =>

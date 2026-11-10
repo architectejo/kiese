@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ProductionSessionViewSet, BreadStockViewSet, ConsumableTypeViewSet, ConsumableStockViewSet,
     ConsumableMovementViewSet, ConsumableCountViewSet, BreadTransferViewSet, BreadDisposalViewSet,
-    DailyClosureReportView, DailyOpeningConfirmationView,
+    DailyClosureReportView, DailyOpeningConfirmationView, BreadStockByDateView,
 )
 
 router = DefaultRouter()
@@ -24,5 +24,11 @@ urlpatterns = [
     # BUG-133 : boîte modale « stock de départ » — avant le routeur, chemin
     # littéral, aucun conflit possible.
     path('opening-confirmation/', DailyOpeningConfirmationView.as_view(), name='daily-opening-confirmation'),
+    # BUG-144 : stock de pains par date (live aujourd'hui / snapshot passé) —
+    # chemin littéral SOUS le préfixe du routeur mais déclaré AVANT lui pour
+    # qu'il ne soit jamais capturé par la route détail `bread-stocks/<pk>/`
+    # du routeur (DRF router matcherait sinon `by-date` comme une PK invalide
+    # avant d'atteindre cette vue si elle était déclarée après `include`).
+    path('bread-stocks/by-date/', BreadStockByDateView.as_view(), name='bread-stock-by-date'),
     path('', include(router.urls)),
 ]

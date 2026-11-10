@@ -12,11 +12,13 @@ import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
+import { StockDuJourSection } from '@/components/production/StockDuJourSection';
 
 const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
 
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
+const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const DISPOSAL_LABELS: Record<string, string> = {
   SOLD_DISCOUNT: 'Pains Soldés',
@@ -81,6 +83,14 @@ export const Production: React.FC = () => {
   const [closingSession, setClosingSession] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
   const [selectedBreadStock, setSelectedBreadStock] = useState<BreadStock | null>(null);
+  // BUG-145 (remarque.md l.397) : un seul sélecteur de date pilote « Stock Pains du Jour »
+  // ET « Historique des Fournées ». `sessions` (KPI, formulaire de sortie non standard —
+  // filtré à "aujourd'hui" indépendamment de ce sélecteur) reste intentionnellement
+  // inchangé ; seul l'affichage de l'historique des fournées utilise `historySessions`.
+  const [selectedDate, setSelectedDate] = useState(todayIso());
+  const [historySessions, setHistorySessions] = useState<ProductionSession[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // §3.2 Approvisionnement
   const [showApproModal, setShowApproModal] = useState(false);
@@ -215,6 +225,20 @@ export const Production: React.FC = () => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewNode, user?.node]);
+
+  // BUG-145 : « Historique des Fournées » filtré par `selectedDate`
+  // (GET /api/production/sessions/?date=...&node=... — filtre déjà existant côté backend,
+  // BUG-144, volet backend). Indépendant de `sessions`, voir commentaire sur son état.
+  useEffect(() => {
+    const nodeFilter = viewNode || user?.node || undefined;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    productionApi.sessions.list(nodeFilter ? { node: nodeFilter, date: selectedDate } : { date: selectedDate })
+      .then(r => setHistorySessions(Array.isArray(r.data) ? r.data : []))
+      .catch(err => setHistoryError(getErrorDetail(err, "Erreur lors du chargement de l'historique des fournées.")))
+      .finally(() => setHistoryLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewNode, user?.node, selectedDate]);
 
   const handleInventoryCount = async () => {
     setCountError(null);
@@ -730,48 +754,33 @@ export const Production: React.FC = () => {
             </form>
           </div>
 
-          {/* Bread stock */}
-          {breadStocks.length > 0 && (
-            <div className="glass-card" style={{ padding: '12px 14px' }}>
-              <h3 style={{ fontSize: '0.8rem', fontWeight: 800, marginBottom: '8px' }}>
-                Stock Pains Actuel
-                {currentNodeLabel && <span className="badge badge-info" style={{ fontSize: '0.6rem', marginLeft: '8px' }}>{currentNodeLabel}</span>}
-              </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {breadStocks.map(bs => (
-                  <div
-                    key={bs.id}
-                    onClick={() => setSelectedBreadStock(bs)}
-                    style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))', fontSize: '0.68rem', cursor: 'pointer', transition: 'background 0.15s' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'hsl(var(--bg-tertiary))')}
-                    onMouseLeave={e => (e.currentTarget.style.background = '')}
-                  >
-                    <div>
-                      <span style={{ fontWeight: 800 }}>{bs.bread_price_display}</span>
-                      <span style={{ color: 'hsl(var(--text-muted))', marginLeft: '6px', fontSize: '0.6rem' }}>
-                        produits: {bs.qty_produced} · reçus: <span style={{ color: 'hsl(var(--color-info))' }}>{bs.qty_received}</span> · sortis: {bs.qty_sent} · disposés: {bs.qty_disposed}
-                      </span>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <span style={{ fontWeight: 800, fontSize: '0.75rem', color: bs.qty_available > 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                        {bs.qty_available} dispo
-                      </span>
-                      <span style={{ display: 'block', fontSize: '0.55rem', color: 'hsl(var(--text-muted))' }}>voir détail</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Stock Pains du Jour — BUG-145 : extrait dans StockDuJourSection.tsx, piloté par
+              `selectedDate`, qui pilote AUSSI « Historique des Fournées » ci-dessous. */}
+          <StockDuJourSection
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            liveBreadStocks={breadStocks}
+            nodeFilter={viewNode || undefined}
+            currentNodeLabel={currentNodeLabel}
+            onSelectBreadStock={setSelectedBreadStock}
+          />
 
-          {/* Session history */}
+          {/* Session history — BUG-145 : filtrée par la même `selectedDate` que ci-dessus. */}
           <div className="glass-card" style={{ padding: '12px 14px' }}>
             <h3 style={{ fontSize: '0.8rem', fontWeight: 800, marginBottom: '8px' }}>
               Historique des Fournées
               {currentNodeLabel && <span className="badge badge-info" style={{ fontSize: '0.6rem', marginLeft: '8px' }}>{currentNodeLabel}</span>}
             </h3>
+            {historyError && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.68rem', color: 'hsl(var(--color-danger))', backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginBottom: '6px' }}>
+                {historyError}
+              </div>
+            )}
+            {historyLoading && (
+              <div style={{ textAlign: 'center', padding: '10px', color: 'hsl(var(--text-secondary))', fontSize: '0.68rem' }}>Chargement...</div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              {sessions.slice(0, 2).map(sess => {
+              {!historyLoading && historySessions.slice(0, 2).map(sess => {
                 const tFC  = sess.total_fc_produced || 0;
                 const thFC = sess.theoretical_yield || 0;
                 const rPct = thFC > 0 ? (tFC / thFC) * 100 : 0;
@@ -803,16 +812,16 @@ export const Production: React.FC = () => {
                   </div>
                 );
               })}
-              {sessions.length === 0 && !isLoading && (
-                <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.7rem' }}>Aucune fournée</div>
+              {historySessions.length === 0 && !historyLoading && (
+                <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.7rem' }}>Aucune fournée ce jour-là</div>
               )}
-              {sessions.length > 2 && (
+              {historySessions.length > 2 && (
                 <button
                   type="button"
                   onClick={() => setShowAllSessionsModal(true)}
                   style={{ marginTop: '4px', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--accent-color))', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0', textAlign: 'center' }}
                 >
-                  ▼ Voir plus ({sessions.length - 2} autres fournées)
+                  ▼ Voir plus ({historySessions.length - 2} autres fournées)
                 </button>
               )}
             </div>
@@ -1316,13 +1325,13 @@ export const Production: React.FC = () => {
       <Modal
         isOpen={showAllSessionsModal}
         onClose={() => setShowAllSessionsModal(false)}
-        title={`Toutes les Fournées (${sessions.length})`}
+        title={`Toutes les Fournées (${historySessions.length})`}
         maxWidth="560px"
         contentPadding="10px 14px"
         footer={<button onClick={() => setShowAllSessionsModal(false)} className="btn btn-secondary" style={{ width: '100%', fontSize: '0.8rem', padding: '7px' }}>Fermer</button>}
       >
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              {sessions.map(sess => {
+              {historySessions.map(sess => {
                 const tFC  = sess.total_fc_produced || 0;
                 const thFC = sess.theoretical_yield || 0;
                 const rPct = thFC > 0 ? (tFC / thFC) * 100 : 0;
@@ -1489,7 +1498,7 @@ export const Production: React.FC = () => {
                     setSavingNotes(true);
                     try {
                       await productionApi.sessions.update(selectedSession.id, { notes: sessionNotes });
-                      setSessions(prev => prev.map(s => s.id === selectedSession.id ? { ...s, notes: sessionNotes } : s));
+                      setHistorySessions(prev => prev.map(s => s.id === selectedSession.id ? { ...s, notes: sessionNotes } : s));
                       setSelectedSession(null);
                     } catch (err) {
                       console.error('Failed to save notes', err);
@@ -1515,7 +1524,7 @@ export const Production: React.FC = () => {
                     setClosingSession(true);
                     try {
                       const res = await productionApi.sessions.close(selectedSession.id);
-                      setSessions(prev => prev.map(s => s.id === selectedSession.id ? res.data : s));
+                      setHistorySessions(prev => prev.map(s => s.id === selectedSession.id ? res.data : s));
                       setSelectedSession(res.data);
                       setSessionNotes(res.data.notes || '');
                     } catch (err: unknown) {
