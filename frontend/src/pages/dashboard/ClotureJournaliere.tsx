@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FiRefreshCw, FiAlertTriangle, FiCalendar } from 'react-icons/fi';
+import { FiRefreshCw, FiAlertTriangle, FiCalendar, FiDownload, FiPrinter } from 'react-icons/fi';
 import { coreApi, productionApi, BakeryNode, DailyClosureReport } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
+import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
 
 // BUG-120 (volet frontend) : écran dédié « Clôture Journalière », réunissant en un seul
 // document le rapport consolidé par catégorie de pain exigé par le client (son document
@@ -11,14 +12,16 @@ import { CalendarPicker } from '@/components/shared/CalendarPicker';
 // Contrat d'API exact : docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md
 // (toujours relire ce rapport avant toute modification des champs ci-dessous).
 
-const formatFC = (value: string | number | null | undefined): string => {
+// Exportées pour réutilisation par l'export Excel / l'impression (BUG-153)
+// — affichage uniquement, aucun calcul métier.
+export const formatFC = (value: string | number | null | undefined): string => {
   if (value === null || value === undefined || value === '') return '—';
   const n = typeof value === 'string' ? parseFloat(value) : value;
   if (Number.isNaN(n)) return '—';
   return Math.round(n).toLocaleString('fr-FR') + ' FC';
 };
 
-const formatQty = (n: number | null | undefined): string => {
+export const formatQty = (n: number | null | undefined): string => {
   if (n === null || n === undefined) return '—';
   return n.toLocaleString('fr-FR');
 };
@@ -88,6 +91,25 @@ export const ClotureJournaliere: React.FC = () => {
     ? (repartitionMode === 'QUANTITE' ? totals.repartition_pct_par_quantite : totals.repartition_pct_par_valeur)
     : [];
 
+  // BUG-153 : export Excel / impression du rapport — remarque.md (après l.410).
+  const currentNode = nodes.find(n => n.code === effectiveNodeCode);
+  const nodeLabel = currentNode ? `${currentNode.code} — ${currentNode.name}` : (effectiveNodeCode || '—');
+
+  const handleExportExcel = () => {
+    if (!report) return;
+    exportClotureToExcel(report, nodeLabel, repartitionMode);
+  };
+
+  const handlePrint = () => {
+    if (!report) return;
+    printClotureReport(
+      report,
+      nodeLabel,
+      repartitionRows,
+      repartitionMode === 'QUANTITE' ? 'par quantité' : 'par valeur (FC)',
+    );
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '0.85rem' }}>
 
@@ -131,6 +153,26 @@ export const ClotureJournaliere: React.FC = () => {
             >
               <FiRefreshCw style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               <span>Actualiser</span>
+            </button>
+            <button
+              onClick={handleExportExcel}
+              disabled={!report}
+              title="Exporter le rapport complet (KPI, répartition, décomposition) en Excel"
+              className="btn btn-secondary"
+              style={{ padding: '5px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '5px', height: '32px' }}
+            >
+              <FiDownload />
+              <span>Exporter en Excel</span>
+            </button>
+            <button
+              onClick={handlePrint}
+              disabled={!report}
+              title="Imprimer le rapport complet (KPI, répartition, décomposition)"
+              className="btn btn-secondary"
+              style={{ padding: '5px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '5px', height: '32px' }}
+            >
+              <FiPrinter />
+              <span>Imprimer</span>
             </button>
           </div>
         </div>

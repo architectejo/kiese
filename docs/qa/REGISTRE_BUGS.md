@@ -38,6 +38,7 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-037 | La clôture de caisse n'interroge jamais `production.BreadTransfer` : un transfert entrant avec un écart de quantité non résolu (`quantity_gap`) n'empêche pas la création/le versement d'une clôture (CLAUDE.md §5.4) | Trésorerie/Production | backend | Majeur | VÉRIFIÉ | testeur-tresorerie | dev-backend | testeur-tresorerie |
 | BUG-016 | Audit remarque.md non traité — Tableau de bord, Finance, Permissions, Nodes (lignes 52-83, 87, 100-106, 110, 140, 158-165, 202, 208-214) | Finance/Dashboard/Permissions | backend/frontend | À qualifier | REJETÉ (périmètre intégralement couvert : partie permissions/dashboard/nodes par testeur-permissions — l.110/l.160 `[c]`, l.52-83 → BUG-027, isolation transversale → BUG-022/023/024/025/026 ; partie Finance par auditeur-comptable le 2026-10-23 — l.87 vérifiée conforme `[c]`, formule CM cahierDesCharges §2.3.1-2.3.2 conforme, écart structurel vs `cadre_comptable.md` documenté séparément dans `docs/qa/ECART_CADRE_COMPTABLE.md`, 1 anomalie réelle trouvée par recoupement Excel → BUG-058) | coordinateur | testeur-permissions + auditeur-comptable | coordinateur |
 | BUG-058 | `ClientCommission.compute()` déduit systématiquement CARTE (1 % du CM) et REMISE (0,1 % du CM) du Net à Payer, alors que les classeurs réels d'août 2026 (K1/K2/K3) ne déduisent jamais ces deux montants de la formule NET A PAYER | Commissions | backend | Majeur | VÉRIFIÉ | auditeur-comptable | dev-backend | testeur-clients-commissions |
+| BUG-153 | « Clôture Journalière » : aucune possibilité d'exporter (Excel) ni d'imprimer les sections du rapport (remarque.md, après l.410) | Trésorerie/Production | frontend | Mineur | VÉRIFIÉ | coordinateur | dev-frontend | testeur-production |
 | BUG-017 | `_generate_client_code` sans verrou : création de client concurrente peut planter (IntegrityError) au lieu de produire des codes uniques | Clients | backend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | testeur-clients-commissions |
 | BUG-088 | `ClientCreateSerializer` n'expose ni `id` ni `code` dans la réponse de création d'un client — `clientsApi.create()` renvoie un objet sans identifiant, cassant silencieusement la création auto du « Client Occasionnel » (`Clients.tsx` ligne ~600) en vente directe au comptoir | Clients | backend/frontend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | testeur-clients-commissions |
 | BUG-089 | `ClientViewSet` (`IsGerant`) refuse (403) la création de client à un FACTURIER — casse silencieusement le flux « Client Occasionnel » de `Clients.tsx` (vente directe au comptoir) pour ce rôle, découvert en vérifiant BUG-088 | Clients | backend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | — |
@@ -161,6 +162,8 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-149 | remarque.md (après l.404) : bouton Superuser pour réinitialiser toutes les données sauf Config/Node/User/liste des clients — nouvel endpoint `GET/POST /api/core/reset-data/` (voir fiche pour le contrat complet et la liste exacte conservée/supprimée) | Transversal (core) | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
 | BUG-150 | Ticket lié à BUG-149, pour `dev-frontend` : implémenter le bouton « Réinitialiser les données » (écran Configuration, visible seulement si `user.is_superuser`) + boîte de confirmation double (phrase exacte + mot de passe) consommant `GET/POST /api/core/reset-data/` — voir le contrat API documenté dans docs/qa/rapports/dev-backend-2026-11-10-bug149-reset-superuser.md | Configuration | frontend | Majeur | VÉRIFIÉ | dev-backend, 2026-11-10 (nouveau contrat d'API à consommer, CLAUDE.md §4/§7 règle : tout changement de contrat ouvre un ticket frontend lié) | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
 | BUG-151 | Demande client (remarque.md, après l.406) : depuis « Production & Stocks », possibilité de confirmer manuellement le reste d'hier pour l'équipe qui n'a pas le créneau d'ouverture, une fois celle-ci déjà confirmée automatiquement (BUG-139/140/141) — `OpeningConfirmationManualSection.tsx` + `openingConfirmationStore.ts` + prop `forceOpenForTeam` sur `OpeningStockConfirmationModal.tsx` (voir fiche détaillée ci-dessous ; ligne de synthèse ajoutée après coup par `testeur-production`, la fiche existait déjà mais pas cette ligne) | Production | frontend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-152 | Demande client (remarque.md, après l.408) : le « RESTE DU JOUR » par catégorie (BUG-118) doit pouvoir se déclarer EN MÊME TEMPS que l'action « Clôturer la fournée » (`POST /api/production/sessions/<pk>/close/`), pas via le formulaire séparé `BreadDisposalViewSet` (REMAINING) pré-rempli au préalable — nouveau champ optionnel `remaining` dans le corps de `close()` (voir fiche détaillée ci-dessous ; contrat API pour `dev-frontend`) | Production | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-154 | Ticket lié à BUG-152, pour `dev-frontend` : au clic « Clôturer la fournée » (`Production.tsx`), ouvrir une boîte modale demandant le « Reste du Jour » par catégorie produite et l'envoyer en un seul appel via le nouveau champ `remaining` de `close()`, au lieu de clôturer directement — nouveau composant `CloseSessionModal.tsx` (voir fiche détaillée ci-dessous) | Production | frontend | Majeur | VÉRIFIÉ | dev-backend (BUG-152), relayé par le coordinateur, 2026-11-10 | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
 
 ## Fiches détaillées
 
@@ -14094,3 +14097,340 @@ compte, pas tranché unilatéralement.
   ouvert) : la ligne de synthèse de ce ticket manquait dans le tableau de suivi (seule la fiche
   détaillée existait) — ajoutée par ce testeur ci-dessus.
 - Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+---
+
+### BUG-153 — [frontend] Export Excel et impression du rapport « Clôture Journalière »
+
+- Demande client (remarque.md, après l.410) : « Sur "Clôture Journalière" on doit avoir la
+  possibilité d'exporter (format Excel) et d'imprimer les différentes sections. »
+- Numéro de ticket : au moment de l'ouverture, `BUG-151` était le dernier numéro utilisé dans le
+  tableau de suivi ; `BUG-152` m'a été signalé comme réservé en parallèle par `dev-backend` pour un
+  ticket sans rapport avec celui-ci. Vérification faite dans le registre (`grep BUG-15`) : aucune
+  trace de `BUG-152`/`BUG-153` au moment de l'écriture de cette fiche → `BUG-153` pris directement,
+  aucune collision, aucune renumérotation nécessaire.
+- Périmètre : `frontend/src/pages/dashboard/ClotureJournaliere.tsx` (BUG-120/135, déjà `VÉRIFIÉ`
+  formule à formule contre les Excel réels du client) — **aucun calcul touché**, uniquement l'ajout
+  d'un export Excel et d'une impression reprenant l'affichage existant. Aucun fichier backend
+  modifié (aucun nouvel endpoint nécessaire, toutes les données étaient déjà chargées côté client).
+- Cause : la page affichait le rapport consolidé à l'écran uniquement ; aucune bibliothèque de
+  génération de classeur Excel n'était installée dans le projet et aucun mécanisme d'impression
+  n'existait sur cette page (contrairement à Treasury.tsx qui en a plusieurs).
+- Correctif :
+  - Dépendance ajoutée : `xlsx` (SheetJS) dans `frontend/package.json`/`package-lock.json`. Choix
+    du build officiel publié sur le CDN SheetJS (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`)
+    plutôt que la version `0.18.5` du registre npm : `npm audit` signale deux CVE hautes sur la
+    série npm (« Prototype Pollution », GHSA-4r6h-8v6p-xvw6, corrigée en `<0.19.3`, et un ReDoS,
+    GHSA-5pgg-2g8v-p4x9, corrigé en `<0.20.2`) — SheetJS a cessé de publier les versions corrigées
+    sur npm et recommande officiellement d'installer depuis son propre CDN. Les deux CVE concernent
+    de toute façon la **lecture** de classeurs non fiables (notre usage est exclusivement en
+    **écriture**, aucun fichier n'est jamais parsé par cet outil dans l'app), mais la version patchée
+    était disponible sans effort supplémentaire : retenue par prudence. `npm audit` ne signale plus
+    `xlsx` après ce choix (vulnérabilités résiduelles affichées = préexistantes, sans rapport,
+    `axios`/`vite`/`vitest`/`react-router`/etc., non traitées par ce ticket).
+  - `frontend/src/utils/clotureReportExport.ts` (nouveau — CLAUDE.md §4, extraction plutôt que
+    d'alourdir la page) : deux fonctions exportées :
+    - `exportClotureToExcel(report, nodeLabel, repartitionMode)` : construit un classeur `.xlsx`
+      réel (pas un CSV) à 3 feuilles — **Résumé KPI**, **Répartition par catégorie** (les deux modes
+      quantité/valeur sont exportés intégralement, pour ne perdre aucune information par rapport à
+      l'écran), **Décomposition par catégorie de pain** (toutes les colonnes du tableau détaillé).
+      Choix documenté : 3 feuilles distinctes plutôt qu'une seule feuille à sections empilées, plus
+      simple à manipuler dans Excel (tri/filtre par feuille) ; à rouvrir si le client préfère une
+      feuille unique. Les montants et quantités sont des **nombres natifs** (pas des chaînes
+      formatées avec séparateurs) avec un format d'affichage de cellule appliqué (`#,##0" FC"` pour
+      les montants, `#,##0` pour les quantités, `0.00"%"` pour les pourcentages) — CLAUDE.md §4 :
+      permet au client de recalculer dans Excel tout en affichant un format proche de l'écran.
+      Nom de fichier : `cloture-journaliere-<CODE_NOEUD>-<AAAA-MM-JJ>.xlsx` (ex.
+      `cloture-journaliere-K1-2026-11-10.xlsx`), boulangerie et date également rappelées en en-tête
+      de chaque feuille.
+    - `printClotureReport(report, nodeLabel, repartitionRows, repartitionModeLabel)` : réutilise
+      strictement le motif déjà établi dans `Treasury.tsx` (`window.open('', '_blank', ...)` +
+      écriture du HTML + `<script>window.onload = () => { window.print(); window.onafterprint = ()
+      => window.close(); };</script>`), pas de nouveau mécanisme inventé. Reprend les trois zones
+      (bandeau KPI, répartition par catégorie dans le mode actuellement sélectionné à l'écran,
+      décomposition par catégorie de pain), mise en page impression dédiée (`@page { size:
+      landscape }`, `page-break-inside: avoid` sur les lignes de tableau pour éviter une coupure au
+      milieu d'une ligne), aucun bouton/navigation dans la sortie imprimée.
+    - Interprétation du pluriel « les différentes sections » (remarque.md) : un bouton global
+      couvrant la totalité du rapport (KPI + répartition + décomposition) a été retenu comme
+      interprétation raisonnable et suffisante, plutôt que des boutons par section — rien d'autre
+      dans `remarque.md` ne précise davantage ce point (CLAUDE.md §7 règle 6 : signalé ici par
+      prudence plutôt que deviné indéfiniment, mais une version fonctionnelle livrée pour ne pas
+      bloquer). Export ET impression couvrent chacun la totalité des trois zones en un clic.
+  - `frontend/src/pages/dashboard/ClotureJournaliere.tsx` : les deux helpers de formatage internes
+    (`formatFC`, `formatQty`) sont désormais `export`és (aucun changement de comportement) afin
+    d'être réutilisés par l'utilitaire d'impression sans dupliquer la logique d'affichage. Deux
+    nouveaux boutons ajoutés dans le bandeau d'en-tête, à côté de « Actualiser » : « Exporter en
+    Excel » (`FiDownload`) et « Imprimer » (`FiPrinter`), tous deux désactivés tant qu'aucun rapport
+    n'est chargé (`disabled={!report}`), cohérents avec les icônes `react-icons/fi` déjà utilisées
+    partout dans l'app.
+  - Aucun calcul métier touché, aucun nouveau `any`, aucun appel axios direct ajouté (l'utilitaire
+    ne fait aucun appel réseau, il met en forme les données déjà chargées par la page).
+- Vérification :
+  - `npx tsc --noEmit` (frontend/) : aucune erreur.
+  - `npm run build` (frontend/) : succès (`exit code 0`), 119 modules transformés, mêmes
+    avertissements préexistants (minifier `oxc` non supporté pour les chunks legacy, chunk
+    `index-legacy` > 500 kB après minification), aucun nouvel avertissement lié à `xlsx`.
+  - Pas de test E2E Playwright dédié à cette page trouvé dans `e2e/`. Étapes de vérification
+    manuelle pour le testeur :
+    1. Backend `python manage.py runserver` + frontend `npm run dev`. Compte Direction/Siège ou
+       gérant d'un nœud non-siège, aller sur « Clôture Journalière », choisir une date avec des
+       données.
+    2. Cliquer « Exporter en Excel » : un fichier `cloture-journaliere-<CODE>-<AAAA-MM-JJ>.xlsx` est
+       téléchargé, s'ouvre dans Excel/LibreOffice sans avertissement, contient 3 feuilles (Résumé
+       KPI / Répartition par catégorie / Décomposition par catégorie), les montants et quantités
+       sont des nombres (alignés à droite, triables, utilisables dans une formule), affichés avec
+       `FC`/`%` suffixés par le format de cellule.
+    3. Cliquer « Imprimer » : une fenêtre s'ouvre, l'aperçu d'impression affiche les trois zones
+       (indicateurs, répartition, décomposition), aucun bouton ni menu de l'application n'apparaît
+       dans l'aperçu, aucune ligne de tableau n'est coupée au milieu entre deux pages (à vérifier en
+       aperçu sur un rapport avec beaucoup de catégories de pain).
+    4. Vérifier à 360 px (POS) que les deux nouveaux boutons restent accessibles dans le bandeau
+       d'en-tête (passage à la ligne autorisé, `flexWrap: 'wrap'` déjà en place) et que rien ne
+       déborde hors écran.
+    5. Vérifier qu'un rapport vide (aucune catégorie) ne fait pas planter l'export/l'impression
+       (`Aucune donnée.` affiché dans les tableaux correspondants).
+- Fichiers : `frontend/src/utils/clotureReportExport.ts` (nouveau),
+  `frontend/src/pages/dashboard/ClotureJournaliere.tsx`, `frontend/package.json`,
+  `frontend/package-lock.json`.
+- Statut : `CORRIGÉ` (`dev-frontend`, 2026-11-10). Ne pas passer à `VÉRIFIÉ` (CLAUDE.md §7 règle 3) —
+  à faire par le testeur d'origine ou le coordinateur.
+- Vérification (`testeur-production`, 2026-11-10) : relu `clotureReportExport.ts` en entier — aucun
+  recalcul, uniquement `parseFloat` des chaînes Decimal déjà utilisées par l'écran (mêmes champs que
+  `formatFC`/`formatQty`, réexportés tels quels pour l'impression) ; les 3 feuilles Excel (KPI,
+  répartition quantité+valeur, décomposition 18 colonnes) et le document imprimé reprennent
+  fidèlement les mêmes zones/valeurs que l'écran, sans aucun champ inventé. L'impression réutilise
+  strictement le motif `window.open` + `window.print()` de `Treasury.tsx`, sans rien modifier dans la
+  page existante. Confirmé `frontend/package.json`/`package-lock.json` pointent bien
+  `xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, et que `node_modules/xlsx/package.json`
+  installé est bien la version `0.20.3` (au-delà des deux seuils CVE `<0.19.3` et `<0.20.2`) ;
+  `npm audit` ne signale plus `xlsx` (seules des vulnérabilités préexistantes et sans rapport —
+  axios, follow-redirects, form-data, react-router — subsistent, non traitées ici). `npx tsc --noEmit`
+  et `npm run build` passent (mêmes avertissements préexistants que ceux déjà signalés par
+  `dev-frontend`, aucun nouveau). Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+### BUG-152 — [backend] Déclarer le « RESTE DU JOUR » par catégorie EN MÊME TEMPS que la clôture de fournée
+
+- Demande client (remarque.md, après l.408) : « Lorsqu'on clôture une fournée les restes des pains
+  en stock en tenant compte de la catégorie doivent aller dans la clôture journalière reste du jour
+  selon la catégorie. »
+- Clarifié avec le coordinateur avant de commencer : le calcul/la lecture du « RESTE DU JOUR » par
+  catégorie (`DailyBreadStockSnapshot.qty_at_close`, BUG-118, déjà VÉRIFIÉ, utilisé par le rapport de
+  Clôture Journalière BUG-120/135, également VÉRIFIÉ) ne change PAS — ce qui change, c'est le MOMENT
+  et la MANIÈRE de saisir la donnée source (`BreadDisposal` type `REMAINING`) : elle doit pouvoir
+  être saisie EN MÊME TEMPS que le clic « Clôturer la fournée », en un seul geste, au lieu d'exiger
+  un passage préalable par le formulaire séparé existant (`BreadDisposalViewSet`).
+- Cause (avant correctif) : `ProductionSessionViewSet.close()` appelait
+  `DailyBreadStockSnapshot.record_snapshot(session)` qui lit les `BreadDisposal REMAINING` déjà
+  rattachés à la session — mais rien ne permettait de CRÉER ces lignes dans le même appel ; il
+  fallait obligatoirement les avoir pré-déclarées séparément via `POST /api/production/disposals/`
+  avant de clôturer.
+- Correctif (`backend/production/views.py`, `ProductionSessionViewSet.close()`) :
+  - Nouveau champ optionnel du corps de `POST /api/production/sessions/<pk>/close/` :
+    ```json
+    {
+      "remaining": [
+        {"bread_price": 12, "quantity": 30},
+        {"bread_price": 15, "quantity": 0}
+      ]
+    }
+    ```
+    - `bread_price` : PK (int) d'une `BreadPrice` existante — requis par entrée.
+    - `quantity` : entier ≥ 0 — requis par entrée. Toute quantité négative, tout `bread_price`
+      manquant/introuvable, ou un `remaining` qui n'est pas une liste → **400**
+      `{"detail": "..."}`, et RIEN n'est appliqué (session non clôturée, aucune disposition créée,
+      aucun snapshot — validation faite avant toute écriture).
+    - Catégories non listées dans `remaining` : inchangé par rapport à avant (si elles ont déjà une
+      ligne `REMAINING` pré-déclarée séparément, elle reste telle quelle ; sinon, `record_snapshot()`
+      les considère écoulées à 0, comme avant ce ticket).
+  - Si `remaining` est **absent** du corps (ou `null`) : comportement **strictement inchangé** —
+    non-régression BUG-118 explicitement couverte par un test (voir plus bas).
+  - Si fourni : pour chaque entrée, le `BreadDisposal` de type `REMAINING` rattaché à CETTE session
+    pour cette `bread_price` est créé OU **remplacé** (idempotent — un nouvel appel avec les mêmes
+    valeurs, ex. retenté après une erreur réseau, ne duplique rien ; si une ligne avait déjà été
+    déclarée séparément au préalable pour cette catégorie via le formulaire existant, elle est
+    écrasée par la valeur fournie ici). Décision documentée (pas d'ambiguïté métier restante selon
+    moi) : remplacement propre plutôt qu'addition, le plus prévisible pour l'utilisateur qui vient de
+    saisir ces valeurs à l'écran de clôture.
+  - Ces créations/remplacements se font dans la **même transaction atomique** (`transaction.atomic()`)
+    que le reste de `close()` (fige `is_closed`/`closed_at`/`closure_summary`, appelle
+    `record_snapshot()`) : soit tout réussit, soit rien n'est appliqué.
+  - Confirmé (et couvert par un test dédié, pas seulement supposé) : les lignes `REMAINING` créées via
+    `remaining` n'affectent JAMAIS le recoupement agrégé (`closure_summary['returns']`,
+    `reliquat_breads`/`nv_breads`/`anomaly`) — `_build_reconciliation_querysets` exclut explicitement
+    le type `REMAINING` de `disposals_qs`, ET le calcul d'écart (`_compute_reconciliation`) est
+    exécuté AVANT la création de ces lignes dans `close()`.
+  - Le formulaire séparé existant (`POST /api/production/disposals/`, type `REMAINING`) n'est PAS
+    modifié et reste disponible en parallèle pour qui veut continuer à déclarer le reste avant de
+    clôturer.
+- Changement de contrat d'API : `POST /api/production/sessions/<pk>/close/` accepte maintenant un
+  corps optionnel (il acceptait déjà un corps vide avant ce ticket — aucun champ existant renommé,
+  retiré, ni de code HTTP changé pour l'appel sans `remaining`). **Ticket lié ouvert séparément pour
+  `dev-frontend`** : boîte de dialogue à la clôture demandant le reste par catégorie, consommant ce
+  nouveau contrat — voir rapport `docs/qa/rapports/dev-backend-2026-11-10-bug152-reste-jour-integre-cloture.md`
+  pour le contrat exact et des exemples JSON supplémentaires (succès, erreurs).
+- Tests (`backend/production/tests/test_daily_stock_snapshot.py`, nouvelle classe
+  `CloseWithRemainingBodyTests`, qui échouaient avant ce correctif et passent après) :
+  - `test_close_with_remaining_body_creates_per_category_snapshot_without_predeclared_disposal` :
+    clôture avec `remaining` rempli pour 2 catégories, SANS aucune disposition pré-déclarée → snapshot
+    correct par catégorie, 2 `BreadDisposal REMAINING` créés par `close()` lui-même, stock physique
+    global inchangé.
+  - `test_close_with_remaining_is_idempotent_and_overrides_predeclared_disposal` : une ligne
+    `REMAINING` pré-déclarée séparément (quantité 999) est remplacée (pas additionnée) par la valeur
+    fournie dans `remaining` (40) — une seule ligne `REMAINING` au final.
+  - `test_close_with_negative_remaining_quantity_rejected_and_nothing_applied` : quantité négative →
+    400, session non clôturée, aucun `BreadDisposal` créé, aucun snapshot.
+  - `test_close_without_remaining_body_is_unchanged` : non-régression BUG-118 explicite — corps vide,
+    disposition `REMAINING` pré-déclarée séparément → comportement identique à avant ce ticket.
+  - `test_remaining_breads_do_not_affect_closure_summary_gap` : confirme noir sur blanc (pas seulement
+    supposé) que les lignes `REMAINING` créées via `remaining` ne sont jamais comptées dans
+    `closure_summary['returns']`/`gap`/`nv`/`anomaly`.
+  - Les 7 tests déjà existants dans ce fichier (classe `DailyBreadStockSnapshotTests`, BUG-118)
+    continuent de passer sans modification — non-régression confirmée.
+- Vérification : `backend/.venv/Scripts/python.exe manage.py test production sales finance` →
+  **251 tests, OK** (aucune régression). `backend/.venv/Scripts/python.exe manage.py
+  makemigrations --check --dry-run` → `No changes detected` (aucun champ de modèle ajouté, comme
+  attendu : `BreadDisposal`/`DailyBreadStockSnapshot` existaient déjà, seul le code de la vue change).
+- Fichiers modifiés : `backend/production/views.py` (`ProductionSessionViewSet.close()`),
+  `backend/production/tests/test_daily_stock_snapshot.py` (nouvelle classe de tests).
+- Impact : aucun champ de modèle ajouté, aucune migration. Changement de contrat d'API additif
+  (champ optionnel), rétro-compatible — ticket frontend séparé à ouvrir par le coordinateur pour la
+  boîte de dialogue de saisie à la clôture.
+- Statut : `CORRIGÉ` (`dev-backend`, 2026-11-10). Ne pas passer à `VÉRIFIÉ` (CLAUDE.md §7 règle 3) —
+  à faire par le testeur d'origine (`testeur-production`) ou le coordinateur.
+- Vérification (`testeur-production`, 2026-11-10) : relu le code final de `close()` (validation
+  intégrale de `remaining` AVANT toute écriture, dans un bloc séparé du `transaction.atomic()` qui
+  suit — un 400 ne touche donc ni `BreadDisposal` ni la session) et construit moi-même 4 scénarios
+  bout-en-bout indépendants (fichier temporaire, supprimé après vérification, non livré) :
+  1. Fournée multi-catégories, clôture avec `remaining` couvrant toutes les catégories y compris une
+     à 0 explicite → `DailyBreadStockSnapshot.qty_at_close` correct par catégorie (30 et 0), ET
+     `closure_summary` (`production_declared`=150, `sales`=0, `returns`=0, `gap`=150, `nv`=150,
+     `anomaly`=False) strictement égal au calcul attendu sans aucun effet des lignes `REMAINING`.
+  2. Non-régression explicite : pré-déclaration séparée via `POST /api/production/disposals/`
+     (REMAINING, qté 25) puis `close()` SANS `remaining` → snapshot = 25, une seule ligne
+     `BreadDisposal REMAINING`, comportement identique à avant BUG-152 (BUG-118 historique).
+  3. Deux équipes A et B clôturant le même jour/nœud/catégorie, chacune avec son propre `remaining`
+     (10 et 45) → deux snapshots distincts (`unique_together` incluant `team` en garantit
+     structurellement l'isolation), chacun rattaché à sa propre session/disposition — aucun
+     écrasement croisé.
+  4. Quantité négative dans `remaining` → 400, session `is_closed` toujours `False`, `closed_at`
+     toujours `None`, aucun nouveau `BreadDisposal` ni `DailyBreadStockSnapshot` créé (compté avant/
+     après l'appel).
+  Les 4 scénarios passent. Relancé ensuite `backend/.venv/Scripts/python.exe manage.py test
+  production sales finance` en entier (255 tests avec les 4 nouveaux tests de `dev-backend` déjà en
+  place) → **255 tests, OK**, aucune régression. `npm run build` (frontend, nécessaire pour BUG-154
+  lié) → succès.
+  Note d'environnement (sans rapport avec le code applicatif, signalée au coordinateur) : pendant
+  cette vérification, deux processus `manage.py test production sales finance` concurrents ont été
+  observés (un sous `.venv`, un sous l'interpréteur système `C:\Program Files\Python312\python.exe`)
+  — résultat final néanmoins correct (255 tests, OK) une fois les deux terminés, mais à surveiller :
+  le serveur de développement actif sur `0.0.0.0:8000` (PID constaté, utilisé en direct par le
+  client) tourne lui aussi sous l'interpréteur système et non sous `.venv`, contrairement à ce qui
+  était attendu — aucune action prise sur ces processus (ni arrêt ni relance), signalement uniquement.
+  Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+### BUG-154 — [frontend] Boîte modale « Reste du Jour » par catégorie lors de la clôture de fournée
+
+- Ticket lié à BUG-152 (volet backend, `CORRIGÉ`) — contrat API consommé tel que documenté dans
+  `docs/qa/rapports/dev-backend-2026-11-10-bug152-reste-jour-integre-cloture.md` :
+  `POST /api/production/sessions/<pk>/close/` accepte désormais un corps optionnel
+  `{"remaining": [{"bread_price": <id>, "quantity": <entier >= 0>}, ...]}`.
+- Numéro de ticket : vérifié dans le registre (`grep BUG-15`) juste avant l'écriture de cette fiche —
+  `BUG-153` déjà pris (export Excel/impression Clôture Journalière, sujet sans rapport) → `BUG-154`
+  pris directement.
+- Avant ce ticket : le bouton « Clôturer la fournée » (`Production.tsx`, détail d'une fournée)
+  clôturait directement au clic (après `window.confirm` texte), sans aucune saisie de reste —
+  l'utilisateur devait passer par le formulaire séparé « Stock Restant » (§3.4, `BreadDisposal`
+  REMAINING) AVANT de clôturer pour que le reste soit pris en compte dans le snapshot journalier.
+- Correctif :
+  - Nouveau composant `frontend/src/components/production/CloseSessionModal.tsx` (extraction
+    conforme à CLAUDE.md §4, dans la continuité de `StockDuJourSection.tsx` BUG-145 et
+    `OpeningConfirmationManualSection.tsx` BUG-151 — `Production.tsx` dépasse largement 1000 lignes) :
+    - Affiche une ligne par catégorie produite par la fournée (`session.lines`), avec un champ
+      numérique « Reste du Jour » (entier ≥ 0 via `min={0}` + arrondi défensif côté `onChange`,
+      valeur par défaut **0** — pas pré-rempli avec `BreadStock.qty_available`, volontairement
+      découplé du stock physique global comme demandé, voir docstring de
+      `DailyBreadStockSnapshot` côté backend).
+    - À l'ouverture, tente un pré-remplissage non bloquant depuis un éventuel reste déjà déclaré
+      séparément : `productionApi.disposals.list({ session: session.id, disposal_type: 'REMAINING' })`
+      (filtre backend déjà existant, `filterset_fields` de `BreadDisposalViewSet` incluant `session`
+      et `disposal_type` — vérifié dans `backend/production/views.py` avant d'écrire l'appel). Ce
+      n'était pas récupérable trivialement depuis les données déjà chargées par `Production.tsx` : sa
+      liste `disposals` en page n'est filtrée que par `node`, tronquée aux 20 plus récentes, sans
+      garantie d'inclure la session affichée — un appel réseau supplémentaire, ciblé, a donc été fait
+      plutôt que de deviner/approximer. Échec de cet appel → non bloquant, les champs restent à 0.
+    - Au clic « Confirmer la clôture » : envoie `remaining` avec UNE entrée par catégorie produite,
+      **y compris les catégories laissées à 0** (comportement « tout est vendu » explicite, conforme
+      à BUG-118/BUG-152 — jamais omis).
+    - Erreur 400 du serveur (ex. quantité négative, bien qu'empêchée côté UI par `min={0}` et le
+      clamp dans `handleQtyChange` ; ou session déjà clôturée en cas de double-clic/retry) : affichée
+      dans la boîte via `getErrorDetail` (`src/api/errors.ts`), la boîte **reste ouverte**, les
+      valeurs saisies sont conservées, rien n'est perdu.
+  - `frontend/src/api/services.ts` : `productionApi.sessions.close(id, data?)` accepte désormais un
+    second paramètre optionnel `{ remaining?: Array<{ bread_price: number; quantity: number }> }` —
+    appel historique sans second argument strictement inchangé (`apiClient.post(url, undefined)`).
+  - `frontend/src/pages/dashboard/Production.tsx` :
+    - Le bouton « Clôturer la fournée » n'appelle plus directement l'API ; il ouvre
+      `CloseSessionModal` (`setCloseSessionModalOpen(true)`), qui gère elle-même la confirmation,
+      l'appel et les erreurs — l'ancien `window.confirm` texte est remplacé par le contenu explicite
+      de la boîte (même avertissement sur l'irréversibilité, reformulé dans la boîte).
+    - États `closingSession`/`closeError` (devenus inutiles, remplacés par l'état interne de
+      `CloseSessionModal`) retirés, ainsi que le bloc d'erreur correspondant dans la boîte « Détail
+      Fournée ».
+    - Le formulaire séparé « Stock Restant » (§3.4, `handleDisposal`, sélecteur `dType === 'REMAINING'`)
+      n'a PAS été touché — toujours disponible, cohabite avec le nouveau chemin, comme demandé.
+- Vérifications effectuées :
+  - `npx tsc --noEmit` → aucune erreur.
+  - `npm run build` → exit code 0 ; seuls avertissements présents : `oxc minifier`/taille de chunk
+    (`vite:terser`, legacy chunk > 500 kB) — préexistants, sans rapport avec ce ticket, aucun nouvel
+    avertissement TypeScript/ESLint introduit.
+  - Aucun fichier backend ouvert ni modifié (interdit par la mission — déjà traité sous BUG-152).
+  - Pas de nouveau `any` introduit (`err: unknown` partout, typé via `getErrorDetail`).
+  - Modale conforme au composant `Modal.tsx` partagé : `maxHeight: 90vh` + corps scrollable interne
+    (`overflowY: auto`), donc visible sans défilement de la page (point signalé par le client sur
+    d'autres boîtes) ; `footer` séparé avec boutons « Annuler »/« Confirmer la clôture » toujours
+    visibles.
+- Vérification manuelle recommandée pour le testeur (pas de test E2E dédié trouvé pour ce parcours
+  précis — `e2e/tests/05-production.spec.ts` couvre la création/clôture simple mais pas la saisie du
+  reste par catégorie ; je n'ai pas ajouté de test E2E, CLAUDE.md §7 règle 2 réserve l'écriture de
+  tests aux testeurs, pas aux développeurs) :
+  1. Créer une fournée avec au moins 2 catégories de pain, ouvrir son détail, cliquer « Clôturer la
+     fournée » → la boîte « Reste du Jour » s'ouvre (pas de clôture immédiate), une ligne par
+     catégorie, valeur par défaut 0.
+  2. Saisir un reste > 0 sur une catégorie, 0 sur l'autre, confirmer → la fournée passe à clôturée
+     (`closure_summary` affiché), vérifier via `GET /api/production/disposals/?session=<id>&disposal_type=REMAINING`
+     qu'il y a bien une ligne par catégorie avec les quantités saisies (y compris la ligne à 0).
+  3. Pré-déclarer séparément un reste via le formulaire « Stock Restant » (§3.4) pour une fournée du
+     jour NON clôturée, puis ouvrir la boîte de clôture sur cette même fournée → le champ correspondant
+     doit arriver pré-rempli avec la valeur déjà déclarée.
+  4. Scénario d'erreur serveur (ex. couper le réseau ou simuler un 400) : la boîte doit rester ouverte
+     avec un message clair, sans perdre les valeurs saisies.
+  5. Vérifier à 360 px (POS) et 768 px que les champs numériques restent utilisables et que la boîte
+     ne nécessite pas de défilement de la page pour voir les boutons de confirmation.
+- Fichiers modifiés/ajoutés :
+  - `frontend/src/components/production/CloseSessionModal.tsx` (nouveau).
+  - `frontend/src/api/services.ts` (`productionApi.sessions.close`, signature étendue).
+  - `frontend/src/pages/dashboard/Production.tsx` (bouton de clôture → ouverture de la boîte, retrait
+    des états `closingSession`/`closeError` devenus inutiles).
+  - `docs/qa/REGISTRE_BUGS.md` (cette fiche + ligne de synthèse dans le tableau de suivi).
+- Statut : `CORRIGÉ` (`dev-frontend`, 2026-11-10). Je ne passe jamais mes propres corrections à
+  `VÉRIFIÉ` (CLAUDE.md §7 règle 3) — à faire par le testeur d'origine (`testeur-production`) ou le
+  coordinateur.
+- Vérification (`testeur-production`, 2026-11-10) : relu `CloseSessionModal.tsx`, le câblage dans
+  `Production.tsx` (bouton « Clôturer la fournée » → `setCloseSessionModalOpen(true)` →
+  `<CloseSessionModal isOpen session onClose onClosed>`) et `productionApi.sessions.close` dans
+  `services.ts`. Confirmé par lecture de code (étapes 1-4 de la liste de vérification manuelle
+  ci-dessus) :
+  - `handleConfirm()` construit `remaining` par `categories.map(...)` sur `session.lines` — TOUTES
+    les catégories produites sont systématiquement incluses, y compris celles restées à 0
+    (`quantities[line.bread_price] ?? 0`), jamais omises.
+  - Le pré-remplissage à l'ouverture (`useEffect`) interroge
+    `GET /api/production/disposals/?session=<id>&disposal_type=REMAINING`, scopé par session, et
+    fusionne les valeurs trouvées dans l'état par défaut (toutes à 0) sans bloquer si l'appel échoue
+    (`.catch(() => {})`) — cohérent avec le scénario 3 de la liste de vérification manuelle.
+  - Scénario bout-en-bout construit indépendamment (voir fiche BUG-152 ci-dessus) confirme que le
+    contrat consommé produit le résultat attendu côté backend pour une saisie multi-catégories avec
+    0 explicite.
+  - Aucun axios direct, aucun nouveau `any` constaté ; `npx tsc --noEmit` et `npm run build`
+    (frontend/) passent.
+  Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).

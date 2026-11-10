@@ -14,6 +14,7 @@ import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
 import { OpeningConfirmationManualSection } from '@/components/production/OpeningConfirmationManualSection';
+import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 
 const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
 
@@ -81,8 +82,9 @@ export const Production: React.FC = () => {
   const [sessionNotes, setSessionNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   // BUG-108 : clôture automatisée de la fournée (POST .../close/)
-  const [closingSession, setClosingSession] = useState(false);
-  const [closeError, setCloseError] = useState<string | null>(null);
+  // BUG-154 : la clôture elle-même (avec saisie du « Reste du Jour » par catégorie) se fait
+  // désormais dans CloseSessionModal, qui gère son propre état de soumission/erreur.
+  const [closeSessionModalOpen, setCloseSessionModalOpen] = useState(false);
   const [selectedBreadStock, setSelectedBreadStock] = useState<BreadStock | null>(null);
   // BUG-145 (remarque.md l.397) : un seul sélecteur de date pilote « Stock Pains du Jour »
   // ET « Historique des Fournées ». `sessions` (KPI, formulaire de sortie non standard —
@@ -797,7 +799,7 @@ export const Production: React.FC = () => {
                 return (
                   <div
                     key={sess.id}
-                    onClick={() => { setSelectedSession(sess); setSessionNotes(sess.notes || ''); setCloseError(null); }}
+                    onClick={() => { setSelectedSession(sess); setSessionNotes(sess.notes || ''); }}
                     style={{ padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', cursor: 'pointer', transition: 'background-color 0.15s' }}
                     onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'hsl(var(--bg-tertiary))')}
                     onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}
@@ -1348,7 +1350,7 @@ export const Production: React.FC = () => {
                 return (
                   <div
                     key={sess.id}
-                    onClick={() => { setShowAllSessionsModal(false); setSelectedSession(sess); setSessionNotes(sess.notes || ''); setCloseError(null); }}
+                    onClick={() => { setShowAllSessionsModal(false); setSelectedSession(sess); setSessionNotes(sess.notes || ''); }}
                     style={{ padding: '7px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', cursor: 'pointer', transition: 'background-color 0.15s' }}
                     onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'hsl(var(--bg-tertiary))')}
                     onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}
@@ -1387,11 +1389,6 @@ export const Production: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--color-success))', backgroundColor: 'hsl(var(--color-success) / 0.1)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginBottom: '10px' }}>
                 <FiCheckCircle />
                 Fournée clôturée{selectedSession.closed_at ? ` le ${new Date(selectedSession.closed_at).toLocaleString('fr-FR')}` : ''} — saisie verrouillée.
-              </div>
-            )}
-            {closeError && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: 'hsl(var(--color-danger))', backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', marginBottom: '10px' }}>
-                <FiAlertTriangle /> {closeError}
               </div>
             )}
 
@@ -1522,36 +1519,29 @@ export const Production: React.FC = () => {
               )}
               {!selectedSession.is_closed && (
                 <button
-                  onClick={async () => {
-                    if (!window.confirm(
-                      'Clôturer cette fournée ? Les ventes et dispositions du jour seront recoupées automatiquement avec la production déclarée. Cette action est irréversible : la fournée ne sera plus modifiable.'
-                    )) {
-                      return;
-                    }
-                    setCloseError(null);
-                    setClosingSession(true);
-                    try {
-                      const res = await productionApi.sessions.close(selectedSession.id);
-                      setHistorySessions(prev => prev.map(s => s.id === selectedSession.id ? res.data : s));
-                      setSelectedSession(res.data);
-                      setSessionNotes(res.data.notes || '');
-                    } catch (err: unknown) {
-                      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-                      setCloseError(detail || 'Erreur lors de la clôture de la fournée.');
-                    }
-                    setClosingSession(false);
-                  }}
-                  disabled={closingSession}
+                  onClick={() => setCloseSessionModalOpen(true)}
                   className="btn btn-primary"
-                  style={{ flex: 2, padding: '8px', fontSize: '0.8rem', opacity: closingSession ? 0.6 : 1, backgroundColor: 'hsl(var(--color-success))', borderColor: 'hsl(var(--color-success))' }}
+                  style={{ flex: 2, padding: '8px', fontSize: '0.8rem', backgroundColor: 'hsl(var(--color-success))', borderColor: 'hsl(var(--color-success))' }}
                 >
                   <FiCheckCircle style={{ marginRight: '4px', verticalAlign: '-2px' }} />
-                  {closingSession ? 'Clôture en cours...' : 'Clôturer la fournée'}
+                  Clôturer la fournée
                 </button>
               )}
             </div>
         </Modal>
       )}
+
+      {/* ═══ MODAL CLÔTURE — Reste du Jour par catégorie (BUG-154) ═══ */}
+      <CloseSessionModal
+        isOpen={closeSessionModalOpen}
+        session={selectedSession}
+        onClose={() => setCloseSessionModalOpen(false)}
+        onClosed={(updated) => {
+          setHistorySessions(prev => prev.map(s => s.id === updated.id ? updated : s));
+          setSelectedSession(updated);
+          setSessionNotes(updated.notes || '');
+        }}
+      />
 
       {/* ═══ MODAL APPROVISIONNEMENT ═══ */}
       <Modal

@@ -1159,8 +1159,12 @@ export const productionApi = {
       apiClient.get<ProductionReconciliation>('/api/production/sessions/reconciliation/', { params }),
     // BUG-093/BUG-108 : clôture automatisée de la fournée (recoupement ventes/dispositions,
     // reliquat NV, écart). Fige is_closed/closed_at/closure_summary ; action irréversible.
-    close: (id: string) =>
-      apiClient.post<ProductionSession>(`/api/production/sessions/${id}/close/`),
+    // BUG-154 : corps optionnel `remaining` (BUG-152, contrat documenté dans
+    // docs/qa/rapports/dev-backend-2026-11-10-bug152-reste-jour-integre-cloture.md) — déclare
+    // le « Reste du Jour » par catégorie EN MÊME TEMPS que la clôture. Omis → comportement
+    // historique inchangé (le formulaire séparé « Stock Restant » reste utilisable).
+    close: (id: string, data?: { remaining?: Array<{ bread_price: number; quantity: number }> }) =>
+      apiClient.post<ProductionSession>(`/api/production/sessions/${id}/close/`, data),
   },
   breadStocks: {
     list: (params?: Record<string, string>) =>

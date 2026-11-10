@@ -27,7 +27,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.testing import make_node, make_user, make_bread_price, make_client
-from production.models import ProductionSession, DailyBreadStockSnapshot, BreadStock
+from production.models import ProductionSession, DailyBreadStockSnapshot, BreadStock, BreadDisposal
 
 
 class DailyBreadStockSnapshotTests(TestCase):
@@ -178,3 +178,173 @@ class DailyBreadStockSnapshotTests(TestCase):
             node=self.node, bread_price=self.bp, date='2026-10-10', team='A',
         )
         self.assertEqual(snapshot.qty_at_close, 60)
+
+
+class CloseWithRemainingBodyTests(TestCase):
+    """
+    BUG-152 (remarque.md, après l.408) : le « RESTE DU JOUR » par catégorie
+    peut désormais être déclaré EN MÊME TEMPS que l'appel à `close()`, via
+    `{"remaining": [{"bread_price": <id>, "quantity": <int>}, ...]}`, sans
+    passer par le formulaire séparé `BreadDisposalViewSet` au préalable.
+    """
+
+    def setUp(self):
+        self.node = make_node(sac_value_fc=Decimal('200000'))
+        self.user = make_user(role='GERANT', node=self.node)
+        self.bp1 = make_bread_price(category='MOYEN', label='Pain 500 FC', unit_price=500)
+        self.bp2 = make_bread_price(category='GRAND', label='Pain 1000 FC', unit_price=1000)
+        self.client_api = APIClient()
+        self.client_api.force_authenticate(self.user)
+
+    def _create_session(self, date='2026-11-10', team='A'):
+        resp = self.client_api.post('/api/production/sessions/', {
+            'team': team, 'date': date, 'flour_sacks_used': '2.00',
+            'lines': [
+                {'bread_price': self.bp1.pk, 'quantity': 100},
+                {'bread_price': self.bp2.pk, 'quantity': 50},
+            ],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        return resp.data['id']
+
+    def test_close_with_remaining_body_creates_per_category_snapshot_without_predeclared_disposal(self):
+        """Aucune disposition REMAINING pré-déclarée séparément : la clôture
+        avec `remaining` dans le corps doit, à elle seule, produire le bon
+        snapshot par catégorie."""
+        session_id = self._create_session()
+        self.assertEqual(BreadDisposal.objects.filter(session_id=session_id).count(), 0)
+
+        resp = self.client_api.post(
+            f'/api/production/sessions/{session_id}/close/',
+            {'remaining': [
+                {'bread_price': self.bp1.pk, 'quantity': 30},
+                {'bread_price': self.bp2.pk, 'quantity': 0},
+            ]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        snap1 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp1, date='2026-11-10', team='A',
+        )
+        snap2 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp2, date='2026-11-10', team='A',
+        )
+        self.assertEqual(snap1.qty_at_close, 30)
+        self.assertEqual(snap2.qty_at_close, 0)
+
+        # Les BreadDisposal REMAINING ont bien été créés par close(), pas par
+        # un passage préalable par le formulaire séparé.
+        self.assertEqual(
+            BreadDisposal.objects.filter(
+                session_id=session_id, disposal_type=BreadDisposal.DisposalType.REMAINING,
+            ).count(),
+            2,
+        )
+        # Le stock physique global n'est jamais affecté par REMAINING.
+        stock1 = BreadStock.objects.get(node=self.node, bread_price=self.bp1)
+        self.assertEqual(stock1.qty_available, 100)
+
+    def test_close_with_remaining_is_idempotent_and_overrides_predeclared_disposal(self):
+        """Si une ligne REMAINING existait déjà (déclarée séparément au
+        préalable) pour une catégorie, la valeur fournie dans `remaining`
+        à la clôture la remplace proprement (pas de doublon, pas de somme)."""
+        session_id = self._create_session()
+        pre_resp = self.client_api.post('/api/production/disposals/', {
+            'session': session_id, 'bread_price': self.bp1.pk,
+            'disposal_type': 'REMAINING', 'quantity': 999,
+        }, format='json')
+        self.assertEqual(pre_resp.status_code, 201, pre_resp.data)
+
+        resp = self.client_api.post(
+            f'/api/production/sessions/{session_id}/close/',
+            {'remaining': [{'bread_price': self.bp1.pk, 'quantity': 40}]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        self.assertEqual(
+            BreadDisposal.objects.filter(
+                session_id=session_id, bread_price=self.bp1,
+                disposal_type=BreadDisposal.DisposalType.REMAINING,
+            ).count(),
+            1,
+        )
+        snap1 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp1, date='2026-11-10', team='A',
+        )
+        self.assertEqual(snap1.qty_at_close, 40)
+
+    def test_close_with_negative_remaining_quantity_rejected_and_nothing_applied(self):
+        """Une quantité négative dans `remaining` → 400, aucune disposition
+        créée, session non clôturée."""
+        session_id = self._create_session()
+
+        resp = self.client_api.post(
+            f'/api/production/sessions/{session_id}/close/',
+            {'remaining': [
+                {'bread_price': self.bp1.pk, 'quantity': 10},
+                {'bread_price': self.bp2.pk, 'quantity': -5},
+            ]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400, resp.data)
+
+        session = ProductionSession.objects.get(pk=session_id)
+        self.assertFalse(session.is_closed)
+        self.assertEqual(BreadDisposal.objects.filter(session_id=session_id).count(), 0)
+        self.assertFalse(
+            DailyBreadStockSnapshot.objects.filter(node=self.node, bread_price=self.bp1).exists()
+        )
+
+    def test_close_without_remaining_body_is_unchanged(self):
+        """Non-régression BUG-118 : corps vide (comportement historique),
+        avec une disposition REMAINING pré-déclarée séparément."""
+        session_id = self._create_session()
+        disp_resp = self.client_api.post('/api/production/disposals/', {
+            'session': session_id, 'bread_price': self.bp1.pk,
+            'disposal_type': 'REMAINING', 'quantity': 70,
+        }, format='json')
+        self.assertEqual(disp_resp.status_code, 201, disp_resp.data)
+
+        resp = self.client_api.post(f'/api/production/sessions/{session_id}/close/')
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        snap1 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp1, date='2026-11-10', team='A',
+        )
+        self.assertEqual(snap1.qty_at_close, 70)
+        # bp2 n'a jamais eu de REMAINING déclaré : considéré écoulé (0).
+        snap2 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp2, date='2026-11-10', team='A',
+        )
+        self.assertEqual(snap2.qty_at_close, 0)
+
+    def test_remaining_breads_do_not_affect_closure_summary_gap(self):
+        """Les lignes REMAINING créées via `remaining` à la clôture ne
+        doivent jamais être comptées comme des « retours »/dispositions dans
+        le recoupement agrégé (`closure_summary['returns']`,
+        `reliquat_breads`/`nv_breads`) : `_build_reconciliation_querysets`
+        exclut explicitement REMAINING, et le calcul d'écart est fait AVANT
+        la création de ces lignes dans `close()`."""
+        session_id = self._create_session()  # 100 + 50 = 150 pains produits, rien vendu/disposé
+
+        resp = self.client_api.post(
+            f'/api/production/sessions/{session_id}/close/',
+            {'remaining': [
+                {'bread_price': self.bp1.pk, 'quantity': 100},
+                {'bread_price': self.bp2.pk, 'quantity': 50},
+            ]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        summary = resp.data['closure_summary']
+        # returns (hors REMAINING) doit rester 0 : les 150 pains REMAINING
+        # créés par cet appel ne sont jamais comptés ici.
+        self.assertEqual(summary['returns']['breads'], 0)
+        # gap = produit(150) - (vendu(0) + retours(0)) = 150 -> tout est NV,
+        # ce n'est pas une anomalie (gap positif).
+        self.assertEqual(summary['gap']['breads'], 150)
+        self.assertEqual(summary['nv']['breads'], 150)
+        self.assertFalse(summary['anomaly'])

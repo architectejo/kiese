@@ -464,6 +464,31 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
           recoupement est conservé dans `closure_summary` pour ne jamais
           dépendre d'un recalcul qui pourrait dériver plus tard (ex. l'autre
           équipe clôture après coup le même jour/nœud).
+
+        BUG-152 (remarque.md, après l.408 — « les restes des pains en stock
+        [...] doivent aller dans la clôture journalière reste du jour selon
+        la catégorie ») : le corps de la requête peut fournir, en option,
+        `remaining` : `[{"bread_price": <id>, "quantity": <entier >= 0>}, ...]`
+        pour déclarer le « RESTE DU JOUR » par catégorie EN MÊME TEMPS que la
+        clôture, en un seul geste, au lieu d'exiger un passage préalable par
+        le formulaire séparé `BreadDisposalViewSet` (type `REMAINING`).
+        - Si `remaining` est absent du corps : comportement strictement
+          inchangé — `record_snapshot()` lit les `BreadDisposal REMAINING`
+          déjà déclarés séparément, comme avant ce ticket.
+        - Si `remaining` est fourni : toute quantité négative → 400, RIEN
+          n'est appliqué (session non clôturée, aucune disposition créée).
+          Sinon, pour chaque catégorie fournie, la ligne `REMAINING` de
+          CETTE session pour cette catégorie est créée ou REMPLACÉE
+          (idempotent — un nouvel appel avec les mêmes valeurs ne duplique
+          rien ; une catégorie déjà déclarée séparément au préalable est
+          écrasée par la valeur fournie ici, décision la plus prévisible
+          pour l'utilisateur qui vient de les saisir à l'écran de clôture).
+          Ces lignes `REMAINING` sont créées dans la MÊME transaction que le
+          reste de la clôture, AVANT l'appel à `record_snapshot()`. Elles ne
+          perturbent jamais le calcul d'écart ci-dessus : `disposals_qs`
+          (`_build_reconciliation_querysets`) exclut explicitement le type
+          `REMAINING`, et le calcul d'écart a déjà été fait plus haut, sur la
+          base des dispositions existant AVANT cet appel.
         """
         session = self.get_object()
         if session.is_closed:
@@ -471,6 +496,45 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                 {'detail': "Session de production déjà clôturée."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        remaining_payload = request.data.get('remaining')
+        remaining_entries = []
+        if remaining_payload is not None:
+            if not isinstance(remaining_payload, list):
+                return Response(
+                    {'detail': "« remaining » doit être une liste."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for entry in remaining_payload:
+                bp_id = entry.get('bread_price') if isinstance(entry, dict) else None
+                qty   = entry.get('quantity') if isinstance(entry, dict) else None
+                try:
+                    qty_int = int(qty)
+                except (TypeError, ValueError):
+                    return Response(
+                        {'detail': "« remaining » : quantité invalide."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not bp_id:
+                    return Response(
+                        {'detail': "« remaining » : catégorie de pain (bread_price) requise."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if qty_int < 0:
+                    return Response(
+                        {'detail': "« remaining » : la quantité ne peut pas être négative."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                remaining_entries.append((bp_id, qty_int))
+
+            bp_ids = {bp_id for bp_id, _ in remaining_entries}
+            found_bp = set(BreadPrice.objects.filter(pk__in=bp_ids).values_list('pk', flat=True))
+            missing = bp_ids - found_bp
+            if missing:
+                return Response(
+                    {'detail': f"« remaining » : catégorie de pain introuvable ({', '.join(str(m) for m in missing)})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
             user=request.user, node_id=session.node_id, date=str(session.date),
@@ -487,18 +551,47 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             'anomaly': is_anomaly,
         }
 
-        session.is_closed = True
-        session.closed_at = timezone.now()
-        session.closure_summary = summary
-        session.save(update_fields=['is_closed', 'closed_at', 'closure_summary'])
+        with transaction.atomic():
+            session.is_closed = True
+            session.closed_at = timezone.now()
+            session.closure_summary = summary
+            session.save(update_fields=['is_closed', 'closed_at', 'closure_summary'])
 
-        # BUG-118 (extension équipe, confirmée par le client le 2026-11-01) :
-        # capture l'instantané du solde DÉCLARÉ par CETTE équipe (RESTE DU
-        # JOUR), par catégorie de pain, pour le nœud/date/équipe de cette
-        # session. Borné par équipe : ne peut jamais écraser le snapshot
-        # d'une autre équipe clôturant le même jour (voir
-        # DailyBreadStockSnapshot.record_snapshot docstring).
-        DailyBreadStockSnapshot.record_snapshot(session)
+            # BUG-152 : déclaration du reste par catégorie en même temps que
+            # la clôture (voir docstring ci-dessus). N'affecte jamais
+            # `BreadStock` (comme pour le formulaire séparé existant,
+            # `BreadDisposalViewSet.perform_create`).
+            for bp_id, qty_int in remaining_entries:
+                # update_or_create() suppose au plus une ligne REMAINING par
+                # (session, bread_price) ; on l'impose explicitement pour
+                # rester idempotent même si plusieurs lignes avaient déjà été
+                # créées séparément au préalable via le formulaire existant.
+                existing = BreadDisposal.objects.filter(
+                    session=session, bread_price_id=bp_id,
+                    disposal_type=BreadDisposal.DisposalType.REMAINING,
+                )
+                keep = existing.first()
+                existing.exclude(pk=getattr(keep, 'pk', None)).delete()
+                if keep:
+                    keep.quantity = qty_int
+                    keep.node = session.node
+                    keep.node_origin = session.node.code
+                    keep.save(update_fields=['quantity', 'node', 'node_origin', 'total_value', 'updated_at'])
+                else:
+                    BreadDisposal.objects.create(
+                        session=session, bread_price_id=bp_id,
+                        disposal_type=BreadDisposal.DisposalType.REMAINING,
+                        node=session.node, node_origin=session.node.code,
+                        quantity=qty_int,
+                    )
+
+            # BUG-118 (extension équipe, confirmée par le client le 2026-11-01) :
+            # capture l'instantané du solde DÉCLARÉ par CETTE équipe (RESTE DU
+            # JOUR), par catégorie de pain, pour le nœud/date/équipe de cette
+            # session. Borné par équipe : ne peut jamais écraser le snapshot
+            # d'une autre équipe clôturant le même jour (voir
+            # DailyBreadStockSnapshot.record_snapshot docstring).
+            DailyBreadStockSnapshot.record_snapshot(session)
 
         if is_anomaly:
             create_notification(
