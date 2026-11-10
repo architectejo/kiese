@@ -18,8 +18,9 @@ from .serializers import (
     ActivityLogSerializer, SystemNotificationSerializer,
     ColisDistributionSerializer,
 )
-from .permissions import IsAdmin, IsDirection, IsHeadquarters, IsGerant
+from .permissions import IsAdmin, IsDirection, IsHeadquarters, IsGerant, IsSuperuser
 from .throttling import LoginAccountRateThrottle, LoginIPRateThrottle
+from . import reset as reset_module
 
 User = get_user_model()
 
@@ -332,4 +333,46 @@ class ColisDistributionViewSet(viewsets.ModelViewSet):
             obj = serializer.save()
         obj.compute_total()
         obj.save(update_fields=['total_value'])
+
+
+# ─── BUG-149 : réinitialisation globale des données (Superuser) ──────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsSuperuser])
+def reset_data_view(request):
+    """
+    GET  : aperçu en lecture seule — décompte de ce qui SERAIT supprimé/
+           réinitialisé, sans rien modifier.
+    POST : exécute la suppression. Exige, dans le corps de la requête :
+           - `confirm_phrase` : doit être EXACTEMENT
+             `core.reset.CONFIRMATION_PHRASE` ("SUPPRIMER TOUT").
+           - `password` : mot de passe ACTUEL de l'utilisateur appelant
+             (re-saisi, vérifié via `user.check_password(...)`).
+           Refuse (400) si l'un des deux manque ou est incorrect, sans
+           rien supprimer. Réservé à `request.user.is_superuser` strict
+           (voir `core.permissions.IsSuperuser` — ni rôle ADMIN ni
+           DIRECTION ne suffisent sans ce flag technique).
+    """
+    if request.method == 'GET':
+        return Response(reset_module.preview_counts())
+
+    confirm_phrase = (request.data.get('confirm_phrase') or '').strip()
+    password = request.data.get('password') or ''
+
+    if confirm_phrase != reset_module.CONFIRMATION_PHRASE:
+        return Response(
+            {'detail': (
+                "Phrase de confirmation incorrecte. Saisissez exactement : "
+                f"\"{reset_module.CONFIRMATION_PHRASE}\"."
+            )},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    if not password or not request.user.check_password(password):
+        return Response(
+            {'detail': "Mot de passe incorrect."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    counts = reset_module.execute_reset(request.user)
+    return Response(counts)
 

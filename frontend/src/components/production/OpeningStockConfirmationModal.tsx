@@ -33,6 +33,24 @@ interface OpeningStockConfirmationModalProps {
    *  déclencher une nouvelle interrogation du GET, léger par construction
    *  côté backend (voir BUG-133). */
   routeKey: string;
+  /**
+   * BUG-151 : déclenchement MANUEL, indépendant de l'affichage automatique.
+   * Quand non `null`/`undefined`, la boîte modale s'ouvre pour CETTE équipe
+   * précise, qu'elle soit « due » ou non du point de vue de
+   * `report.needs_confirmation` (qui ne considère que l'équipe du créneau
+   * d'ouverture, BUG-141) — ce prop sert le cas où un gérant/facturier veut
+   * confirmer volontairement le reste d'hier de l'AUTRE équipe plus tard
+   * dans la journée, depuis « Production & Stocks »
+   * (`OpeningConfirmationManualSection.tsx`). Le comportement automatique
+   * existant (BUG-133 à 141) reste strictement inchangé quand ce prop vaut
+   * `null`/`undefined`.
+   */
+  forceOpenForTeam?: OpeningConfirmationTeam | null;
+  /** BUG-151 : appelé quand le flux manuel se termine (fermeture ou
+   *  soumission réussie) — permet à l'appelant de réinitialiser son état
+   *  (`openingConfirmationStore`) sans que ce composant connaisse son
+   *  existence. */
+  onManualClose?: () => void;
 }
 
 type DraftLines = Record<number, string>;
@@ -80,7 +98,9 @@ function resolveDefaultTeam(
   return pickDefaultTeam(report);
 }
 
-export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationModalProps> = ({ routeKey }) => {
+export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationModalProps> = ({
+  routeKey, forceOpenForTeam = null, onManualClose,
+}) => {
   const { user } = useAuthStore();
   // `UserProfile.team` est `'A' | 'B' | ''` (facturiers/livreurs) — on ne
   // transmet que les valeurs utiles à `resolveDefaultTeam`.
@@ -133,6 +153,16 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey]);
 
+  // BUG-151 : mode manuel — préselectionne l'équipe demandée par l'appelant,
+  // indépendamment de `resolveDefaultTeam` (qui ne regarde que le créneau
+  // d'ouverture / le filet de sécurité automatique).
+  const isManualMode = forceOpenForTeam != null;
+  useEffect(() => {
+    if (forceOpenForTeam) {
+      setSelectedTeam(forceOpenForTeam);
+    }
+  }, [forceOpenForTeam]);
+
   // BUG-139/140 : signal unique renvoyé par le backend (remplace l'ancien
   // calcul `!teams.A.confirmed || !teams.B.confirmed`, qui exigeait les
   // deux équipes — contraire à la demande du client, une seule confirmation
@@ -143,7 +173,10 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
   // ouverte le temps d'afficher le bandeau d'ajustement plutôt que de la
   // faire disparaître sans que le gérant ait pu le lire.
   const hasVisibleAdjustmentMessage = adjustmentMessages != null && adjustmentMessages.length > 0;
-  const isOpen = (needsConfirmation || hasVisibleAdjustmentMessage) && dismissedForRoute !== routeKey;
+  // BUG-151 : le mode manuel ouvre la boîte modale indépendamment de
+  // `needsConfirmation`/`dismissedForRoute` (qui ne pilotent que
+  // l'affichage automatique).
+  const isOpen = isManualMode || ((needsConfirmation || hasVisibleAdjustmentMessage) && dismissedForRoute !== routeKey);
 
   const handleQtyChange = (breadPriceId: number, value: string) => {
     setDraft(prev => ({ ...prev, [breadPriceId]: value }));
@@ -182,6 +215,14 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       // Reposer le GET : si l'autre équipe reste à confirmer, la modale
       // doit immédiatement proposer sa confirmation (demande explicite).
       await fetchReport();
+      // BUG-151 : le mode manuel est un geste ponctuel pour UNE équipe —
+      // une fois soumis avec succès, on referme (l'appelant réinitialise
+      // son état via `onManualClose`). Le comportement automatique n'est
+      // pas affecté : en dehors du mode manuel, la boîte modale reste
+      // ouverte si une autre confirmation est encore due (inchangé).
+      if (isManualMode) {
+        onManualClose?.();
+      }
     } catch (err: unknown) {
       setError(getErrorDetail(err, "Erreur lors de la validation du stock de départ."));
     } finally {
@@ -190,10 +231,16 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
   };
 
   const handleDismiss = () => {
+    if (isManualMode) {
+      // BUG-151 : fermeture du flux manuel — ne touche pas
+      // `dismissedForRoute` (propre à l'affichage automatique).
+      onManualClose?.();
+      return;
+    }
     setDismissedForRoute(routeKey);
   };
 
-  if (!needsConfirmation && !hasVisibleAdjustmentMessage) {
+  if (!needsConfirmation && !hasVisibleAdjustmentMessage && !isManualMode) {
     return null;
   }
 
@@ -205,11 +252,15 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       isOpen={isOpen}
       onClose={handleDismiss}
       title="Stock de départ du jour"
-      subtitle="Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
+      subtitle={
+        isManualMode
+          ? `Confirmation volontaire du reste d'hier pour l'équipe ${selectedTeam} (demande manuelle depuis Production & Stocks).`
+          : "Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
+      }
       maxWidth="560px"
       closeOnBackdropClick={false}
       footer={
-        needsConfirmation ? (
+        needsConfirmation || isManualMode ? (
           <>
             <button
               onClick={handleDismiss}
@@ -217,7 +268,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
               style={{ padding: '10px 18px', fontSize: '0.85rem' }}
               disabled={submitting}
             >
-              Plus tard
+              {isManualMode ? 'Annuler' : 'Plus tard'}
             </button>
             <button
               onClick={handleSubmit}
@@ -283,7 +334,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
         </div>
       )}
 
-      {report && needsConfirmation && (
+      {report && (needsConfirmation || isManualMode) && (
         <>
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>

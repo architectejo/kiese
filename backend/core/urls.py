@@ -27,5 +27,7 @@ urlpatterns = [
     path('auth/logout/', views.logout_view, name='logout'),
     path('auth/me/', views.me_view, name='me'),
     path('config/', views.ConfigView.as_view(), name='config'),
+    # BUG-149 : réinitialisation globale des données (Superuser strict).
+    path('reset-data/', views.reset_data_view, name='reset-data'),
     path('', include(router.urls)),
 ]

@@ -13,6 +13,7 @@ import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
+import { OpeningConfirmationManualSection } from '@/components/production/OpeningConfirmationManualSection';
 
 const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
 
@@ -753,6 +754,13 @@ export const Production: React.FC = () => {
               <button type="submit" className="btn btn-primary" style={{ padding: '6px', fontSize: '0.78rem' }}>Enregistrer la Fournée</button>
             </form>
           </div>
+
+          {/* BUG-151 : accès manuel à la confirmation du reste d'hier pour une AUTRE
+              équipe que celle déjà confirmée (même garde de rôle que la boîte modale
+              automatique dans DashboardLayout.tsx). */}
+          {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
+            <OpeningConfirmationManualSection onConfirmed={() => loadData(viewNode || undefined)} />
+          )}
 
           {/* Stock Pains du Jour — BUG-145 : extrait dans StockDuJourSection.tsx, piloté par
               `selectedDate`, qui pilote AUSSI « Historique des Fournées » ci-dessous. */}

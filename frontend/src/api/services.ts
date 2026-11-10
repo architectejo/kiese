@@ -928,12 +928,65 @@ export interface SiteConfig {
   updated_at: string;
 }
 
+// BUG-150 : décompte par catégorie renvoyé par GET (aperçu) et POST (résultat réel) de
+// /api/core/reset-data/ — même forme des deux côtés (voir contrat documenté par dev-backend,
+// BUG-149). Les clés correspondent aux noms techniques choisis côté backend ; `clients_to_reset`
+// n'est PAS un décompte de suppression (les fiches clients ne sont jamais supprimées, seuls les
+// champs dérivés comme `current_debt` sont remis à zéro).
+export interface ResetDataCounts {
+  sync_conflict_logs: number;
+  sync_batch_logs: number;
+  debt_movements: number;
+  tamper_alerts: number;
+  blockchain_snapshots: number;
+  client_commissions: number;
+  commission_periods: number;
+  financial_years: number;
+  direction_cash_counts: number;
+  cashbook_entries: number;
+  journal_entries: number;
+  daily_savings: number;
+  disbursement_vouchers: number;
+  cash_closures: number;
+  facturier_reports: number;
+  local_expenses: number;
+  consumable_movements: number;
+  consumable_stocks: number;
+  consumable_counts: number;
+  bread_disposals: number;
+  production_session_lines: number;
+  production_sessions: number;
+  bread_transfer_lines: number;
+  bread_transfers: number;
+  bread_stocks: number;
+  daily_opening_confirmation_lines: number;
+  daily_opening_confirmations: number;
+  daily_bread_stock_snapshots: number;
+  invoice_lines: number;
+  invoices: number;
+  social_distribution_lines: number;
+  social_distributions: number;
+  social_contributions: number;
+  colis_distributions: number;
+  activity_logs: number;
+  system_notifications: number;
+  clients_to_reset: number;
+}
+
 // ── Core API ─────────────────────────────────────────────────────────────────
 
 export const coreApi = {
   config: {
     get: () => apiClient.get<SiteConfig>('/api/core/config/'),
     update: (data: Partial<SiteConfig>) => apiClient.patch<SiteConfig>('/api/core/config/', data),
+  },
+  // BUG-150 : réservé au flag technique `request.user.is_superuser` (pas un rôle métier), voir
+  // BUG-149 côté backend. `preview` (GET) ne modifie jamais rien ; `execute` (POST) exige une
+  // double confirmation déjà vérifiée côté serveur (phrase exacte + mot de passe courant).
+  resetData: {
+    preview: () => apiClient.get<ResetDataCounts>('/api/core/reset-data/'),
+    execute: (data: { confirm_phrase: string; password: string }) =>
+      apiClient.post<ResetDataCounts>('/api/core/reset-data/', data),
   },
   me: {
     get: () => apiClient.get('/api/core/auth/me/'),

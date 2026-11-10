@@ -14,6 +14,7 @@ import {
 import { coreApi } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
 import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
+import { useOpeningConfirmationStore } from '@/store/openingConfirmationStore';
 
 interface SidebarItemProps {
   to: string;
@@ -61,6 +62,10 @@ export interface NotificationItem {
 export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, fetchCurrentUser } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
+  // BUG-151 : équipe dont la confirmation manuelle du reste d'hier a été
+  // demandée depuis « Production & Stocks » (null = aucune, comportement
+  // automatique inchangé).
+  const { forceOpenForTeam, clearManualConfirmation } = useOpeningConfirmationStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -830,7 +835,15 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           (pas page par page) ; le composant réinterroge le GET à chaque
           changement de route via `routeKey`. */}
       {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
-        <OpeningStockConfirmationModal routeKey={location.pathname} />
+        <OpeningStockConfirmationModal
+          routeKey={location.pathname}
+          // BUG-151 : déclenchement manuel depuis « Production & Stocks »
+          // (`OpeningConfirmationManualSection.tsx`), porté par un petit
+          // store partagé plutôt que par des props — le composant reste
+          // monté une seule fois ici (consigne inchangée, BUG-134).
+          forceOpenForTeam={forceOpenForTeam}
+          onManualClose={clearManualConfirmation}
+        />
       )}
     </div>
   );

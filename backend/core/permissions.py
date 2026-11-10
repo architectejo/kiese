@@ -71,6 +71,21 @@ class IsFacturierOrLivreur(BasePermission):
         )
 
 
+class IsSuperuser(BasePermission):
+    """
+    BUG-149 : réservé STRICTEMENT à l'indicateur technique Django
+    `request.user.is_superuser` — jamais au rôle métier (`role == 'ADMIN'`
+    ou `role == 'DIRECTION'`). Contrairement à `IsAdmin`/`IsDirection`/
+    `IsHeadquarters` ci-dessus (qui acceptent un rôle métier OU le flag
+    technique), un compte ADMIN/DIRECTION sans `is_superuser=True` est
+    refusé ici — c'est le point explicitement demandé par le coordinateur
+    pour l'action de réinitialisation globale des données : même un compte
+    DIRECTION nommé ne doit pas y avoir accès s'il ne porte pas ce flag.
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+
+
 class NodeScopedPermission(BasePermission):
     """
     Ensures that non-HQ users can only access data from their assigned node.

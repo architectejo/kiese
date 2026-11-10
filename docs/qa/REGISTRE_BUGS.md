@@ -158,6 +158,9 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-144 | remarque.md (ligne ajoutée après l.396) : « Au niveau de "Production & Stocks" pour les sections "Stock Pains Actuel" et "Historique des Fournées" on doit pouvoir sélectionner un jour et voir les résultats du jour [...] » — volet backend uniquement : `BreadStockViewSet` ne renvoie que le solde COURANT cumulatif, aucun moyen d'interroger le stock de pains d'un jour PASSÉ | Production | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
 | BUG-145 | remarque.md (même ligne que BUG-144, l.397) — volet frontend : `Production.tsx` n'offrait aucun sélecteur de date pour « Stock Pains Actuel » (toujours le solde courant, libellé trompeur) ni pour « Historique des Fournées » (toujours les 15 fournées les plus récentes toutes dates confondues) | Production | frontend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
 | BUG-148 | `e2e/tests/05-production.spec.ts` (test existant, 1er scénario) échoue de façon reproductible : la boîte modale « Stock de départ du jour » (`OpeningStockConfirmationModal.tsx`, BUG-133/134) peut rester ouverte ou se rouvrir avec un délai (après résolution asynchrone de `GET /api/production/opening-confirmation/`) et son `.modal-backdrop` intercepte alors le clic sur « Enregistrer la Fournée », faisant échouer le test avec un timeout — sans rapport avec BUG-144/145 | Production | frontend (test E2E) | Mineur | OUVERT | testeur-production, 2026-11-10 (découvert en vérifiant BUG-144/145, en relançant la suite E2E officielle du module) | — | — |
+| BUG-149 | remarque.md (après l.404) : bouton Superuser pour réinitialiser toutes les données sauf Config/Node/User/liste des clients — nouvel endpoint `GET/POST /api/core/reset-data/` (voir fiche pour le contrat complet et la liste exacte conservée/supprimée) | Transversal (core) | backend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-backend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-150 | Ticket lié à BUG-149, pour `dev-frontend` : implémenter le bouton « Réinitialiser les données » (écran Configuration, visible seulement si `user.is_superuser`) + boîte de confirmation double (phrase exacte + mot de passe) consommant `GET/POST /api/core/reset-data/` — voir le contrat API documenté dans docs/qa/rapports/dev-backend-2026-11-10-bug149-reset-superuser.md | Configuration | frontend | Majeur | VÉRIFIÉ | dev-backend, 2026-11-10 (nouveau contrat d'API à consommer, CLAUDE.md §4/§7 règle : tout changement de contrat ouvre un ticket frontend lié) | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
+| BUG-151 | Demande client (remarque.md, après l.406) : depuis « Production & Stocks », possibilité de confirmer manuellement le reste d'hier pour l'équipe qui n'a pas le créneau d'ouverture, une fois celle-ci déjà confirmée automatiquement (BUG-139/140/141) — `OpeningConfirmationManualSection.tsx` + `openingConfirmationStore.ts` + prop `forceOpenForTeam` sur `OpeningStockConfirmationModal.tsx` (voir fiche détaillée ci-dessous ; ligne de synthèse ajoutée après coup par `testeur-production`, la fiche existait déjà mais pas cette ligne) | Production | frontend | Majeur | VÉRIFIÉ | client (remarque.md), relayé par le coordinateur, 2026-11-10 | dev-frontend, 2026-11-10 | testeur-production, 2026-11-10 |
 
 ## Fiches détaillées
 
@@ -13840,3 +13843,254 @@ compte, pas tranché unilatéralement.
 - Portée : n'affecte que la fiabilité de la suite E2E automatisée, pas un défaut applicatif pour un
   utilisateur réel (qui voit et dismiss la boîte modale normalement, sans contrainte de timeout de
   10 s). Priorité Mineure.
+
+### BUG-149 — [backend] Bouton Superuser « Réinitialiser les données »
+
+- Demande client (remarque.md, après l.404) : « En tant que Superuser, j'aimerais avoir un bouton
+  pour supprimer les autres données sauf, les données de la configuration, les succursales
+  (boulangeries), les utilisateurs et la liste des clients ».
+- Clarifié avec le coordinateur avant de commencer :
+  - Accès réservé STRICTEMENT à `request.user.is_superuser == True` (flag technique Django, pas le
+    rôle métier ADMIN/DIRECTION). Nouvelle classe `core.permissions.IsSuperuser`, distincte de
+    `IsAdmin`/`IsDirection`/`IsHeadquarters` (qui acceptent elles un rôle métier OU `is_superuser`).
+  - Les soldes clients dérivés de l'historique (`current_debt`, `total_breads_received`, `category`)
+    sont remis à 0/`NORMAL` — la fiche client (code, nom, téléphone, plafond, boulangerie) reste.
+- **Conservé** : `core.Config`, `core.Node`, `core.User`, `core.BreadPrice`, `core.ExpenseCategory`
+  (paramétrage « Configuration »), `clients.Client` (fiche, champs dérivés remis à zéro),
+  `clients.ClientCodeSequence` (non touché, les clients restent), `sync.NodeAuthToken` (décision
+  documentée : infrastructure d'authentification de nœud, pas une donnée métier — même traitement
+  que `User`/JWT, jamais révoqués par ce bouton).
+- **Supprimé** (inventaire complet, voir docstring de `backend/core/reset.py` pour le détail et la
+  justification de chaque choix) : `sales.Invoice`/`InvoiceLine` ; tout `production.*`
+  (sessions/lignes, stocks pains/consommables, mouvements, comptages, transferts, dispositions,
+  snapshots, confirmations d'ouverture) ; tout `treasury.*` (dépenses locales, rapports facturier,
+  clôtures, livre de caisse, journal, épargne, bordereaux, comptages Direction) ; tout
+  `commissions.*` (périodes, commissions clients) ; `finance.FinancialYear` ; tout `blockchain.*`
+  (alertes, instantanés) ; `clients.SocialContribution`/`SocialDistribution`/
+  `SocialDistributionLine` (caisse sociale, PAS la liste des clients) ; `core.ActivityLog`,
+  `core.SystemNotification` ; `core.ColisDistribution` (décision documentée : événement annuel
+  transactionnel, pas un réglage de Configuration) ; `sync.DebtMovement` (journal additif dont la
+  somme reconstitue `Client.current_debt` via `sync.services.recompute_client_debt` — doit être purgé
+  avec les factures, sinon un recalcul ultérieur ressusciterait l'ancienne dette), `sync.SyncBatchLog`,
+  `sync.SyncConflictLog`.
+- Implémentation : `GET/POST /api/core/reset-data/` (voir contrat complet dans
+  `docs/qa/rapports/dev-backend-2026-11-10-bug149-reset-superuser.md`). `GET` = aperçu en lecture
+  seule (décompte par modèle). `POST` = exécution, exige `confirm_phrase` exacte (`"SUPPRIMER TOUT"`)
+  + `password` (mot de passe actuel re-saisi, `user.check_password`), 400 sinon sans rien supprimer.
+  Toute la suppression dans un seul `transaction.atomic()`, ordre respectant les contraintes
+  `on_delete=PROTECT` existantes (notamment `Invoice.adjusts`, self-référent, cassé par un
+  `update(adjusts=None)` préalable ; `ConsumableMovement.stock` avant `ConsumableStock`). Reset des
+  champs `Client` via `.update(...)` en masse. Nouvelle `ActivityLog` (`action='GLOBAL_DATA_RESET'`)
+  journalisant l'opération après coup — seule trace survivante puisque l'historique précédent est
+  lui-même supprimé par cette opération.
+- Fichiers : `backend/core/permissions.py` (`IsSuperuser`), `backend/core/reset.py` (logique),
+  `backend/core/views.py` (`reset_data_view`), `backend/core/urls.py` (route), test de
+  non-régression : `backend/core/tests/test_bug149_reset_superuser.py` (permission stricte ; GET
+  n'altère rien ; POST refusé sans/avec mauvaise phrase ou mauvais mot de passe, rien n'est
+  supprimé ; scénario complet bout en bout avec une donnée fictive par catégorie).
+- Aucune migration de schéma (aucun nouveau champ/modèle) — `makemigrations --check --dry-run` reste
+  propre.
+- Impact contrat d'API : nouvel endpoint, pas de changement d'un endpoint existant → ticket
+  **BUG-150** ouvert pour `dev-frontend` (bouton + boîte de confirmation, écran Configuration).
+- **Vérification (`testeur-production`, 2026-11-10)** : relecture complète de
+  `backend/core/reset.py`/`permissions.py::IsSuperuser`/`views.py::reset_data_view`. Scénario
+  bout-en-bout indépendant construit (fichier temporaire, supprimé après vérification, jamais
+  livré) couvrant des catégories NON exercées par le scénario de `dev-backend`
+  (`CashClosure`, `JournalEntry`, `DailySavings`, `DisbursementVoucher`, `FinancialYear`,
+  `TamperAlert`, `BlockchainSnapshot`, `SocialContribution`) : toutes disparaissent après le
+  `POST` réussi, aucune ne bouge après un `POST` à mot de passe erroné. Point explicitement
+  demandé par la mission vérifié : après le reset, un appel direct à
+  `sync.services.recompute_client_debt(client.pk)` sur le client conservé NE ressuscite PAS
+  l'ancienne dette (`current_debt` reste à `0.00`), confirmant que `DebtMovement` est bien purgé
+  avant tout recalcul possible. Permission stricte reconfirmée (`DIRECTION`/`ADMIN` sans
+  `is_superuser` → 403 sur GET et POST ; phrase ou mot de passe incorrect → 400, rien ne disparaît
+  avant/après comparé explicitement). Aucun test réel exécuté contre `backend/db.sqlite3` —
+  exclusivement `manage.py test` (base éphémère), conformément à la consigne. Suite complète :
+  `backend/.venv/Scripts/python.exe manage.py test` → **599 tests, OK** (aucune régression).
+- Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+### BUG-150 — [frontend] Bouton Superuser « Réinitialiser les données » (écran Configuration)
+
+- Ticket ouvert par `dev-backend` sous BUG-149 (contrat API complet documenté dans
+  `docs/qa/rapports/dev-backend-2026-11-10-bug149-reset-superuser.md`), consommé ici sans
+  deviner le contrat.
+- Accès : bouton « Réinitialiser les données » affiché dans l'écran Configuration
+  (`frontend/src/pages/dashboard/Settings.tsx`) UNIQUEMENT si `user.is_superuser === true`
+  (champ déjà exposé par `UserProfile` dans `frontend/src/store/authStore.ts`, aucun ajout de
+  type nécessaire). Distinction volontaire : un compte `ADMIN`/`DIRECTION` sans ce flag technique
+  ne voit pas le bouton — cohérent avec `IsSuperuser` côté backend, pas basé sur le rôle métier.
+- Boîte modale (`frontend/src/components/settings/ResetDataModal.tsx`, réutilise `Modal.tsx`) :
+  1. Au montage, appelle `GET /api/core/reset-data/` (aperçu en lecture seule) et affiche un
+     tableau des catégories non nulles avec leur décompte + un total, avant toute action
+     destructrice. Rappelle explicitement ce qui est conservé (Config/boulangeries/
+     utilisateurs/liste des clients), avec le nombre de fiches clients dont les champs dérivés
+     seront remis à zéro (`clients_to_reset`), sans qu'il s'agisse d'une suppression.
+  2. Double confirmation explicite : champ texte devant correspondre EXACTEMENT à
+     `SUPPRIMER TOUT` (comparaison stricte côté frontend ET revérifiée côté serveur) et champ
+     mot de passe (`type="password"`, mot de passe actuel de l'utilisateur).
+  3. Bouton de validation « Supprimer définitivement » en rouge (`hsl(var(--color-danger))`),
+     désactivé tant que la phrase ne correspond pas exactement ou que le mot de passe est vide
+     (et pendant l'envoi, pour empêcher un double clic/double-frappe).
+  4. Au succès (`POST` 200), affiche le décompte de ce qui a été réellement supprimé et attend un
+     clic explicite sur « Fermer » — aucune fermeture automatique. Au refus (400, phrase ou mot
+     de passe incorrect), affiche le message `detail` renvoyé par l'API sans fermer la boîte, pour
+     permettre de corriger et réessayer ; les champs saisis restent éditables.
+  5. Pendant l'envoi (`step === 'submitting'`), la fermeture par Échap/clic sur le fond/bouton
+     croix est désactivée (`Modal` reçoit `closeOnBackdropClick={false}` et `onClose={() => {}}`),
+     pour qu'un clic accidentel pendant la requête ne masque pas un résultat en cours.
+- `frontend/src/api/services.ts` : nouveau type `ResetDataCounts` (toutes les clés du contrat
+  documenté par `dev-backend`, aucun `any`) et `coreApi.resetData.preview()` /
+  `coreApi.resetData.execute({ confirm_phrase, password })`, seul point d'appel HTTP (CLAUDE.md
+  §4 — pas d'axios direct dans la page ou le composant).
+- Vérifications effectuées :
+  - `npx tsc --noEmit` : aucune erreur.
+  - `npm run build` : succès (`vite build`, 117 modules, aucun nouvel avertissement par rapport
+    à l'état précédent — seuls les avertissements préexistants `oxc minifier`/taille de chunk
+    subsistent, sans rapport avec ce ticket).
+  - Vérification manuelle du `GET` (lecture seule, sans jamais exécuter de `POST` destructeur
+    contre `backend/db.sqlite3`, conformément à la consigne) : requête faite via
+    `django.test.Client` forcé sur un compte réel `is_superuser=True`
+    (`override_settings(ALLOWED_HOSTS=['*'])` pour contourner uniquement la vérification d'hôte
+    du client de test, aucun réglage d'application modifié) → `200`, réponse JSON avec exactement
+    les clés attendues par `ResetDataCounts` (`sync_conflict_logs`, `debt_movements: 5`,
+    `invoices: 5`, `clients_to_reset: 4`, etc.), confirmant que le type frontend correspond
+    champ à champ à la réponse réelle de l'API.
+  - Aucun test E2E Playwright existant pour ce parcours (pas de fichier `e2e/tests/*reset*`) —
+    étapes de vérification manuelle pour le testeur ci-dessous.
+  - Aucun fichier backend touché (conformément à la consigne — BUG-149 déjà clos par
+    `dev-backend`).
+- Étapes de vérification manuelle (testeur) :
+  1. Se connecter avec un compte ayant `is_superuser=True` (ex. `architecte` ou `@pierre` en
+     environnement de démo) → le bouton rouge « Réinitialiser les données » apparaît en bas de
+     l'écran Configuration. Se connecter avec un compte `ADMIN`/`DIRECTION` sans ce flag → le
+     bouton est absent.
+  2. Cliquer sur le bouton → la boîte modale s'ouvre, affiche un court chargement puis le tableau
+     des catégories avec décompte et total (ou le message « Aucune donnée transactionnelle à
+     supprimer » sur une base vide).
+  3. Taper une phrase incorrecte ou laisser le mot de passe vide → le bouton « Supprimer
+     définitivement » reste désactivé. Taper exactement `SUPPRIMER TOUT` + un mot de passe
+     quelconque (incorrect, pour ne PAS déclencher une vraie suppression en test manuel) → le
+     bouton s'active, le clic renvoie un message d'erreur clair (mot de passe incorrect) sans
+     fermer la boîte, les champs restent modifiables pour réessayer.
+  4. Vérifier le responsive à 360 px/768 px/1440 px : la boîte modale reste entièrement visible
+     sans défilement de la page (seul le tableau interne défile si la liste est longue,
+     `maxHeight: 260px` + `overflowY: auto`), conformément à l'exigence « modales visibles sans
+     défilement » (remarque client).
+  5. Pour vérifier un succès réel, utiliser un environnement de test jetable (jamais
+     `backend/db.sqlite3` partagée) : saisir le bon mot de passe → la boîte affiche le décompte de
+     ce qui a été supprimé et reste ouverte jusqu'au clic sur « Fermer ».
+- Fichiers : `frontend/src/components/settings/ResetDataModal.tsx` (nouveau),
+  `frontend/src/pages/dashboard/Settings.tsx` (bouton + état + import), `frontend/src/api/services.ts`
+  (`ResetDataCounts`, `coreApi.resetData`).
+- **Vérification (`testeur-production`, 2026-11-10)** : relecture complète de
+  `ResetDataModal.tsx`/`Settings.tsx`. Bouton de validation confirmé désactivé tant que
+  `confirmText !== 'SUPPRIMER TOUT'` OU `password` vide OU `step === 'submitting'`
+  (`disabled={!confirmMatches || !password || step === 'submitting'}`). Boîte modale confirmée
+  sans fermeture automatique après succès (`step === 'success'` affiche le décompte et attend un
+  clic explicite sur « Fermer », aucun `setTimeout`/effet qui appellerait `onClose`). Garde
+  `user?.is_superuser === true` confirmée sur la section « Zone dangereuse » de `Settings.tsx`
+  (champ bien exposé par `UserSerializer`/`authStore.ts`). Aucun `POST` réel exécuté contre
+  `backend/db.sqlite3`. `npm run build` (frontend/) → succès (`exit code 0`, 117 modules,
+  avertissements préexistants seulement).
+- Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+### BUG-151 — [frontend] Confirmer manuellement le reste d'hier d'une AUTRE équipe (Production & Stocks)
+
+- Demande client (remarque.md, après l.406) : « Une fois les restes d'hier d'une équipe sont
+  confirmés, dans "Production & Stocks" les gérants doivent avoir la possibilité de confirmer les
+  restes d'hier pour une autre équipe ».
+- Numéro de ticket : `BUG-150` était déjà réservé (ouvert par `dev-backend` dans la fiche BUG-149
+  ci-dessus, pour un écran Configuration sans rapport) au moment où j'ai commencé — aucune collision
+  constatée, `BUG-151` pris directement, pas de renumérotation nécessaire.
+- Cause : depuis BUG-139/140/141, **une seule confirmation** (celle de l'équipe du créneau
+  d'ouverture) suffit pour que `report.needs_confirmation` devienne `false` — comportement voulu
+  pour l'affichage AUTOMATIQUE de la boîte modale (`OpeningStockConfirmationModal.tsx`, montée une
+  seule fois par `DashboardLayout.tsx`). Conséquence non voulue : une fois cette équipe confirmée,
+  la boîte modale ne se réaffiche plus jamais ce jour-là, donc il n'existait plus aucun moyen dans
+  l'interface de confirmer volontairement le reste d'hier de l'AUTRE équipe plus tard dans la
+  journée — alors que le modèle backend (`DailyOpeningConfirmation`, clé `[node, team, date]`) et
+  l'endpoint `GET/POST /api/production/opening-confirmation/` permettent déjà une confirmation
+  indépendante par équipe (rien à changer côté backend pour ce ticket, vérifié avant de commencer).
+- Correctif (frontend uniquement, aucun fichier backend touché) :
+  - `frontend/src/components/production/OpeningStockConfirmationModal.tsx` : nouveaux props
+    optionnels `forceOpenForTeam?: OpeningConfirmationTeam | null` et `onManualClose?: () => void`.
+    Quand `forceOpenForTeam` est fourni, la boîte modale s'ouvre pour cette équipe précise
+    indépendamment de `needsConfirmation`/`dismissedForRoute` (qui ne pilotent que l'affichage
+    automatique, strictement inchangé quand ce prop est omis — non-régression BUG-133 à 141). La
+    sélection d'équipe est préremplie sur `forceOpenForTeam`, le libellé du bouton « Plus tard »
+    devient « Annuler » en mode manuel, et une soumission réussie referme automatiquement la boîte
+    (`onManualClose`) plutôt que de rester ouverte en attendant une éventuelle autre confirmation
+    (comportement automatique conservé en dehors de ce mode).
+  - `frontend/src/store/openingConfirmationStore.ts` (nouveau) : petit store Zustand
+    (`forceOpenForTeam`, `requestManualConfirmation`, `clearManualConfirmation`) qui porte la
+    demande manuelle entre `Production.tsx` (déclencheur) et `DashboardLayout.tsx` (où le composant
+    modal est monté) sans dupliquer sa logique métier ni la faire remonter dans les props de layout.
+  - `frontend/src/components/layout/DashboardLayout.tsx` : branche le store sur les nouveaux props
+    de `OpeningStockConfirmationModal`, sous la même garde de rôle déjà existante (`GERANT`/
+    `FACTURIER` non-HQ).
+  - `frontend/src/components/production/OpeningConfirmationManualSection.tsx` (nouveau, extrait —
+    `Production.tsx` fait 1613 lignes, > ~1000 lignes, CLAUDE.md §4) : interroge le même
+    `GET /api/production/opening-confirmation/`, n'affiche un bouton « Confirmer le reste d'hier —
+    Équipe X » QUE pour les équipes dont `report.teams[X].confirmed` est encore `false` ; affiche un
+    message « Stock de départ confirmé aujourd'hui pour les équipes A et B. » si les deux sont déjà
+    confirmées (rien à faire) ; état de chargement discret (pas de bandeau au premier chargement) et
+    état d'erreur (`detail` de l'API) couverts. Au clic, déclenche le mode manuel via le store ; à la
+    fermeture de la boîte modale (annulée ou soumise), recharge son propre état ET appelle
+    `onConfirmed()` fourni par le parent.
+  - `frontend/src/pages/dashboard/Production.tsx` : monte `OpeningConfirmationManualSection` dans
+    l'onglet « Fournées », juste avant « Stock Pains du Jour », sous la même garde de rôle
+    (`GERANT`/`FACTURIER` non-HQ) ; `onConfirmed` appelle `loadData(viewNode || undefined)` —
+    recharge `breadStocks`/`sessions`/`transfers`/`disposals`, donc les mêmes effets de bord qu'une
+    confirmation automatique (BUG-142 : fournée du jour ; BUG-136 : ajustement du stock disponible),
+    puisque c'est le MÊME endpoint backend des deux côtés.
+  - Aucun nouveau `any` ; aucun appel axios direct (tout passe par `productionApi` dans
+    `src/api/services.ts`, déjà existant depuis BUG-133/138).
+- Vérification :
+  - `npx tsc --noEmit` (frontend/) : aucune erreur.
+  - `npm run build` (frontend/) : build propre (mêmes avertissements préexistants de taille de
+    chunk/minifier, aucun nouveau).
+  - Pas de test E2E dédié à ce parcours ciblé trouvé dans `e2e/` — étapes de vérification manuelle
+    pour le testeur :
+    1. Backend `python manage.py runserver` + frontend `npm run dev`. Compte `GERANT` d'un nœud non
+       siège.
+    2. Au login (ou premier changement de page), confirmer le stock de départ pour l'équipe active
+       du créneau d'ouverture via la boîte modale automatique habituelle — elle disparaît ensuite,
+       comme avant ce ticket (non-régression).
+    3. Aller sur « Production & Stocks » (onglet Fournées) : une zone « Confirmer le reste d'hier
+       d'une autre équipe » apparaît avec un seul bouton pour l'équipe NON encore confirmée (celle du
+       créneau d'ouverture ne doit plus proposer de bouton).
+    4. Cliquer ce bouton → la même boîte modale « Stock de départ du jour » s'ouvre, préremplie pour
+       cette équipe, avec les catégories de pains proposées (`qty_proposed`). Vérifier à 360 px
+       (POS), 768 px et 1440 px que la boîte reste visible sans défilement de page (`Modal`
+       existant, inchangé).
+    5. Valider → la boîte se ferme, la zone affiche « Stock de départ confirmé aujourd'hui pour les
+       équipes A et B. », et « Stock Pains du Jour »/« Historique des Fournées » reflètent
+       l'ajustement éventuel (comme pour une confirmation automatique).
+    6. Revérifier `GET /api/production/opening-confirmation/` (ou recharger la page) : les deux
+       équipes sont bien `confirmed: true` indépendamment, sans effet sur l'autre boulangerie/jour.
+    7. Vérifier la non-régression : un compte Direction/Siège (`can_access_all_nodes`) ne voit ni la
+       boîte modale automatique ni cette nouvelle zone (gardes de rôle inchangées).
+- Fichiers : `frontend/src/components/production/OpeningStockConfirmationModal.tsx`,
+  `frontend/src/store/openingConfirmationStore.ts` (nouveau),
+  `frontend/src/components/production/OpeningConfirmationManualSection.tsx` (nouveau),
+  `frontend/src/components/layout/DashboardLayout.tsx`, `frontend/src/pages/dashboard/Production.tsx`.
+- **Vérification (`testeur-production`, 2026-11-10)** : relecture complète des 5 fichiers touchés.
+  Confirmé : `forceOpenForTeam`/`onManualClose` sont strictement optionnels et n'affectent aucun
+  chemin de code quand omis (`isManualMode = forceOpenForTeam != null`, `isOpen` combine les deux
+  modes par un simple `||`) — non-régression BUG-133 à 141 confirmée par lecture (et par le passage
+  au vert de `production/tests/test_daily_opening_confirmation.py`,
+  `test_bug141_opening_team_after_hours.py`, `test_bug142_fournee_carryover_accumulation.py` dans
+  la suite complète ci-dessous, qui couvrent le même endpoint backend inchangé
+  `GET/POST /api/production/opening-confirmation/`). `OpeningConfirmationManualSection` filtre bien
+  sur les équipes `!report.teams[team].confirmed` (un seul bouton proposé pour l'équipe qui n'a pas
+  le créneau d'ouverture une fois celle-ci confirmée) et affiche le message de complétude quand les
+  deux le sont. Garde de rôle (`GERANT`/`FACTURIER` non-HQ) identique à celle déjà appliquée à la
+  boîte modale automatique dans `DashboardLayout.tsx`, retrouvée à l'identique dans
+  `Production.tsx` (ligne 761) pour la nouvelle zone — un compte Direction/Siège
+  (`can_access_all_nodes`) ne voit ni l'une ni l'autre. Pas d'exécution E2E Playwright réelle
+  (aucun scénario dédié dans `e2e/`, comme signalé par `dev-frontend`) — vérification par lecture de
+  code et par la suite de tests backend existante (même endpoint, inchangé). `npm run build` →
+  succès. Point mineur relevé en passant (sans rapport avec ce ticket, pas de nouveau ticket
+  ouvert) : la ligne de synthèse de ce ticket manquait dans le tableau de suivi (seule la fiche
+  détaillée existait) — ajoutée par ce testeur ci-dessus.
+- Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).

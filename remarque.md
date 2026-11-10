@@ -401,3 +401,8 @@ pour K1 username: @gerant-k1; password: @gerant-k1
 pour K2 username: @gerant-k2; password: @gerant-k2
 pour K3 username: @gerant-k3; password: @gerant-k3
 Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur théorique sac de farine 210000Fc dans chaque boulangerie et par défaut aussi — fait le 2026-11-10 : base réinitialisée (migrations propres), Config.sac_value_fc=210000 ET Node.sac_value_fc=210000 sur les 8 boulangeries, créneaux A 06:00-11:30/B 14:30-20:00 sur toutes, comptes @pierre/@pierre (DIRECTION) et @gerant-kX/@gerant-kX par boulangerie, 4 catégories de pain standard. Comptes E2E fictifs (demo_*_e2e) recréés séparément pour ne pas casser la suite de tests automatisée.
+
+
+[c] Entant que Superuser, j'aimerais avoir un bouton pour supprimer les autres donées sauf, les données de la configuration, les sucursalles(boulangeries), les utilisateurs et la liste des clients — traité sous BUG-149 (endpoint réservé au superuser technique, double confirmation phrase+mot de passe) et BUG-150 (bouton dans Configuration, boîte de confirmation). Conserve Config/boulangeries/utilisateurs/clients (soldes remis à zéro) ; supprime tout le reste. VÉRIFIÉ le 2026-11-10 (599 tests).
+
+[c] Une fois les restes d'hier d'une équipe sont confirmés, dans "Production & Stocks" les gerants doit avoir la possibilité de confirmer les restes d'hier pour une autres équipes — traité sous BUG-151 : nouvelle zone manuelle dans Production & Stocks proposant la confirmation de l'équipe restante, sans changer le comportement automatique (une seule confirmation suffit à fermer la boîte modale, BUG-139/141). VÉRIFIÉ le 2026-11-10.

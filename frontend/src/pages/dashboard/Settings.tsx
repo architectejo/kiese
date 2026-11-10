@@ -4,11 +4,12 @@ import {
   FiSettings, FiSave, FiRefreshCw, FiGlobe, FiLock,
   FiAlertTriangle, FiCheckCircle, FiSliders, FiPercent,
   FiDollarSign, FiPackage, FiEdit2, FiTrash2,
-  FiPlus, FiX
+  FiPlus, FiX, FiShield
 } from 'react-icons/fi';
 import { coreApi, productionApi, SiteConfig, BreadPrice, ExpenseCategory, ConsumableType, BakeryNode, ColisDistribution } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
+import { ResetDataModal } from '@/components/settings/ResetDataModal';
 export const Settings: React.FC = () => {
   const { user } = useAuthStore();
 
@@ -88,6 +89,9 @@ export const Settings: React.FC = () => {
   const [colisError, setColisError]   = useState<string | null>(null);
   const [colisSubmitting, setColisSubmitting] = useState(false);
   const [showColisForm, setShowColisForm] = useState(false);
+
+  // ── BUG-150 : réinitialisation globale des données (Superuser) ────
+  const [showResetModal, setShowResetModal] = useState(false);
 
   const loadColis = useCallback(async () => {
     if (!colisNode) return;
@@ -1099,6 +1103,34 @@ export const Settings: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* BUG-150 : Réinitialisation globale des données — Superuser uniquement */}
+      {user?.is_superuser && (
+        <div className="glass-card" style={{ padding: '16px', borderLeft: '4px solid hsl(var(--color-danger))' }}>
+          <h3 style={{ fontSize: '0.85rem', fontWeight: 800, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--color-danger))' }}>
+            <FiShield /> Zone dangereuse — Superuser
+          </h3>
+          <p style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', marginBottom: '12px', maxWidth: '640px' }}>
+            Supprime définitivement toutes les données transactionnelles (ventes, production,
+            trésorerie, commissions, finance, blockchain…). La configuration, les boulangeries, les
+            utilisateurs et la liste des clients sont conservés (soldes clients remis à zéro).
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowResetModal(true)}
+            className="btn"
+            style={{
+              padding: '8px 16px', fontSize: '0.78rem', fontWeight: 800,
+              display: 'flex', alignItems: 'center', gap: '6px',
+              backgroundColor: 'hsl(var(--color-danger))', color: '#fff', border: 'none', cursor: 'pointer',
+            }}
+          >
+            <FiTrash2 /> Réinitialiser les données
+          </button>
+        </div>
+      )}
+
+      <ResetDataModal isOpen={showResetModal} onClose={() => setShowResetModal(false)} />
 
     </div>
   );
