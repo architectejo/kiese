@@ -39,6 +39,19 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-016 | Audit remarque.md non traité — Tableau de bord, Finance, Permissions, Nodes (lignes 52-83, 87, 100-106, 110, 140, 158-165, 202, 208-214) | Finance/Dashboard/Permissions | backend/frontend | À qualifier | REJETÉ (périmètre intégralement couvert : partie permissions/dashboard/nodes par testeur-permissions — l.110/l.160 `[c]`, l.52-83 → BUG-027, isolation transversale → BUG-022/023/024/025/026 ; partie Finance par auditeur-comptable le 2026-10-23 — l.87 vérifiée conforme `[c]`, formule CM cahierDesCharges §2.3.1-2.3.2 conforme, écart structurel vs `cadre_comptable.md` documenté séparément dans `docs/qa/ECART_CADRE_COMPTABLE.md`, 1 anomalie réelle trouvée par recoupement Excel → BUG-058) | coordinateur | testeur-permissions + auditeur-comptable | coordinateur |
 | BUG-058 | `ClientCommission.compute()` déduit systématiquement CARTE (1 % du CM) et REMISE (0,1 % du CM) du Net à Payer, alors que les classeurs réels d'août 2026 (K1/K2/K3) ne déduisent jamais ces deux montants de la formule NET A PAYER | Commissions | backend | Majeur | VÉRIFIÉ | auditeur-comptable | dev-backend | testeur-clients-commissions |
 | BUG-153 | « Clôture Journalière » : aucune possibilité d'exporter (Excel) ni d'imprimer les sections du rapport (remarque.md, après l.410) | Trésorerie/Production | frontend | Mineur | VÉRIFIÉ | coordinateur | dev-frontend | testeur-production |
+| BUG-155 | Le reste du jour par catégorie n'est jamais calculé/déclaré automatiquement à l'heure de fin de créneau d'une équipe (`Node.team_a_end_time`/`team_b_end_time`) si la fournée n'a pas été clôturée manuellement (remarque.md l.414) : endpoint de détection + clôture forcée automatique après délai de grâce | Production | backend | Majeur | VÉRIFIÉ (testeur-production, 2026-11-11 ; suivi mineur BUG-165) | coordinateur | dev-backend | testeur-production, 2026-11-11 |
+| BUG-156 | Ticket lié à BUG-155 : le frontend doit ouvrir automatiquement une boîte modale (reste du jour par catégorie, pré-remplie depuis le stock physique) dès l'heure de fin de créneau si la fournée n'est pas close, jusqu'à validation — et refléter la clôture forcée automatique si elle survient (remarque.md l.414) | Production | frontend | Majeur | VÉRIFIÉ | coordinateur | dev-frontend | testeur-production, 2026-11-10 |
+| BUG-157 | Ticket lié à BUG-156 : la notification de clôture automatique (`auto_closed=true`) ne doit pas disparaître seule après quelques secondes — elle doit rester affichée à l'écran jusqu'à confirmation explicite du gérant (instruction client directe, 2026-11-10) | Production | frontend | Mineur | VÉRIFIÉ (relecture, testeur-production, 2026-11-11) | coordinateur | dev-frontend | testeur-production, 2026-11-11 |
+| BUG-158 | `ProductionSessionViewSet.shift_end_status()` (BUG-155) plante en `IntegrityError` (HTTP 500 non intercepté, CHECK constraint sur `BreadDisposal.quantity`) lors de la clôture forcée automatique si une catégorie de pain a un `BreadStock.qty_available` négatif (état atteignable sans aucun clamp via des dispositions UNSOLD/DECLASSED/FREE_DIST dépassant le produit, cf. BUG-143 côté consommables) — la fournée reste bloquée indéfiniment (transaction annulée, le polling suivant replante de la même façon), sans notification exploitable côté frontend | Production | backend | Majeur | VÉRIFIÉ (testeur-production, 2026-11-11) | testeur-production | dev-backend | testeur-production, 2026-11-11 |
+| BUG-159 | Ticket lié à BUG-158 : `CloseSessionModal` force les quantités à >= 0 (`Math.max(0, …)`, `min={0}`) alors que le client veut que le reste du jour négatif soit enregistré tel quel à la clôture (automatique et manuelle) — la modale forcée pré-remplie avec un reste négatif doit pouvoir être validée (instruction client directe, 2026-11-10) | Production | frontend | Majeur | CORRIGÉ (revu 2026-11-11 : reste CORRIGÉ tant que BUG-166 est ouvert) | coordinateur | dev-frontend | — |
+| BUG-160 | `ResetDataModal` : le gestionnaire de mots de passe du navigateur remplissait automatiquement l'identifiant (« architecte ») dans le champ « SUPPRIMER TOUT » (autofill ignorant `autoComplete="off"` pour un champ texte placé juste avant un champ mot de passe `current-password`) — la phrase ne correspondait plus et le bouton « Supprimer définitivement » restait désactivé sans explication (capture du client, 2026-11-11). Corrigé par le coordinateur (petit correctif frontend) : noms de champs dédiés, `autoComplete="new-password"` sur le mot de passe, attributs `data-lpignore`/`data-1p-ignore`, message d'erreur explicite quand la phrase ne correspond pas | Paramètres | frontend | Mineur | CORRIGÉ (relu 2026-11-11 ; contrôle navigateur manuel requis) | client (capture, 2026-11-11) | coordinateur | — |
+| BUG-161 | Rotation d'équipes de 24 h (remarque.md l.416) : le modèle actuel (équipe A 6h00–11h30 / équipe B 14h30–20h00, créneaux fixes chaque jour, BUG-130/131/141/155) ne correspond pas au fonctionnement réel — une équipe travaille 24 h, relevée le lendemain à la même heure par l'autre équipe. Impact transverse : heure de relève unique par boulangerie, désignation manuelle quotidienne de l'équipe de service, « journée » de relève à relève (stock de départ, fournées, clôture, rapport, factures), détection de fin de créneau BUG-155 | Production/Ventes/Trésorerie/Core | backend/frontend | Majeur | OUVERT (conception à produire avant tout code) | coordinateur (remarque.md, client, 2026-11-11) | architecte (conception) puis dev-backend / dev-frontend | — |
+| BUG-162 | Lié à BUG-158/159 : la confirmation du stock de départ (`POST /api/production/opening-confirmation/`, BUG-133) refuse une quantité négative (400) et le champ de `OpeningStockConfirmationModal.tsx` impose `min={0}`, alors que le reste du jour négatif est désormais enregistré tel quel (instruction client 2026-11-10) et devient le stock de départ de l'équipe suivante : la modale proposant `BreadStock.qty_available` négatif ne pouvait pas être validée | Production | backend/frontend | Majeur | VÉRIFIÉ (backend + frontend relu, testeur-production, 2026-11-11) | dev-backend (point signalé en clôturant BUG-158) | dev-backend / dev-frontend | testeur-production, 2026-11-11 |
+| BUG-163 | Chargement progressif des listes (remarque.md l.420, « comme dans Gestion Clientèle ») — lot 1 : hook partagé `useProgressiveList` (page 1 affichée tout de suite, pages suivantes en arrière-plan, annulation si filtre change, indicateur « X / Y chargés »), appliqué à Dashboard (toutes factures livrées + tous clients chargés à chaque ouverture), Activités et Notifications (tronquées silencieusement à 25), et correction de la troncature à 25 de Users | Dashboard/Core | frontend | Majeur | OUVERT | coordinateur (remarque.md, client, 2026-11-11) | dev-frontend | — |
+| BUG-164 | Chargement progressif des listes — lot 2 : Trésorerie (journal, livre de caisse, dépenses, rapports, bons), Commissions, Blockchain (`cashbook.list()` sans filtre), Production (listes tronquées côté client par `.slice` : demander directement 15/20 lignes ; `transfers` sans filtre node), Sales. Totaux/KPI calculés côté client : affichés seulement une fois le chargement terminé (ou marqués « partiel ») | Trésorerie/Commissions/Production/Ventes | frontend (+ backend si filtre node transferts) | Majeur | OUVERT | coordinateur (remarque.md, client, 2026-11-11) | dev-frontend | — |
+| BUG-170 | Production & Stocks, §3.3 « Transferts Inter-Boulangeries » : à l'envoi du formulaire de demande (`handleCreateTransfer`, `Production.tsx` ~l.337-354) l'utilisateur ne voit AUCUNE confirmation — en cas de succès le formulaire est simplement vidé (`setTFromNode('')`…) puis la liste rechargée, seules les erreurs sont affichées (`tError`). Il doit voir clairement que la demande a été envoyée (remarque.md l.424, 2026-11-11) : message de succès persistant près du formulaire (boulangerie sollicitée, nombre de pains demandés, statut « en attente de réponse »), bouton désactivé pendant l'envoi pour éviter le double envoi, la demande visible dans la liste | Production | frontend | Mineur | OUVERT | coordinateur (remarque.md, client, 2026-11-11) | dev-frontend | — |
+| BUG-165 | `shift_end_status()` (BUG-155) lit `session.is_closed` sans `select_for_update()` et `_close_production_session()` ne revérifie pas l'état dans sa transaction : deux requêtes entrelacées après le délai de grâce clôturent deux fois la fournée et créent deux notifications « Stock de pain négatif » (CLAUDE.md §4) | Production | backend | Mineur | VÉRIFIÉ (coordinateur, 2026-11-11 — 37 tests ciblés OK, suite complète 648 OK, test d'entrelacement du testeur passe sans expectedFailure) | testeur-production | dev-backend | — |
+| BUG-166 | `CloseSessionModal` en mode forcé : le sondage de 10 s de `DashboardLayout` appelle `setShiftEndPending({...})` avec un NOUVEL objet à chaque tick, l'effet de la modale dépend de l'identité de `forced` et refait `setQuantities(defaults)` : toute valeur saisie par le gérant (négative ou non) est écrasée par le stock suggéré toutes les 10 s, et l'erreur affichée est effacée | Production | frontend | Majeur | VÉRIFIÉ (coordinateur, 2026-11-11 — relecture du store/modale + tsc/build verts ; contrôle manuel navigateur recommandé, procédure dans la fiche) | testeur-production | dev-frontend | — |
 | BUG-017 | `_generate_client_code` sans verrou : création de client concurrente peut planter (IntegrityError) au lieu de produire des codes uniques | Clients | backend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | testeur-clients-commissions |
 | BUG-088 | `ClientCreateSerializer` n'expose ni `id` ni `code` dans la réponse de création d'un client — `clientsApi.create()` renvoie un objet sans identifiant, cassant silencieusement la création auto du « Client Occasionnel » (`Clients.tsx` ligne ~600) en vente directe au comptoir | Clients | backend/frontend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | testeur-clients-commissions |
 | BUG-089 | `ClientViewSet` (`IsGerant`) refuse (403) la création de client à un FACTURIER — casse silencieusement le flux « Client Occasionnel » de `Clients.tsx` (vente directe au comptoir) pour ce rôle, découvert en vérifiant BUG-088 | Clients | backend | Majeur | VÉRIFIÉ | testeur-clients-commissions | dev-backend | — |
@@ -14432,5 +14445,552 @@ compte, pas tranché unilatéralement.
     contrat consommé produit le résultat attendu côté backend pour une saisie multi-catégories avec
     0 explicite.
   - Aucun axios direct, aucun nouveau `any` constaté ; `npx tsc --noEmit` et `npm run build`
-    (frontend/) passent.
-  Statut : `VÉRIFIÉ` (`testeur-production`, 2026-11-10).
+
+### BUG-155 — [backend] Calcul/clôture automatique du reste du jour à l'heure de fin de créneau
+
+- Origine : remarque.md l.414, 2026-11-10 : « Dans chaque boulangerie le calcul des restes du jour
+  lors de la clôture journalière doivent se faire automatiquement aux heures de fin de créneaux pour
+  les équipes. » Décisions du client (questions de clarification posées par le coordinateur avant
+  tout code) :
+  1. La saisie manuelle intégrée à la clôture (BUG-152/BUG-154) est **conservée** (cas où le travail
+     s'arrête tôt, avant la fin théorique du créneau).
+  2. **En plus**, dès que l'heure de fin de créneau du nœud (`Node.team_a_end_time`/
+     `team_b_end_time`) est atteinte, si la fournée (`ProductionSession`) de l'équipe concernée pour
+     le jour courant n'est pas encore `is_closed=True`, une boîte modale doit s'ouvrir côté frontend
+     (même principe que `DailyOpeningConfirmationView`/`OpeningStockConfirmationModal`, BUG-130/139)
+     demandant de valider le reste du jour par catégorie, pré-rempli depuis le stock physique
+     (`BreadStock.qty_available`), jusqu'à validation humaine.
+  3. Si personne ne valide (fournée abandonnée, personne connecté après l'heure de fin de créneau) :
+     **clôture forcée automatique**, avec le reste calculé depuis le stock physique au moment de la
+     clôture forcée.
+  - Pas d'infra de tâches planifiées côté backend (ni Celery, ni APScheduler, ni cron) — confirmé par
+    recherche dans `requirements.txt`/`settings.py`. Toute détection « heure de fin de créneau
+    dépassée » se fait donc par **évaluation paresseuse** déclenchée par le polling frontend déjà en
+    place (notifications, `DashboardLayout.tsx`, intervalle 10 s), pas par un job serveur autonome —
+    cohérent avec le reste de l'architecture (aucun autre mécanisme cron dans le projet).
+  - Nouvel endpoint `GET /api/production/sessions/shift-end-status/?node=<code>` : pour l'équipe dont
+    l'heure de fin de créneau (configurée sur `Node`) est déjà passée aujourd'hui ET dont la
+    `ProductionSession` (node, team, date=aujourd'hui) existe et n'est pas close, retourne
+    `{"team": "A"|"B", "session": <id>, "pending_validation": true, "remaining": [{"bread_price":
+    id, "label": ..., "quantity_suggested": <qty_available actuel>}], "auto_closed": false}`.
+    - Si une session équivalente existe déjà close, ou n'existe pas du tout pour cette équipe/jour
+      (rien à clôturer), retourne `{"pending_validation": false}`.
+  - **Clôture forcée** : implémentée dans la même vue, en évaluation paresseuse à chaque appel — si
+    l'heure de fin de créneau est dépassée de plus de `SHIFT_END_GRACE_MINUTES` (30 minutes, constante
+    dans `production/views.py`, documentée ici plutôt que redemandée au client — délai raisonnable
+    laissant le temps à un gérant présent de répondre à la modale sans bloquer indéfiniment la
+    fournée), ET que la session n'est toujours pas close, la vue appelle en interne exactement la même
+    logique que `ProductionSessionViewSet.close()` (transaction atomique, `remaining` = quantités
+    physiques actuelles par catégorie, `is_closed=True`, `closed_at=timezone.now()`,
+    `DailyBreadStockSnapshot.record_snapshot()`), puis répond `{"pending_validation": false,
+    "auto_closed": true, "team": "A"|"B"}` pour que le frontend affiche une notification au lieu
+    d'ouvrir la modale de saisie.
+  - Aucune modification de `ProductionSessionViewSet.close()` lui-même : la logique de clôture forcée
+    appelle la même fonction utilitaire interne (extraite si nécessaire) pour ne jamais dupliquer le
+    code déjà vérifié sous BUG-152.
+  - Test de non-régression attendu : un scénario où l'heure de fin de créneau est dépassée de moins de
+    30 min → `pending_validation=true`, pas de clôture ; un scénario où elle est dépassée de plus de
+    30 min → clôture automatique effective, `BreadDisposal REMAINING` créés avec les quantités
+    physiques au moment de l'appel ; un scénario où la session est déjà close → aucune action.
+
+  **CORRIGÉ (dev-backend, 2026-11-10)**
+  - Fichiers modifiés : `backend/production/views.py` uniquement. Aucune migration (aucun champ de
+    modèle ajouté — `Node.team_a_end_time`/`team_b_end_time` existaient déjà, BUG-130/131).
+  - Cause/implémentation :
+    - Extraction de `_close_production_session(session, remaining_entries, request_user)` : reprend
+      EXACTEMENT, sans aucune modification, le corps de `ProductionSessionViewSet.close()` tel que
+      vérifié sous BUG-093/BUG-152 (transaction atomique, recoupement via
+      `_build_reconciliation_querysets`/`_compute_reconciliation`, upsert idempotent des lignes
+      `BreadDisposal` REMAINING, `DailyBreadStockSnapshot.record_snapshot()`, notification DANGER si
+      anomalie, `log_activity`). `close()` ne fait plus que valider/parser le payload `remaining` puis
+      appeler cette fonction — comportement strictement inchangé (tous les tests `test_closure.py`
+      existants passent sans modification).
+    - Constante `SHIFT_END_GRACE_MINUTES = 30` (module `production/views.py`, documentée dans le code).
+    - Helper `_current_bread_stocks(node)` : lignes `BreadStock` courantes triées par
+      `bread_price__unit_price` (même tri que `BreadStockByDateView` cas « live »), source unique du
+      reste physique suggéré/forcé.
+    - Nouvelle action `GET /api/production/sessions/shift-end-status/?node=<code ou pk>` sur
+      `ProductionSessionViewSet` (`url_path='shift-end-status'`, `detail=False`). Permission :
+      `IsAuthenticated` (ajoutée dans `get_permissions()`, contrairement à `close()` qui reste
+      `IsGerant` — un facturier seul après l'heure de fin de créneau doit aussi déclencher/voir la
+      détection). Isolation par nœud identique à `BreadStockByDateView`/`DailyClosureReportView`
+      (`_resolve_node`) : un non-HQ ignore tout `node` reçu, un HQ doit le préciser.
+      - Itère les équipes A puis B (une seule signalée par appel — les créneaux ne se chevauchent
+        jamais, CLAUDE.md §5.2) ; pour la première dont l'heure de fin est dépassée aujourd'hui et dont
+        la session n'est ni absente ni close : calcule `elapsed = now - end_datetime` (`now` =
+        `timezone.localtime()`, `end_datetime` = `timezone.make_aware(datetime.combine(today,
+        end_time), timezone.get_current_timezone())`).
+      - `elapsed >= 30 min` → appelle `_close_production_session` avec `remaining_entries` =
+        `[(bread_price_id, qty_available), ...]` lus sur `_current_bread_stocks(node)` → répond
+        `{"pending_validation": false, "auto_closed": true, "team": "A"|"B"}`.
+      - `elapsed < 30 min` → ne clôture rien, répond `{"team", "session", "pending_validation": true,
+        "remaining": [{"bread_price", "label", "quantity_suggested"}], "auto_closed": false}`.
+      - Aucune équipe concernée (créneau pas encore atteint, session absente, ou déjà close) →
+        `{"pending_validation": false}`.
+  - Test de non-régression : nouveau fichier
+    `backend/production/tests/test_bug155_shift_end_auto_closure.py` (7 tests, tous verts) — dépassement
+    < 30 min (pending, pas de clôture), dépassement > 30 min (clôture auto effective, REMAINING créé
+    avec le reste physique correct), limite exacte à 30 min (clôture), session déjà close (aucune
+    action, même largement après l'heure), aucune session pour l'équipe/jour (rien de pending), heure de
+    fin pas encore atteinte (rien de pending), et non-régression explicite de l'appel volontaire
+    `close()` avec `remaining` fourni (BUG-152, comportement identique avant/après ce ticket). Le temps
+    est maîtrisé via `unittest.mock.patch('django.utils.timezone.now', ...)` (pas de dépendance
+    `freezegun` dans `requirements.txt`).
+  - `python manage.py test` (suite complète) et `python manage.py makemigrations --check --dry-run` :
+    passent (voir rapport `docs/qa/rapports/dev-backend-2026-11-10.md`).
+  - Impact API : nouvel endpoint, aucun contrat existant modifié — pas de ticket `dev-frontend`
+    supplémentaire requis au-delà de BUG-156 (déjà ouvert, qui consomme ce contrat).
+  - À vérifier par le testeur d'origine (ou le coordinateur) avant `VÉRIFIÉ`.
+
+  **Vérification (`testeur-production`, 2026-11-10) — reste `CORRIGÉ`, PAS `VÉRIFIÉ`**
+  - Relu `_close_production_session`/`shift_end_status` dans `backend/production/views.py` et écrit
+    des scénarios indépendants de ceux de `dev-backend`
+    (`backend/production/tests/test_bug155_qa_production_review.py`, 6 tests), tous construits à
+    partir de fabriques propres (`core.testing`), sans réutiliser les données de `data_kiese/` :
+    1. **Deux équipes A et B simultanément en attente sur le même nœud/appel** : confirmé qu'un seul
+       appel ne traite/signale que l'équipe A (créneau le plus tôt dépassé), jamais B dans le même
+       appel — comportement documenté respecté ; un second appel immédiatement après traite ensuite B
+       (cohérent avec le « re-sondage immédiat » de BUG-156).
+    2. **Isolation par nœud** : un FACTURIER non-HQ envoyant `?node=<autre boulangerie>` est bien
+       ignoré — seul son propre nœud est évalué, jamais celui d'une autre boulangerie même avec une
+       fournée en attente.
+    3. **Multi-catégories** : clôture forcée avec 2 catégories de pain, dont une entièrement épuisée
+       (stock physique à 0) — une ligne `REMAINING` est bien créée pour CHAQUE catégorie, y compris
+       celle à 0 (jamais omise).
+    4. **Non-régression BUG-152/154** : l'appel volontaire `close()` avec un `remaining` fourni
+       EXPLICITEMENT différent du stock physique courant (reste déclaré = 12 alors que le stock
+       physique vaut 300) est bien accepté tel quel — la factorisation introduite par ce ticket
+       (`_close_production_session`) ne vient jamais « corriger » silencieusement la valeur saisie par
+       l'utilisateur avec le stock physique.
+    5. **BUG-158 (angle non couvert par la suite de `dev-backend`)** : clôture forcée (grâce dépassée)
+       alors qu'une catégorie a un `BreadStock.qty_available` NÉGATIF (-20, obtenu via une disposition
+       `DECLASSED` de 70 sur une fournée n'en ayant produit que 50 — aucun clamp n'empêche cet état,
+       cf. BUG-143 pour le même principe côté consommables). Résultat réel observé :
+       `django.db.utils.IntegrityError: CHECK constraint failed: quantity` (HTTP 500 NON intercepté)
+       en tentant de persister `BreadDisposal.quantity = -20` (`PositiveIntegerField`, contrainte CHECK
+       ajoutée automatiquement par Django ≥4.1 côté SQLite). La transaction étant atomique, la session
+       n'est jamais clôturée : le polling suivant retente la même opération et replante à l'identique —
+       blocage indéfini de la clôture automatique (et donc potentiellement de la clôture journalière)
+       de cette boulangerie, sans aucune notification exploitable (juste un 500 générique côté
+       frontend, silencieux pour l'utilisateur). Documenté comme **BUG-158** (nouveau ticket, voir
+       fiche dédiée ci-dessous) ; test correspondant marqué `@unittest.expectedFailure` avec la
+       référence `BUG-158` dans `test_bug155_qa_production_review.py` (passe tel quel tant que
+       BUG-158 n'est pas corrigé).
+  - `python manage.py test` (suite complète, 617 tests = 611 base + 6 nouveaux de ce fichier) :
+    **OK (expected failures=1)** — aucune régression silencieuse détectée, le compte correspond
+    exactement à 611 (dev-backend) + 6 (ce fichier). `python manage.py makemigrations --check
+    --dry-run` : `No changes detected`.
+  - Conclusion : les 5 premiers angles résistent à la vérification indépendante et confirment le
+    comportement attendu. Le 6ᵉ (BUG-158) est un défaut réel, DANS le code même de ce ticket
+    (`shift_end_status`), reproductible de façon déterministe — ce ticket reste donc `CORRIGÉ`, pas
+    `VÉRIFIÉ`, tant que BUG-158 n'est pas traité. Aucun fichier applicatif modifié par le testeur
+    (CLAUDE.md §7 règle 2).
+
+**Vérification (`testeur-production`, 2026-11-11) — `VÉRIFIÉ`** (suivi : BUG-165, mineur)
+- Lot relu + scénarios indépendants (`backend/production/tests/test_verif_bug155_162_testeur_production.py`, 12 tests). Produire 50 / sortir 70 / clôture auto : REMAINING = -20, snapshot -20, rapport du jour `reste_du_jour` A = -20, `reste_du_hier` = 0 (aucun double comptage, production restée à 50, déclassés 70), une seule notification WARNING, `BreadStock` intact. Appels répétés (y compris +1 h) : une seule clôture, un seul REMAINING, un seul snapshot. Facturier d'un autre nœud : aucune action sur ce nœud.
+- Angle non couvert : concurrence réelle -> BUG-165 (test `@expectedFailure`).
+
+
+### BUG-156 — [frontend] Boîte modale forcée « Reste du jour » à la fin de créneau
+
+- Ticket lié à BUG-155 (backend). Reprend exactement le pattern déjà en place pour la confirmation du
+  stock de départ (BUG-130/139/151, `openingConfirmationStore.ts` + `OpeningStockConfirmationModal.tsx`
+  montée une seule fois dans `DashboardLayout.tsx`) : nouveau store `shiftEndStore.ts`, polling toutes
+  les 15-30 s (même rythme que les notifications) sur `GET
+  /api/production/sessions/shift-end-status/`.
+  - Si `pending_validation=true` : ouvre `CloseSessionModal` en mode forcé (nouvelle prop
+    `forcedTeam`/`onForcedClose`, non fermable sans soumission — contrairement au mode volontaire
+    BUG-154 où « Annuler » reste possible), pré-rempli avec `quantity_suggested` au lieu de 0.
+    Soumission → `productionApi.sessions.close(session, {remaining})` (même endpoint que BUG-152/154,
+    aucun nouveau call).
+  - Si `auto_closed=true` reçu au polling : pas de modale, notification/toast informant que la
+    clôture a été faite automatiquement pour l'équipe concernée (reste calculé depuis le stock
+    physique).
+  - Aucune modification du mode volontaire existant (`CloseSessionModal` ouvert manuellement depuis
+    le bouton « Clôturer la fournée », BUG-154) : le nouveau mode forcé est un comportement additionnel
+    sur le même composant, pas un remplacement.
+
+  **CORRIGÉ (dev-frontend, 2026-11-10)**
+  - Fichiers modifiés/créés :
+    - `frontend/src/api/services.ts` : types `ShiftEndTeam`, `ShiftEndRemainingLine`,
+      `ShiftEndStatusPending`/`ShiftEndStatusAutoClosed`/`ShiftEndStatusNone` (union
+      `ShiftEndStatus`), et `productionApi.sessions.shiftEndStatus(params?)` consommant
+      `GET /api/production/sessions/shift-end-status/` (contrat exact confirmé par dev-backend,
+      aucun nouveau `any`).
+    - `frontend/src/store/shiftEndStore.ts` (nouveau) : store Zustand sur le modèle exact de
+      `openingConfirmationStore.ts` (BUG-151) — état `pending` (équipe/session/reste suggéré en
+      attente de clôture forcée) et `autoClosedTeam` (notification de clôture automatique à
+      afficher une fois), avec `setPending`/`notifyAutoClosed`/`clearAutoClosedNotice`.
+    - `frontend/src/components/production/CloseSessionModal.tsx` : ajout du mode forcé — nouvelles
+      props `forced?: ShiftEndPendingState | null` et `onForcedClose?`, sans toucher au mode
+      volontaire existant (branches `isForced` partout, comportement par défaut `forced=null`
+      strictement identique à avant). En mode forcé : pas de bouton « Annuler », `showCloseButton`
+      et `closeOnBackdropClick` désactivés (boîte non fermable sans soumission, conforme au
+      contrat), quantités pré-remplies depuis `quantity_suggested` au lieu de 0, bandeau
+      d'avertissement expliquant le délai de 30 min. La soumission appelle
+      `productionApi.sessions.close(session, {remaining})`, déjà existant (BUG-152/154, inchangé).
+    - `frontend/src/components/layout/DashboardLayout.tsx` : intégration du sondage dans le cycle
+      déjà en place pour les notifications (`setInterval` existant à 10 s, pas de second timer) —
+      `fetchShiftEndStatus()` appelé au montage et à chaque tick, gating par rôle identique à
+      `OpeningStockConfirmationModal` (`GERANT`/`FACTURIER` non-HQ ; le backend autorise
+      `IsAuthenticated` sur cet endpoint précisément pour qu'un facturier seul puisse aussi
+      déclencher/voir la détection, remarque.md). Montage unique de `CloseSessionModal` en mode
+      forcé (même niveau que `OpeningStockConfirmationModal`) et d'un toast fixe (coin bas-droit,
+      auto-effacé après 8 s) quand `auto_closed=true` est reçu — pas de modale dans ce cas.
+      **Re-sondage immédiat** : après un `auto_closed` reçu, un second appel est fait aussitôt
+      (sans attendre le prochain intervalle) pour vérifier si l'AUTRE équipe est elle aussi
+      concernée ; de même après une clôture forcée soumise avec succès (`handleForcedClosed`
+      réinitialise `pending` puis re-sonde immédiatement).
+  - Mode d'emploi du contrat : `pending_validation=true` → modale forcée ; `auto_closed=true` →
+    toast informatif seul ; `pending_validation=false` sans `auto_closed` → rien (état déjà clos
+    au repos, `pending` remis à `null`).
+  - `npx tsc --noEmit` et `npm run build` (frontend/) passent sans erreur ni nouvel avertissement
+    (seul avertissement présent : taille de chunk > 500 kB, préexistant, sans rapport avec ce
+    ticket).
+  - Pas de test Playwright ajouté : le scénario nécessite un temps simulé (fin de créneau dépassée
+    de 0 à 30+ minutes) incompatible avec un test chronométré en base réelle, et le client a demandé
+    de ne plus recréer de comptes `demo_*_e2e` dans `db.sqlite3` (reset du 2026-11-10). Aucun outil
+    Vitest/RTL n'est actuellement configuré dans `frontend/` (pas de `vitest`/`@testing-library/react`
+    dans `package.json`) — à signaler au coordinateur si un futur ticket veut l'introduire. Étapes de
+    vérification manuelle pour le testeur d'origine :
+    1. Backend : configurer `team_a_end_time` (ou `team_b_end_time`) sur un `Node` à une heure très
+       proche (ex. +1 min) via l'admin Django ou `Settings.tsx`, créer une `ProductionSession` non
+       close pour (node, équipe, aujourd'hui).
+    2. Se connecter en GERANT (ou FACTURIER) de ce nœud, attendre le passage de l'heure de fin —
+       dans la minute qui suit (polling 10 s), la boîte modale « Clôture du créneau — Équipe X »
+       doit s'ouvrir automatiquement (sans action), pré-remplie avec le stock physique actuel, sans
+       bouton « Annuler » ni croix de fermeture, non fermable au clic sur le fond ni à Échap.
+    3. Soumettre : la fournée doit se clôturer (`is_closed=true`), la modale se referme ; si l'autre
+       équipe est elle aussi en attente, la modale se réaffiche immédiatement pour elle (sans
+       attendre 10 s).
+    4. Ne rien faire pendant > 30 min après la fin de créneau (ou avancer l'horloge serveur en test) :
+       au prochain sondage, la modale ne doit PAS s'afficher ; un toast « Clôture automatique —
+       Équipe X » doit apparaître en bas à droite et s'effacer après ~8 s (ou via le bouton ✕) ; la
+       session doit être `is_closed=true` côté backend avec le reste physique correct.
+    5. Vérifier à 360 px (POS) et 768 px que la modale forcée et le toast restent lisibles et sans
+       défilement de page (Modal partagé, `maxHeight: 90vh`, déjà conforme à la demande client).
+  - À vérifier par le testeur d'origine (ou le coordinateur) avant `VÉRIFIÉ` — non auto-validé
+    (CLAUDE.md §7 règle 3).
+
+  **Vérification (`testeur-production`, 2026-11-10) — `VÉRIFIÉ`**
+  - Relecture ciblée (pas de Playwright chronométré, limite documentée et acceptée par `dev-frontend`
+    — scénario nécessitant un temps simulé incompatible avec un test chronométré en base réelle) de
+    `CloseSessionModal.tsx`, `shiftEndStore.ts`, `DashboardLayout.tsx` et `services.ts` :
+    - Mode forcé réellement non fermable : `showCloseButton={!isForced}`,
+      `closeOnBackdropClick={!submitting && !isForced}`, pas de bouton « Annuler » dans le footer en
+      mode forcé. La touche Échap est gérée par `Modal.tsx` en appelant TOUJOURS `onClose` (quel que
+      soit `closeOnBackdropClick`), mais `CloseSessionModal` passe à `Modal` un `onClose` qui
+      enveloppe lui-même la garde `!isForced` (`onClose={() => { if (!submitting && !isForced)
+      onClose(); }}`) — Échap n'a donc bien AUCUN effet en mode forcé, confirmé par lecture de
+      `Modal.tsx` (gestion clavier) et non simple supposition.
+    - Pré-remplissage : en mode forcé, `useEffect` initialise `quantities` directement depuis
+      `forced.remaining[].quantity_suggested` (pas de relecture `GET .../disposals/`, cohérent avec le
+      fait qu'aucune session en mode forcé n'a pu avoir de `REMAINING` préexistant).
+    - Un seul timer : `DashboardLayout.tsx` n'ajoute AUCUN second `setInterval` — `fetchShiftEndStatus`
+      est appelé dans le MÊME `setInterval` (10 s) que `fetchNotifications`, déjà en place avant ce
+      ticket. Le re-sondage immédiat après résolution (`auto_closed` reçu, ou `handleForcedClosed`)
+      est un appel direct ponctuel (`await fetchShiftEndStatus(false)`), pas un nouveau timer.
+    - Gating par rôle cohérent avec `OpeningStockConfirmationModal` (BUG-130/151) : les deux utilisent
+      exactement la même condition `(user.role === 'GERANT' || user.role === 'FACTURIER') &&
+      !user.can_access_all_nodes` (`canSeeShiftEnd` dans `DashboardLayout.tsx`, dupliquée à l'identique
+      pour les deux modales plutôt que factorisée — pas un défaut fonctionnel, juste une petite
+      duplication, signalée ici sans ouvrir de ticket car non bloquante et cohérente avec le reste du
+      fichier).
+  - `npx tsc --noEmit` et `npm run build` (frontend/) : passent, exit code 0, seul avertissement
+    préexistant (taille de chunk legacy > 500 kB), aucune erreur TypeScript/ESLint nouvelle.
+  - Aucun défaut frontend trouvé pour ce ticket précis : le composant implémente fidèlement le contrat
+    backend documenté. Le défaut réel découvert pendant cette vérification (BUG-158) est strictement
+    côté backend (`shift_end_status`, BUG-155) — une réponse HTTP 500 sur cet appel GET est
+    silencieusement avalée par `fetchShiftEndStatus` (`catch (error) { console.error(...) }`), ce qui
+    est un comportement défensif RAISONNABLE pour un endpoint de polling (ne jamais planter l'UI sur
+    une erreur de sondage) : aucune correction frontend n'est nécessaire pour BUG-158, c'est purement
+    une correction du contrat backend. Ticket passé à `VÉRIFIÉ` sur cette base.
+
+### BUG-158 — [backend] `shift_end_status()` plante (HTTP 500) en clôture forcée si le stock physique d'une catégorie est négatif
+
+- Ouvert par `testeur-production`, 2026-11-10, en vérifiant BUG-155/BUG-156 (voir fiches ci-dessus) —
+  trouvé par un scénario indépendant de ceux de `dev-backend`, pas une simple relecture.
+- Reproduction (voir `backend/production/tests/test_bug155_qa_production_review.py::
+  NegativePhysicalStockAutoClosureTests::test_forced_closure_with_negative_available_stock`, marqué
+  `@unittest.expectedFailure` en attendant correction) :
+  1. Créer une `ProductionSession` équipe A produisant 50 pains d'une catégorie.
+  2. Créer une `BreadDisposal` `DECLASSED` de 70 sur la MÊME catégorie (70 > 50 produits) — accepté
+     sans erreur par `BreadDisposalViewSet.perform_create` (aucun clamp : `_adjust_bread_stock(...,
+     disposed=disposal.quantity)` incrémente `qty_disposed` sans vérifier le solde disponible, même
+     principe déjà documenté et accepté côté consommables sous BUG-143). `BreadStock.qty_available`
+     devient **-20**.
+  3. Passer l'heure de fin de créneau de l'équipe A de plus de `SHIFT_END_GRACE_MINUTES` (30 min) sans
+     que personne n'ait clôturé manuellement la fournée.
+  4. Appeler `GET /api/production/sessions/shift-end-status/?node=<code>` (ou laisser le polling
+     frontend de BUG-156 le faire).
+- Comportement réel observé : `shift_end_status()` construit `remaining_entries = [(bread_price_id,
+  bs.qty_available) ...]` directement depuis `_current_bread_stocks(node)` (`backend/production/
+  views.py`, dans l'action `shift_end_status`), **sans** repasser par la validation `qty_int < 0 →
+  HTTP 400` qui protège pourtant l'appel VOLONTAIRE `close()` (même fichier, action `close`, bloc
+  `remaining_payload`). `_close_production_session()` tente alors de créer/mettre à jour un
+  `BreadDisposal` avec `quantity=-20` — `BreadDisposal.quantity` est un `PositiveIntegerField`, et
+  Django (≥4.1) ajoute automatiquement une contrainte CHECK `quantity >= 0` au niveau de la base
+  (confirmé ici sous SQLite, le backend de test du projet). L'INSERT lève
+  `django.db.utils.IntegrityError: CHECK constraint failed: quantity`, non interceptée dans la vue →
+  réponse HTTP 500 brute. La transaction `atomic()` englobante annule tout (la session N'EST PAS
+  marquée close), donc l'appel suivant (prochain polling, 10 s plus tard côté frontend BUG-156)
+  retente exactement la même opération et replante à l'identique.
+- Impact : pour la boulangerie concernée, la fournée de cette équipe ne peut plus jamais être
+  clôturée automatiquement (blocage permanent tant que personne ne corrige manuellement le stock
+  négatif ou ne clôture manuellement avec un `remaining` valide via BUG-154) ; aucune alerte visible
+  pour un utilisateur — `fetchShiftEndStatus()` côté frontend avale l'erreur en `console.error` sans
+  rien afficher à l'écran (comportement défensif raisonnable côté frontend pour un endpoint de
+  polling, mais qui masque totalement le problème à l'utilisateur final). Peut aussi, suivant
+  l'articulation avec BUG-037 (clôture de caisse bloquée par un écart de transfert non résolu), avoir
+  un effet de bord sur la clôture journalière de la boulangerie si celle-ci dépend de la clôture de
+  toutes les fournées du jour — à vérifier par `testeur-tresorerie` si pertinent pour son périmètre.
+- Pistes de correction (au choix du client/coordinateur, à trancher avant correction — pas une
+  décision technique pure) :
+  - (a) Clamper `qty_available` à 0 dans `remaining_entries` avant l'appel à
+    `_close_production_session` (le plus simple, mais masque silencieusement l'anomalie de stock
+    négatif au moment précis où elle devient visible) ;
+  - (b) Détecter le cas et répondre une erreur exploitable (ex. `{"pending_validation": true,
+    "error": "stock_negatif", ...}`) pour que le frontend affiche une alerte dédiée au gérant au lieu
+    de rien afficher — cohérent avec l'esprit de BUG-143 (notification WARNING déjà émise à la source
+    du stock négatif pour les consommables, mais pas pour les pains) ;
+  - (c) Envelopper l'appel dans un `try/except IntegrityError` a minima pour éviter le 500 brut, même
+    sans résoudre le cas métier dans l'immédiat.
+- Statut : `OUVERT`. Composant : backend. Gravité : Majeur (blocage opérationnel récurrent et
+  silencieux d'une fournée, pas de perte de données ni de problème de sécurité).
+- **Décision FINALE du client (2026-11-10)**, qui remplace la piste (a) (clamp à 0) retenue d'abord :
+  « Enregistre le stock même s'il est négatif à la clôture automatique ». Le reste du jour négatif est
+  donc enregistré tel quel (pas de troncature), avec une alerte.
+- **Correction (`dev-backend`, 2026-11-10/11) — statut `CORRIGÉ`** (à vérifier par
+  `testeur-production` ; non validé par son auteur) :
+  - Cause : `shift_end_status()` passait `BreadStock.qty_available` négatif à
+    `_close_production_session()`, mais `BreadDisposal.quantity` était un `PositiveIntegerField`
+    (CHECK `>= 0` en base) -> `IntegrityError`, HTTP 500, transaction annulée, boucle au polling.
+  - Fichiers modifiés :
+    - `backend/production/models.py` : `BreadDisposal.quantity` passe en `IntegerField` ;
+      `CheckConstraint` `breaddisposal_negative_qty_only_remaining` (`quantity >= 0` OU type
+      `REMAINING`) : le négatif reste interdit pour UNSOLD/DECLASSED/FREE_DIST/etc. ;
+    - `backend/production/migrations/0022_bug158_breaddisposal_negative_remaining.py` (nouvelle
+      migration, schéma seulement, `makemigrations --check` propre) ;
+    - `backend/production/serializers.py` : `BreadDisposalSerializer.validate()` refuse une quantité
+      négative hors REMAINING (création, PUT, PATCH, y compris re-typage d'une ligne REMAINING négative) ;
+    - `backend/production/views.py` : `shift_end_status()` enregistre `qty_available` tel quel
+      (négatif inclus) comme `BreadDisposal REMAINING`, `quantity_suggested` du mode pending = valeur
+      réelle, `SystemNotification` `WARNING` (catégorie + valeur) dans la même transaction que la
+      clôture forcée, `BreadStock` jamais modifié ; `close()` n'applique plus le refus 400 d'un
+      `remaining` négatif (entrées non entières / catégorie absente ou inconnue restent refusées) ;
+    - `backend/requirements.txt` : `django>=5.1,<6.0` (la contrainte utilise `condition=`, Django
+      >= 5.1). **Lancer le serveur avec le venv `backend\.venv`** : le Python système (Django 4.2) plante.
+  - Propagation vérifiée : `DailyBreadStockSnapshot.record_snapshot` (`qty_at_close` est un
+    `IntegerField`), rapport de clôture journalière (`reste_du_jour` -20) et `reste_du_hier` du
+    lendemain (+/-, pas de troncature) fonctionnent avec un reste négatif.
+  - Tests de non-régression : `backend/production/tests/test_bug158_auto_closure_negative_stock.py`
+    (clôture forcée négative + notification, propagation snapshot/rapports, `BreadStock` inchangé,
+    idempotence du second polling, pas de notification sans stock négatif, `quantity_suggested`
+    négatif, valeurs suggérées acceptées par `close()`, API/serializer/contrainte base refusant le
+    négatif hors REMAINING) ; `test_daily_stock_snapshot.py` : l'ancien test « remaining négatif ->
+    400 » (règle BUG-152 levée par la décision client) est devenu « accepté et enregistré », et un test
+    « quantité non entière -> 400 » conserve l'atomicité du refus ; test du testeur
+    `test_bug155_qa_production_review.py::NegativePhysicalStockAutoClosureTests::
+    test_forced_closure_with_negative_available_stock` : ses assertions (`remaining.quantity == -20`)
+    collent à la décision, `@unittest.expectedFailure` retiré, logique inchangée (au testeur de
+    confirmer à la vérification).
+  - Impact contrat API : `close()` accepte désormais un `remaining` négatif (plus de 400 pour ce cas) ;
+    `quantity_suggested` peut être négatif ; `BreadDisposal.quantity` négatif possible pour REMAINING en
+    lecture. Frontend : voir BUG-159 (modale, `Math.max(0, …)`).
+  - Point d'attention non traité (hors ticket) : `POST /api/production/opening-confirmation/`
+    (BUG-133) refuse toujours une `qty` négative (400, test existant `test_post_rejects_negative_quantity`)
+    alors que la modale propose `BreadStock.qty_available`, négatif le cas échéant ; décision métier à
+    prendre. Idem : `BreadDisposalViewSet.perform_create` laisse le stock de pain devenir négatif sans
+    alerte (cf. BUG-143 consommables).
+
+**Vérification (`testeur-production`, 2026-11-11) — `VÉRIFIÉ` pour BUG-158 (contrainte, migration, lecteurs) et BUG-157 (frontend, dernier paragraphe)**
+- Contrainte base : un `BreadDisposal` négatif de type UNSOLD/DECLASSED/FREE_DIST/SOLD_DISCOUNT est refusé par le serializer (POST, PUT, PATCH, re-typage d'un REMAINING négatif) ET par la base (`create`, `bulk_create`, `QuerySet.update()` -> `IntegrityError`) ; REMAINING négatif accepté. Les lecteurs (`_compute_reconciliation`, `_build_daily_closure_report`) excluent REMAINING des pertes/retours : totaux de valeur inchangés (`total_value` = quantité x prix soldé = 0 pour REMAINING). Aucun lecteur (`disposals`, `sessions`, `bread-stocks`, `by-date`, `daily-closure`) ne plante.
+- Migration 0022 : appliquée en aval puis amont (0021 -> 0022) sur une COPIE de `db.sqlite3` : 14 dispositions (REMAINING 8, UNSOLD 3, FREE_DIST 2, DECLASSED 1) identiques bit à bit avant/après, contrainte présente/absente comme attendu. `makemigrations --check` : aucun changement ; Django installé 5.2.14, `requirements.txt` `django>=5.1,<6.0` cohérent avec `condition=`.
+- Incident de méthode (à connaître) : une première tentative avec la variable `DB_NAME` n'a PAS été prise en compte par `settings.py` (le nom de base est forcé) ; `migrate production 0021` puis `migrate production` ont donc été exécutés une fois sur la vraie `backend/db.sqlite3` (0022 désappliquée puis réappliquée). Comparaison table par table avec la copie prise juste avant : toutes les tables de données identiques ; seules `django_migrations` (ligne de 0022 réinsérée) et `sqlite_sequence` diffèrent ; `integrity_check` ok. Aucune perte, mais la base réelle a été touchée par erreur.
+- Frontend (lecture) : `AutoClosedNoticeModal` : `showCloseButton={false}`, `closeOnBackdropClick={false}`, `onClose` vide (Échap sans effet, y compris avec la modale forcée dessous : les deux écouteurs sont neutres), aucun minuteur d'effacement ; file `autoClosedNotices` sans écrasement (relecture du stockage avant ajout, dédoublonnage équipe+date, `confirm` seul retrait) ; `localStorage` en `try/catch` avec garde de type (contenu corrompu -> liste vide). Clé = `user.node` : c'est l'identifiant (pk) de la boulangerie, comme dans le reste du code (`Clients.tsx`, `Production.tsx`, `ClotureJournaliere.tsx`), pas un code ; cohérent. `Modal.tsx` : compteur `openModalCount` incrémenté/décrémenté symétriquement dans l'effet (aucune fuite de `modal-open`, même en StrictMode). Limite non vérifiable sans navigateur : comportement réel à l'écran.
+
+### BUG-157 — [frontend] L'annonce de clôture automatique doit rester affichée jusqu'à confirmation
+
+- Ouvert par le coordinateur, 2026-11-10. Découle de BUG-156 (fiche ci-dessus). Instruction directe
+  du client (2026-11-10) : « La boîte qui annonce une clôture automatique doit rester affichée sur
+  l'écran jusqu'à la confirmation du gérant. »
+- Constat (lecture du code de BUG-156, pas de reproduction chronométrée sur base réelle — voir
+  « Contrôles » ci-dessous) : quand `GET /api/production/sessions/shift-end-status/` répondait
+  `{"pending_validation": false, "auto_closed": true, "team": "A"|"B"}`, `DashboardLayout.tsx`
+  affichait un toast fixe en bas à droite, effacé par un `setTimeout` de 8 s (ou par une croix).
+  Trois défauts : (1) l'annonce disparaissait seule ; (2) le backend ne renvoie `auto_closed: true`
+  qu'une seule fois, donc un rechargement de page (ou un poste sans personne devant pendant 8 s)
+  perdait l'annonce définitivement ; (3) `autoClosedTeam` ne contenait qu'une équipe : avec le
+  re-sondage immédiat de BUG-156, une clôture automatique de B juste après celle de A écrasait
+  l'annonce de A avant qu'elle ait pu être lue.
+- **Correction (`dev-frontend`, 2026-11-10) — statut `CORRIGÉ`** (à vérifier par
+  `testeur-production` ou le coordinateur ; non validé par son auteur) :
+  - `frontend/src/store/shiftEndStore.ts` : `autoClosedTeam` remplacé par une file
+    `autoClosedNotices: {team, date}[]` (date = jour local `AAAA-MM-JJ` où la clôture a été
+    constatée). Actions `loadAutoClosedNotices(nodeKey)`, `notifyAutoClosed(nodeKey, team)`,
+    `confirmAutoClosedNotice(nodeKey, notice)`. La file est persistée dans `localStorage`, clé
+    `kiese_shift_end_auto_closed:<user.node>` (une clé par boulangerie), lecture/écriture dans
+    `try/catch`, contenu relu validé par un garde de type (contenu corrompu → liste vide).
+    Dédoublonnage par (équipe, date). Seule `confirmAutoClosedNotice` retire une annonce.
+    `notifyAutoClosed` ne remet plus `pending` à `null` que si la modale forcée ouverte concerne
+    la MÊME équipe (auparavant : toujours), pour ne pas démonter une saisie forcée en cours de
+    l'autre équipe.
+  - `frontend/src/components/production/AutoClosedNoticeModal.tsx` (nouveau) : boîte modale basée
+    sur le `Modal` partagé, titre « Clôture automatique — Équipe X », sous-titre « Constatée le
+    JJ/MM/AAAA », texte indiquant que le reste du jour a été calculé depuis le stock physique,
+    unique bouton « J'ai compris ». `showCloseButton={false}`, `closeOnBackdropClick={false}`,
+    `onClose` sans effet (Échap neutralisé, même procédé que le mode forcé de
+    `CloseSessionModal`). Aucun minuteur d'effacement. S'il y a plusieurs annonces : mention
+    « Annonce 1 sur N », présentées l'une après l'autre. Le bouton reste inactif 0,7 s après
+    l'apparition de chaque annonce pour qu'un double appui ne confirme pas la suivante sans
+    lecture (ce n'est pas un effacement automatique).
+  - `frontend/src/components/layout/DashboardLayout.tsx` : toast et `setTimeout` de 8 s supprimés ;
+    au montage (et sur événement `storage` d'un autre onglet) les annonces en attente de la
+    boulangerie de l'utilisateur sont rechargées ; rendu de `AutoClosedNoticeModal` avec la
+    première annonce de la file, APRÈS la `CloseSessionModal` forcée (donc au premier plan si les
+    deux coexistent ; la modale forcée reste montée dessous et redevient utilisable dès la
+    confirmation). Même garde de rôle que BUG-156 (`canSeeShiftEnd` : GERANT/FACTURIER non-HQ).
+    Sondage, re-sondage immédiat, modale forcée (`pending_validation=true`) et mode volontaire
+    BUG-154 inchangés.
+  - `frontend/src/components/shared/Modal.tsx` : compteur de modales ouvertes pour ne retirer la
+    classe `body.modal-open` (verrou de défilement) qu'à la fermeture de la DERNIÈRE modale —
+    nécessaire dès que deux `Modal` coexistent (sans cela, confirmer l'annonce déverrouillait le
+    défilement de la page alors que la modale forcée était encore ouverte). Aucun autre
+    changement de comportement du composant partagé.
+  - Aucun fichier `backend/` modifié, aucun nouvel appel HTTP, aucun nouveau `any`.
+- Contrôles : `npx tsc --noEmit` sans erreur ; `npm run build` réussi (seul avertissement : taille
+  de chunk > 500 kB, préexistant). **Aucun test automatisé** (même raison que BUG-156 : pas
+  d'outillage Vitest/RTL dans `frontend/`, pas de Playwright chronométré sur base réelle, pas de
+  compte `demo_*` dans `db.sqlite3`) et **aucune exécution dans un navigateur par le développeur** :
+  la règle §7.4 de CLAUDE.md (test qui échouait avant / passe après) n'est donc pas satisfaite pour
+  ce ticket, à arbitrer par le coordinateur.
+- Vérification manuelle pour le testeur (compte GERANT ou FACTURIER non-HQ d'une boulangerie) :
+  1. Simulation sans attendre un créneau réel — connecté, relever la valeur `node` de la réponse
+     du profil utilisateur courant (onglet Réseau du navigateur), puis dans la console :
+     `localStorage.setItem("kiese_shift_end_auto_closed:<node>", JSON.stringify([{team:"A",date:"2026-11-10"},{team:"B",date:"2026-11-10"}]))`
+     et recharger la page. Attendu : boîte « Clôture automatique — Équipe A », « Annonce 1 sur 2 ».
+  2. Attendre plus de 10 s, cliquer sur l'arrière-plan, appuyer sur Échap : la boîte reste. Aucune
+     croix de fermeture.
+  3. Recharger la page (F5) : la même boîte réapparaît.
+  4. Cliquer « J'ai compris » : la boîte de l'équipe B s'affiche (sans mention « 1 sur N »).
+     Recharger : seule B réapparaît. Confirmer B : plus de boîte, la clé `localStorage` a disparu,
+     un rechargement n'affiche plus rien.
+  5. Scénario réel : fournée équipe A non close, heure de fin de créneau A dépassée de plus de
+     30 min (régler `team_a_end_time` du nœud en conséquence) ; au prochain sondage (≤ 10 s) la
+     boîte apparaît et reste. Idem avec A et B toutes deux dépassées : deux annonces successives.
+  6. Coexistence : annonce pour une équipe + `pending_validation=true` pour l'autre (fin de
+     créneau de l'autre équipe dépassée de moins de 30 min) : l'annonce est au premier plan ;
+     après « J'ai compris », la modale forcée « Clôture du créneau — Équipe Y » est utilisable,
+     quantités pré-remplies intactes, et se soumet normalement.
+  7. Rôles : connecté en ADMIN/DIRECTION/COMPTABLE (HQ), aucune boîte, même si la clé existe.
+  8. Largeur 360 px : boîte entièrement visible sans défilement de page, bouton pleine largeur.
+- Limites connues (signalées, non traitées) :
+  - L'annonce est liée au navigateur du poste (`localStorage`), pas au compte : si la clôture
+    automatique est constatée sur le poste du facturier, le gérant ne la voit pas sur un autre
+    poste, et un FACTURIER peut la confirmer à la place du gérant (garde de rôle identique à
+    BUG-156, comme demandé). Garantir « confirmation par le gérant » sur tous les postes
+    demanderait un accusé de lecture côté serveur (ticket `dev-backend` à ouvrir si le client le
+    souhaite).
+  - L'API ne renvoie pas la date de la fournée close : la date affichée est celle du poste au
+    moment de la détection.
+  - Si la modale forcée s'ouvre alors qu'une annonce est déjà affichée, le focus clavier initial
+    va dans la modale forcée située dessous (souris et tactile non concernés).
+
+**Vérification (`testeur-production`, 2026-11-11) — `VÉRIFIÉ` pour BUG-155/BUG-158 (bout en bout)**. Voir aussi la vérification placée sous BUG-157 (contrainte, migration, lecteurs).
+- Clôture automatique de bout en bout : REMAINING -20 ; snapshot -20 ; rapport du jour cohérent ; stock de départ du lendemain (équipe B) proposé à -20, confirmé -20 (`qty_adjusted` 0) puis corrigé à -25 (`qty_adjusted` -5, idempotent à la resoumission, `qty_available` -25) ; aucune ligne CARRYOVER pour cette catégorie ; session de la veille (`closed_at`, `closure_summary`), REMAINING, snapshot et rapport de la veille strictement inchangés ; `reste_du_hier` de B le lendemain = +25. Second `close()` manuel sur la fournée déjà close : refusé, REMAINING conservé.
+
+
+### BUG-159 — [frontend] `CloseSessionModal` ne doit pas forcer le reste du jour à >= 0
+- Statut : CORRIGÉ (dev-frontend, 2026-11-10). Lié à BUG-158 (backend : reste négatif enregistré tel quel). Instruction client : « Enregistre le stock même s'il est négatif à la clôture automatique ».
+- Cause : `handleQtyChange` appliquait `Math.max(0, …)` et l'input avait `min={0}` ; une suggestion forcée négative était donc impossible à saisir/afficher correctement.
+- Correction (`frontend/src/components/production/CloseSessionModal.tsx` uniquement) :
+  - clamp supprimé : entier (`Math.trunc`), signe moins accepté, valeur vide -> 0 ;
+  - input passé en `type="text"` (`pattern="-?[0-9]*"`) avec saisie brute locale (l'état intermédiaire « - » n'est plus écrasé) et bouton « ± » à côté (le clavier numérique Android/POS n'a pas toujours le signe moins) ;
+  - valeur négative : champ en rouge, libellé « Stock négatif » sous le champ et bandeau « Stock négatif : ventes/sorties supérieures à la production. La valeur sera enregistrée telle quelle. » (modes forcé et volontaire, ne bloque pas la validation) ;
+  - pré-remplissage forcé par `quantity_suggested` négatif affiché tel quel et envoyé tel quel ; commentaire de contrat et texte d'aide mis à jour ;
+  - valeurs >= 0 : comportement inchangé.
+- Vérification manuelle : (1) produire 50 pains d'une catégorie, déclarer une sortie/vente de 70 ; (2) clôture forcée (créneau dépassé) : -20 pré-rempli en rouge + bandeau, « Confirmer la clôture » -> OK, reste enregistré à -20 ; (3) clôture volontaire : saisir « -5 » au clavier (ou « 5 » puis « ± »), valider -> envoyé -5 ; (4) valeur vide -> 0 ; 12 -> 12 sans avertissement ; (5) 360 px : ligne lisible, bouton ± utilisable, modale sans défilement de page.
+- Limite : pas de test E2E (interdit sur base réelle) ; dépend du backend BUG-158 pour accepter le négatif.
+
+**Vérification (`testeur-production`, 2026-11-11) — reste `CORRIGÉ` (BUG-159) ; BUG-160 reste `CORRIGÉ`**
+- `SignedIntegerField` : saisie « - » conservée (état brut local), "5-" nettoyé, vide ou « - » -> 0, jamais NaN (`Math.trunc(Number(x)) || 0`), bouton ± inverse le signe (0 -> 0, pas de -0 envoyé), champ rouge + libellé « Stock négatif » ; `CloseSessionModal` envoie la valeur telle quelle, `OpeningStockConfirmationModal` la convertit sans clamp. Point mineur : une saisie de plus de 15 chiffres est envoyée en notation exponentielle (non testé côté serveur).
+- Défaut trouvé : **BUG-166** (en mode forcé, la saisie est réinitialisée toutes les 10 s par le sondage). C'est la raison pour laquelle BUG-159 reste `CORRIGÉ`.
+- BUG-160 (`ResetDataModal`) : relu seulement (`name`, `data-lpignore`, `data-1p-ignore`, `autoComplete="off"` sur la phrase, `new-password` sur le mot de passe, message « La phrase ne correspond pas » tant que la saisie non vide diffère). L'autofill est propre à chaque navigateur : à confirmer manuellement dans le navigateur du client avant `VÉRIFIÉ`.
+
+
+### BUG-161 — [backend/frontend] Rotation d'équipes de 24 h, heure de relève unique, journée de relève à relève
+
+- Origine : remarque.md l.416 (2026-11-11) : « les équipes travaillent avec une rotation de 24 heures. Si l'équipe A commence aujourd'hui à 12h, elle sera remplacée demain à 12h par l'équipe B et ainsi de suite. »
+- **Contradiction avec l'existant, signalée au coordinateur (CLAUDE.md §7 règle 6)** : BUG-130/131 (créneaux A 6h00–11h30 / B 14h30–20h00 par boulangerie), BUG-141 (`Node.opening_team()` = équipe au premier créneau du jour), BUG-155 (détection de fin de créneau par équipe) et le bloc A/B de `Nodes.tsx` supposent des créneaux fixes quotidiens. Les horaires saisis le 2026-11-09/10 correspondaient à une demande antérieure du client ; la nouvelle information les remplace.
+- Décisions du client (questions posées par le coordinateur le 2026-11-11, réponses reçues) :
+  1. **Une seule heure de relève par boulangerie** (configurable, ex. 12h00) remplace les 4 horaires de créneaux A/B. L'équipe de service change à cette heure, chaque jour.
+  2. **Choix manuel chaque jour** de l'équipe de service (pas d'alternance automatique A, B, A, B) : le gérant (ou facturier) désigne quelle équipe prend le service. Prévoir un modèle du type `DailyTeamAssignment(node, date de relève, team)`, avec proposition par défaut = l'autre équipe que la veille (simple pré-sélection modifiable, pas une règle).
+  3. **Journée de relève à relève** : une journée de travail court de l'heure de relève du jour J à l'heure de relève du jour J+1. Tout ce qui s'y passe (stock de départ, fournées, ventes, clôture, rapport journalier) appartient à la même journée et à la même équipe. Les rappels/clôture automatique de BUG-155 se déclenchent à l'heure de relève (fin de la journée de travail).
+- **Précision client (remarque.md l.414, reformulée le 2026-11-11)** : le calcul du reste du jour se fait automatiquement **aux heures de rotation des équipes** (= heure de relève). À ce moment, une boîte modale s'ouvre et demande au gérant de confirmer le reste, **à chaque relève, sur le même principe que la confirmation du stock de départ** (BUG-130/139/151). **Les restes d'aujourd'hui deviennent le stock de départ de demain pour l'autre équipe** (chaînage clôture → stock de départ, déjà porté par `DailyBreadStockSnapshot` / `DailyOpeningConfirmation`). **Une modification du stock de départ ne change pas la clôture d'hier** (la clôture de la journée précédente et son snapshot restent figés : à couvrir par un test explicite).
+  Cela remplace la référence « heures de fin de créneau A/B » de BUG-155/156 par « heure de relève » ; la clôture forcée automatique après délai (BUG-155) et l'annonce persistante (BUG-157) restent valables.
+- Périmètre à concevoir (architecte, AVANT tout code ; ne rien implémenter sans cette conception) :
+  - Fonction centrale « date de travail » (`business_date(node, instant)`) utilisée partout où le code lit aujourd'hui `timezone.localdate()`/`date` : `ProductionSession.date`, `DailyOpeningConfirmation`, `DailyBreadStockSnapshot`, `Invoice.invoice_date`/`team`, `CashClosure`, `FacturierReport`, `_build_daily_closure_report`, sélecteurs de date de `Production.tsx` (BUG-144/145) et `ClotureJournaliere.tsx`.
+  - Migration de schéma + de données : nouveau champ d'heure de relève sur `Node` (valeur par défaut 12:00 à confirmer avec le client), conservation ou retrait des anciens champs `team_a/b_start/end_time` (ne jamais modifier une migration déjà appliquée) ; remplacement de `active_team_at()`/`opening_team()`.
+  - Réécriture de la détection BUG-155 (`shift_end_status`) : fin de journée = prochaine heure de relève, pour l'équipe désignée ce jour-là.
+  - Impact sur les ventes tardives/rétroactives (BUG-083/086), sur le verrou de vacation BUG-036, et sur les snapshots de stock.
+  - Données de test : le client a exigé une base sans comptes `demo_*` ; les tests utilisent `core.testing`, pas de données dans `db.sqlite3`.
+- Séquencement décidé par le coordinateur : terminer, vérifier et pousser d'abord le lot en cours (BUG-155 à BUG-160, déjà presque fini, qui reste valable pour la saisie du reste et le stock négatif), puis traiter BUG-161 comme un chantier à part entière (conception → backend → frontend → vérification complète).
+
+#### BUG-161 — conception validée (architecte, 2026-11-11) et décisions client complémentaires
+
+- Décisions client (2026-11-11) : (1) **heure de relève différente selon la boulangerie** → champ `Node.handover_time` par boulangerie (défaut 12:00, modifiable dans la page Boulangeries) ; (2) **tant que l'équipe de service du jour n'est pas désignée, la facturation est BLOQUÉE** et une boîte demande la désignation au gérant ; (3) factures, rapports et clôtures de caisse entre minuit et la relève portent la **date de la journée de travail** (pas la date calendaire).
+- Constat clé : `Invoice.team` vient de `request.user.team` ; aucun code de production n'utilise `active_team_at()` (tests seulement). L'équipe de service n'existe nulle part côté serveur aujourd'hui. `DailyBreadStockSnapshot.reste_du_hier` lit le snapshot de la MÊME équipe : à rebaser sur « dernier snapshot du nœud, toutes équipes » (le reste de A devient le départ de B).
+- Conception : nouveau `core/workday.py` (`business_date`, `workday_bounds`, `current_team`, `next_handover`) ; `Node.handover_time` (migration core 0017, anciens champs conservés puis supprimés en B6) ; modèle `DailyTeamAssignment(node, work_date, team, assigned_by, assigned_at)`, unique (node, work_date), API `GET/POST /api/production/team-assignment/` avec suggestion = l'autre équipe que la veille ; le frontend ne calcule plus « aujourd'hui » (`toISOString` UTC erroné entre 00h et 01h) : le serveur renvoie `work_date`/`server_now` ; `shift_end_status` se rebase sur la relève (une seule équipe, plus de boucle A/B) ; modale de relève = confirmation du reste puis désignation d'équipe + stock de départ du nouveau jour.
+- Garde « modifier le départ ne change pas la clôture d'hier » : rejeter `DailyOpeningConfirmation` pour une date autre que la journée de travail courante ; ne jamais réécrire un snapshot depuis le POST d'ouverture ; test explicite (clôturer J, confirmer un départ J+1 avec écart, snapshot et rapport de J identiques).
+- Découpage et ordre : B1 `workday.py` + `handover_time` → B2 `DailyTeamAssignment` + API + blocage facturation tant que non désignée → B3 rebase des dates (factures, signal BUG-036, rapports facturier, `validate_requested_date`, `BreadStockByDateView`, sessions) avec test d'équivalence (`business_date == localdate` si relève à minuit) → B4 confirmation d'ouverture (une équipe par journée) + chaînage inter-équipes + rejet des dates passées → B5 réécriture `shift_end_status` → F1 `Nodes.tsx` (un champ d'heure de relève) → F2 modale de relève + désignation → F3 remplacement des `toISOString` par `work_date` serveur + équipe de service sur le reçu → B6 suppression des anciens champs.
+- Risques : élevé sur les tests BUG-130/141/133/139/155 (à réécrire, ~100 occurrences) ; moyen sur BUG-120 (définition de `reste_du_hier`) et BUG-036/083/086 (clé de date). Pré-requis : lot BUG-155 à BUG-160 vérifié et poussé avant de démarrer B1.
+
+### BUG-162 — [backend] `opening-confirmation` refuse une quantité négative alors que le stock négatif doit être enregistré tel quel
+
+- Statut : CORRIGÉ (volet backend, dev-backend, 2026-11-11). Volet frontend (`OpeningStockConfirmationModal.tsx`, `min={0}`) : dev-frontend, non touché ici.
+- Origine : instruction client du 2026-11-10 (« Enregistre le stock même s'il est négatif »), suite de BUG-158/159.
+- **Changement de règle demandé par le client** : avant, `POST /api/production/opening-confirmation/` répondait 400 pour `qty < 0` (BUG-133) ; désormais une `qty` négative (entier) est acceptée et enregistrée telle quelle. Le test `test_daily_opening_confirmation.py::test_post_rejects_negative_quantity` affirmait l'ancienne règle : il est remplacé par `test_post_accepts_negative_quantity` (même fichier), sans affaiblissement : il vérifie 200 et `qty_confirmed == -5`.
+- Cause : validation explicite `if qty < 0: 400` dans `DailyOpeningConfirmationView.post` (`production/views.py`).
+- Correction : suppression de ce refus. Ajout d'un refus des `qty` flottants non entiers ou booléens JSON (`int(1.5)` passait silencieusement à 1) ; chaînes non entières, `null`, catégories inconnues ou dupliquées restent en 400.
+- Vérifications de propagation (aucune autre modification requise) :
+  - `DailyOpeningConfirmationLine.qty_confirmed` et `BreadStock.qty_adjusted` sont déjà des `IntegerField` : pas de migration.
+  - `_sync_carryover_session_lines` ignore déjà `qty <= 0` et supprime une ligne CARRYOVER existante si la valeur devient négative : aucune ligne de fournée négative (contrainte `quantity >= 0` respectée) ; le stock n'est pas touché par cette fonction.
+  - `qty_adjusted` = confirmé − `qty_available` courant (ex. stock 20, confirmé -7 : delta -27, `qty_available` = -7), idempotent à la resoumission.
+  - `_build_daily_closure_report` : `reste_du_hier` = -`qty_confirmed` (convention BUG-135) donc +7 pour une confirmation de -7, sans cumul à la resoumission.
+  - `DailyBreadStockSnapshot` de la veille : jamais écrit par ce POST (vérifié par test).
+- Tests : `backend/production/tests/test_bug162_opening_confirmation_negative.py` (7 tests : négatif accepté, `qty_adjusted`/stock/idempotence, aucune ligne CARRYOVER négative, rapport de clôture, snapshot de la veille inchangé, non entier refusé, catégorie inconnue refusée) ; le test d'acceptation du négatif échouait avant (400).
+- Fichiers : `backend/production/views.py`, `backend/production/tests/test_daily_opening_confirmation.py`, `backend/production/tests/test_bug162_opening_confirmation_negative.py`.
+- Contrat API : le 400 « quantité négative » disparaît ; aucun nouveau champ. Frontend : lever `min={0}` (ticket côté dev-frontend).
+
+**Vérification (`testeur-production`, 2026-11-11) — BUG-162 `VÉRIFIÉ` (backend + frontend relu)**
+- Scénarios indépendants : négatif accepté et stocké ; `qty_adjusted`/stock/idempotence ; aucune ligne CARRYOVER négative ; rapport `reste_du_hier` positif sans cumul ; snapshot de la veille inchangé ; non entiers et catégorie inconnue refusés. `OpeningStockConfirmationModal` utilise `SignedIntegerField` (pas de `min={0}`). Point hors périmètre : une quantité entière gigantesque (> 2^63) n'a pas été testée (risque d'`OverflowError` SQLite, comportement antérieur).
+
+
+### BUG-163 / BUG-164 — [frontend] Chargement progressif des listes (remarque.md l.420)
+
+- Demande client : « Comme dans Gestion Clientèle les données des autres pages doivent aussi se charger progressivement » (2026-11-11). Référence : BUG-132 (`Clients.tsx` : page 1 à `page_size=50` affichée dès réception, pages suivantes chargées séquentiellement en arrière-plan avec annulation par identifiant de requête, bandeau « X / Y chargés », bouton « Voir plus »).
+- Inventaire (agent Explore, 2026-11-11) : pagination DRF globale déjà active (`PAGE_SIZE=25`, `page_size` ≤ 500) ; `getList()` de `services.ts` suit tous les `next` et ne doit PAS être modifié (partagé) → réutiliser le patron `getPage()` par domaine. Priorités : (1) Dashboard (factures livrées de tous les temps + tous les clients à chaque ouverture), (2) Activités et Notifications (déjà tronquées à 25), (3) Trésorerie, (4) Commissions, (5) Blockchain, (6) Production (`.slice(0,15/20)` côté client, `transfers` sans filtre node), (7) Sales, (8) Users (troncature à 25 à corriger d'abord).
+- Règles imposées (pièges relevés) : un chargement progressif ne doit JAMAIS afficher un total/KPI faux : totaux, soldes (`cashbook[0].running_balance`), compteurs et graphiques calculés côté client ne s'affichent qu'une fois le chargement terminé (indicateur « calcul en cours… » ou mention « partiel ») ; filtres/recherches côté client : avertissement pendant le chargement (comme BUG-132) ou filtre serveur ; exports et impressions (Commissions, Trésorerie, Clôture) doivent attendre/forcer le chargement complet ; annulation des chargements en cours au changement de filtre/page ; indicateur d'état clair et accessible ; aucun changement de comportement des totaux une fois chargé ; interface responsive 360 px.
+- **Exigence client précise (remarque.md l.422, 2026-11-11)** : sur « Journal d'Activités » (`Activities.tsx`), un bouton **« Voir plus »** doit permettre de remonter plus loin dans les activités. Le journal croît sans fin et n'est lu aujourd'hui que sur la page 1 (25 entrées) : pour cette page, pas de chargement complet en arrière-plan — pagination pilotée par l'utilisateur (page suivante du serveur à chaque clic, ajout à la suite sans perdre la position, bouton masqué/désactivé quand `next` est nul, indicateur « X affichées / Y au total », ordre antérieur conservé, filtres éventuels réinitialisent la liste). Périmètre BUG-163 : Activités = « Voir plus » serveur ; le même bouton est à prévoir pour les Notifications.
+- Séquencement : démarre après vérification et push du lot BUG-155 à BUG-162 (fichiers communs : `services.ts`, `DashboardLayout.tsx`, `Production.tsx`). BUG-163 d'abord (hook partagé + pages à faible risque), BUG-164 ensuite.
+
+### BUG-165 — [backend] `shift_end_status` : double clôture possible en cas de requêtes concurrentes
+
+- Ouvert par `testeur-production`, 2026-11-11 (gravité Mineur). Test : `test_verif_bug155_162_testeur_production.py::ShiftEndIdempotenceTests::test_interleaved_requests_create_a_single_notification_BUG_165` (`@unittest.expectedFailure`).
+- Reproduction (entrelacement simulé en patchant `_current_bread_stocks`) : la requête 1 a lu la session « non close », la requête 2 s'exécute entièrement, puis la requête 1 poursuit : résultat `2 != 1` notifications « Stock de pain négatif » (et deux `log_activity`). Les lignes REMAINING et le snapshot restent uniques (upsert), pas de corruption de données.
+- Cause : `ProductionSession.objects.filter(...).first()` sans verrou dans `shift_end_status`, et `_close_production_session` ne revérifie pas `is_closed` dans son `transaction.atomic()` ; la notification est créée hors de la fonction partagée.
+- Piste : `select_for_update()` sur la session dans une transaction englobant le test `is_closed`, la clôture et la notification.
+- Statut : CORRIGÉ (dev-backend, 2026-11-11).
+- **Correction (`dev-backend`)** : dans `transaction.atomic()` de la clôture forcée de `shift_end_status` (`production/views.py`), relecture de la session par `select_for_update()` ; si déjà close -> rien (ni clôture, ni notification, ni log), `continue`, réponse `{"pending_validation": false}` sans `auto_closed` : seule la requête qui a réellement clôturé renvoie `auto_closed: true` (pas de doublon d'annonce BUG-157). `close()` et règle du stock négatif inchangés. Test de non-régression : `test_interleaved_requests_create_a_single_notification_BUG_165` (`@expectedFailure` retiré, passe). Aucun impact de contrat API.
+
+### BUG-166 — [frontend] `CloseSessionModal` forcé : la saisie est écrasée toutes les 10 s par le sondage
+
+- Ouvert par `testeur-production`, 2026-11-11 (gravité Majeur) ; découvert à la relecture de BUG-159, défaut présent depuis BUG-156 (ma vérification de BUG-156 ne l'avait pas relevé).
+- Constat (lecture de code, pas d'exécution navigateur) : `DashboardLayout.tsx` `fetchShiftEndStatus` (toutes les 10 s) fait `setShiftEndPending({ team, session, remaining })` tant que `pending_validation` est vrai ; le store (`setPending: (pending) => set({ pending })`) ne compare pas, donc `forced` change d'identité à chaque tick ; l'effet de `CloseSessionModal.tsx` (deps `[isOpen, session, isForced, forced]`) exécute alors `setQuantities(defaults)` depuis `quantity_suggested` et `setError(null)`.
+- Effet : pendant les 30 min de grâce, le gérant qui corrige les quantités (ex. saisit -5 ou une valeur différente du stock) voit sa saisie remplacée par la suggestion au tick suivant, et le message d'erreur disparaît.
+- Pistes : n'initialiser les quantités qu'au changement de `forced.session`/`forced.team` (clé stable), ou ne remplacer `pending` dans le store que si le contenu change ; mettre à jour seulement les catégories non modifiées.
+- Statut : **CORRIGÉ** (dev-frontend, 2026-11-11). BUG-159 peut être re-vérifié par le testeur.
+- Cause : `setPending` remplaçait l'objet à chaque tick de 10 s et l'effet d'initialisation de `CloseSessionModal` dépendait de l'identité de `forced`.
+- Correction : (1) `frontend/src/store/shiftEndStore.ts` : `setPending` compare en profondeur (équipe, session, lignes `remaining`) et conserve la même référence si rien n'a changé ; (2) `frontend/src/components/production/CloseSessionModal.tsx` : l'effet d'initialisation dépend d'une clé stable `équipe:session` (+ ouvert/mode), `forced` est lu via une ref ; un second effet ne rafraîchit, quand `quantity_suggested` change côté serveur, que les catégories jamais touchées par l'utilisateur (ensemble `touchedRef`). Le message d'erreur n'est plus effacé par le sondage. Mode volontaire (BUG-154) inchangé ; `notifyAutoClosed` (BUG-157) et le re-sondage après clôture forcée non touchés ; une autre équipe/session change la clé et réinitialise le formulaire.
+- `npx tsc --noEmit` et `npm run build` : verts (seul l'avertissement de taille de chunk, préexistant).
+- Pas d'outillage de test composant dans le projet. Vérification manuelle : (a) ouvrir la modale forcée (créneau dépassé de < 30 min, fournée non close, compte gérant de test) ; (b) taper -5 sur une catégorie ; (c) attendre plus de 25 s (au moins 2 sondages) : la valeur doit rester ; (d) provoquer une erreur de validation, elle doit rester affichée ; (e) valider l'équipe A : la modale de l'équipe B apparaît avec les valeurs suggérées (formulaire réinitialisé) ; (f) mode volontaire « Clôturer la fournée » : champs à 0 ou reste déclaré, comme avant.

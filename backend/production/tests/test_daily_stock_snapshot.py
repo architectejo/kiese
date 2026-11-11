@@ -275,9 +275,14 @@ class CloseWithRemainingBodyTests(TestCase):
         )
         self.assertEqual(snap1.qty_at_close, 40)
 
-    def test_close_with_negative_remaining_quantity_rejected_and_nothing_applied(self):
-        """Une quantité négative dans `remaining` → 400, aucune disposition
-        créée, session non clôturée."""
+    def test_close_with_negative_remaining_quantity_is_accepted_and_recorded(self):
+        """
+        Règle modifiée par BUG-158 (instruction client du 2026-11-10 :
+        « enregistre le stock même s'il est négatif ») — ce test affirmait
+        auparavant le refus HTTP 400 d'une quantité négative (BUG-152). Une
+        quantité négative dans `remaining` est désormais acceptée et
+        enregistrée telle quelle (disposition REMAINING + snapshot).
+        """
         session_id = self._create_session()
 
         resp = self.client_api.post(
@@ -285,6 +290,35 @@ class CloseWithRemainingBodyTests(TestCase):
             {'remaining': [
                 {'bread_price': self.bp1.pk, 'quantity': 10},
                 {'bread_price': self.bp2.pk, 'quantity': -5},
+            ]},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+
+        session = ProductionSession.objects.get(pk=session_id)
+        self.assertTrue(session.is_closed)
+        remaining = {
+            d.bread_price_id: d.quantity
+            for d in BreadDisposal.objects.filter(
+                session_id=session_id, disposal_type=BreadDisposal.DisposalType.REMAINING,
+            )
+        }
+        self.assertEqual(remaining, {self.bp1.pk: 10, self.bp2.pk: -5})
+        snap2 = DailyBreadStockSnapshot.objects.get(
+            node=self.node, bread_price=self.bp2, date='2026-11-10', team='A',
+        )
+        self.assertEqual(snap2.qty_at_close, -5)
+
+    def test_close_with_non_integer_remaining_quantity_rejected_and_nothing_applied(self):
+        """Une entrée invalide dans `remaining` → 400, aucune disposition
+        créée, session non clôturée (atomicité du refus, conservée)."""
+        session_id = self._create_session()
+
+        resp = self.client_api.post(
+            f'/api/production/sessions/{session_id}/close/',
+            {'remaining': [
+                {'bread_price': self.bp1.pk, 'quantity': 10},
+                {'bread_price': self.bp2.pk, 'quantity': 'abc'},
             ]},
             format='json',
         )

@@ -410,3 +410,15 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 [c] Lorsqu'on cloture une fournée les restes des pains en stock en tenant compte de la catégorie doivent allez dans la cloture journalière reste du jour selon la catégorie. — traité sous BUG-152 (backend : `POST .../close/` accepte le reste par catégorie en un seul geste) et BUG-154 (frontend : boîte de clôture demandant le reste par catégorie). N'affecte pas le calcul du rapport BUG-120/135. VÉRIFIÉ le 2026-11-10 (255 tests, isolation A/B confirmée).
 
 [c] sur "Clôture Journalière" on doit avoir la possibilité d'exporter (format Excel) et d'imprimer les différentes sections — traité sous BUG-153 : boutons « Exporter en Excel » (fichier .xlsx réel, 3 feuilles) et « Imprimer » couvrant les trois sections en un clic. VÉRIFIÉ le 2026-11-10.
+
+[] Dans chaque boulangerie le calcule des restes du jour lors de la cloture journalière doivent se faire automatiquement aux heures de rotation des équipes une boite nodal doit s'ouvrir avec le formulaire demandant au gerant la confirmation à chaque page comme pour le stock de depart, les restes d'aujourd'hui deviendrons le sock de depart demain pour l'autre équipe, la modification ne change pas la cloture d'hier
+
+[] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
+
+[] Sur la page "Clôture Journalière" le tableau de "Décomposition par Catégorie de Pain", la colone de "Régularisation" et celle de "Non Servi" répresente quoi ? et pourquoi elle reste toujours à zéro ?
+
+[] Comme dans "Gestion Clientèle" les données des autres pages vont doivent aussi se charger progrésivement
+
+[] Au niveau du "Journal d'Activités" on doit avoir le bouton "Voir plus" pour remonter plus loin dans les activités
+
+[] Au niveau de "Production & Stocks" lors de l'envoi du formulaire "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)" l'utilisateur doit voir que la demande a été envoyer.

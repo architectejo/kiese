@@ -201,6 +201,120 @@ def _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs):
     }
 
 
+# BUG-155 (remarque.md l.414) : délai de grâce après l'heure de fin de
+# créneau d'une équipe (`Node.team_a_end_time`/`team_b_end_time`) avant
+# clôture forcée automatique si la fournée n'a toujours pas été clôturée
+# manuellement. Choix documenté dans le ticket plutôt que redemandé au
+# client : 30 minutes, assez pour laisser un gérant/facturier présent
+# répondre à la modale de validation (BUG-156) sans bloquer indéfiniment la
+# fournée si personne ne valide.
+SHIFT_END_GRACE_MINUTES = 30
+
+
+def _current_bread_stocks(node):
+    """
+    BUG-155 : lignes `BreadStock` courantes pour `node`, mêmes catégories et
+    même tri que le cas « live » de `BreadStockByDateView` — source unique
+    du reste physique suggéré/forcé à la fin de créneau.
+    """
+    return list(
+        BreadStock.objects.select_related('bread_price')
+        .filter(node=node)
+        .order_by('bread_price__unit_price')
+    )
+
+
+def _close_production_session(session, remaining_entries, request_user):
+    """
+    BUG-093/BUG-152/BUG-155 : cœur de la clôture d'une fournée, factorisé
+    pour être partagé À L'IDENTIQUE par l'action `close()` (clôture
+    volontaire, `remaining` éventuellement fourni par l'utilisateur) et
+    `shift_end_status()` (clôture forcée automatique à la fin de créneau,
+    `remaining` calculé depuis le stock physique courant). Reprend
+    exactement la logique déjà vérifiée sous BUG-093/BUG-152 (transaction
+    atomique, recoupement production/ventes/dispositions, reliquat NV,
+    anomalie, upsert des lignes `BreadDisposal` REMAINING, snapshot,
+    notification, `log_activity`). Ne doit JAMAIS être dupliquée — toute
+    évolution de la logique de clôture doit passer par cette fonction
+    unique.
+
+    `remaining_entries` : liste de tuples `(bread_price_id, quantity:int)`
+    déjà validés par l'appelant (quantité entière — négative admise depuis
+    BUG-158 —, catégorie existante).
+    Suppose que l'appelant a déjà vérifié `session.is_closed` est False.
+
+    Retourne le résumé du recoupement (`result`, `nv_breads`, `is_anomaly`) ;
+    ne construit pas de `Response` — cela reste la responsabilité de
+    l'appelant, dont le contrat de réponse diffère (`close()` renvoie le
+    serializer de la session, `shift_end_status()` un contrat plus simple).
+    """
+    sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
+        user=request_user, node_id=session.node_id, date=str(session.date),
+    )
+    result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
+
+    reliquat_breads = result['gap']['breads']
+    is_anomaly = reliquat_breads < 0
+    nv_breads = reliquat_breads if reliquat_breads > 0 else 0
+
+    summary = {
+        **result,
+        'nv': {'breads': nv_breads},
+        'anomaly': is_anomaly,
+    }
+
+    with transaction.atomic():
+        session.is_closed = True
+        session.closed_at = timezone.now()
+        session.closure_summary = summary
+        session.save(update_fields=['is_closed', 'closed_at', 'closure_summary'])
+
+        for bp_id, qty_int in remaining_entries:
+            existing = BreadDisposal.objects.filter(
+                session=session, bread_price_id=bp_id,
+                disposal_type=BreadDisposal.DisposalType.REMAINING,
+            )
+            keep = existing.first()
+            existing.exclude(pk=getattr(keep, 'pk', None)).delete()
+            if keep:
+                keep.quantity = qty_int
+                keep.node = session.node
+                keep.node_origin = session.node.code
+                keep.save(update_fields=['quantity', 'node', 'node_origin', 'total_value', 'updated_at'])
+            else:
+                BreadDisposal.objects.create(
+                    session=session, bread_price_id=bp_id,
+                    disposal_type=BreadDisposal.DisposalType.REMAINING,
+                    node=session.node, node_origin=session.node.code,
+                    quantity=qty_int,
+                )
+
+        DailyBreadStockSnapshot.record_snapshot(session)
+
+    if is_anomaly:
+        create_notification(
+            title=f"Anomalie Clôture Production — {session.node.code}",
+            message=(
+                f"Session Éq.{session.team} du {session.date} : ventes/dispositions "
+                f"({result['sales']['breads'] + result['returns']['breads']} pains) "
+                f"dépassent la production déclarée ({result['production_declared']['breads']} "
+                f"pains) — écart de {abs(reliquat_breads)} pain(s) à investiguer."
+            ),
+            severity='DANGER', node_origin=session.node.code,
+        )
+
+    log_activity(
+        request_user, "Clôture Production",
+        f"{session.node.code} Éq.{session.team} {session.date} clôturée : "
+        f"produit {result['production_declared']['breads']}, vendu "
+        f"{result['sales']['breads']}, disposé {result['returns']['breads']}, "
+        f"NV {nv_breads}" + (" (anomalie)" if is_anomaly else "") + ".",
+        node_origin=session.node_origin,
+    )
+
+    return {'result': result, 'nv_breads': nv_breads, 'is_anomaly': is_anomaly}
+
+
 class ProductionSessionViewSet(viewsets.ModelViewSet):
     queryset = ProductionSession.objects.select_related('node', 'declared_by').all()
     serializer_class = ProductionSessionSerializer
@@ -211,6 +325,15 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated()]
+        if self.action == 'shift_end_status':
+            # BUG-155 : lecture (et clôture forcée automatique, en
+            # évaluation paresseuse) déclenchée par le polling frontend
+            # (BUG-156) depuis N'IMPORTE QUEL rôle connecté à la boulangerie
+            # — pas seulement un gérant, contrairement à `close()` (clôture
+            # VOLONTAIRE, réservée à `IsGerant`) : un facturier resté seul
+            # après l'heure de fin de créneau doit, lui aussi, voir la
+            # modale forcée s'ouvrir, ou déclencher la clôture forcée.
             return [IsAuthenticated()]
         return [IsGerant()]
 
@@ -468,15 +591,17 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         BUG-152 (remarque.md, après l.408 — « les restes des pains en stock
         [...] doivent aller dans la clôture journalière reste du jour selon
         la catégorie ») : le corps de la requête peut fournir, en option,
-        `remaining` : `[{"bread_price": <id>, "quantity": <entier >= 0>}, ...]`
+        `remaining` : `[{"bread_price": <id>, "quantity": <entier, négatif admis — BUG-158>}, ...]`
         pour déclarer le « RESTE DU JOUR » par catégorie EN MÊME TEMPS que la
         clôture, en un seul geste, au lieu d'exiger un passage préalable par
         le formulaire séparé `BreadDisposalViewSet` (type `REMAINING`).
         - Si `remaining` est absent du corps : comportement strictement
           inchangé — `record_snapshot()` lit les `BreadDisposal REMAINING`
           déjà déclarés séparément, comme avant ce ticket.
-        - Si `remaining` est fourni : toute quantité négative → 400, RIEN
-          n'est appliqué (session non clôturée, aucune disposition créée).
+        - Si `remaining` est fourni : une entrée invalide (quantité non
+          entière, catégorie absente ou introuvable) → 400, RIEN n'est
+          appliqué (session non clôturée, aucune disposition créée). Une
+          quantité négative est acceptée depuis BUG-158 (instruction client).
           Sinon, pour chaque catégorie fournie, la ligne `REMAINING` de
           CETTE session pour cette catégorie est créée ou REMPLACÉE
           (idempotent — un nouvel appel avec les mêmes valeurs ne duplique
@@ -520,11 +645,10 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                         {'detail': "« remaining » : catégorie de pain (bread_price) requise."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                if qty_int < 0:
-                    return Response(
-                        {'detail': "« remaining » : la quantité ne peut pas être négative."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                # BUG-158 (instruction client, 2026-11-10) : une quantité
+                # négative est acceptée — le reste du jour reprend le stock
+                # physique, qui peut être négatif (l'ancien refus HTTP 400 de
+                # BUG-152 est levé).
                 remaining_entries.append((bp_id, qty_int))
 
             bp_ids = {bp_id for bp_id, _ in remaining_entries}
@@ -536,85 +660,150 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
-            user=request.user, node_id=session.node_id, date=str(session.date),
-        )
-        result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
-
-        reliquat_breads = result['gap']['breads']
-        is_anomaly = reliquat_breads < 0
-        nv_breads = reliquat_breads if reliquat_breads > 0 else 0
-
-        summary = {
-            **result,
-            'nv': {'breads': nv_breads},
-            'anomaly': is_anomaly,
-        }
-
-        with transaction.atomic():
-            session.is_closed = True
-            session.closed_at = timezone.now()
-            session.closure_summary = summary
-            session.save(update_fields=['is_closed', 'closed_at', 'closure_summary'])
-
-            # BUG-152 : déclaration du reste par catégorie en même temps que
-            # la clôture (voir docstring ci-dessus). N'affecte jamais
-            # `BreadStock` (comme pour le formulaire séparé existant,
-            # `BreadDisposalViewSet.perform_create`).
-            for bp_id, qty_int in remaining_entries:
-                # update_or_create() suppose au plus une ligne REMAINING par
-                # (session, bread_price) ; on l'impose explicitement pour
-                # rester idempotent même si plusieurs lignes avaient déjà été
-                # créées séparément au préalable via le formulaire existant.
-                existing = BreadDisposal.objects.filter(
-                    session=session, bread_price_id=bp_id,
-                    disposal_type=BreadDisposal.DisposalType.REMAINING,
-                )
-                keep = existing.first()
-                existing.exclude(pk=getattr(keep, 'pk', None)).delete()
-                if keep:
-                    keep.quantity = qty_int
-                    keep.node = session.node
-                    keep.node_origin = session.node.code
-                    keep.save(update_fields=['quantity', 'node', 'node_origin', 'total_value', 'updated_at'])
-                else:
-                    BreadDisposal.objects.create(
-                        session=session, bread_price_id=bp_id,
-                        disposal_type=BreadDisposal.DisposalType.REMAINING,
-                        node=session.node, node_origin=session.node.code,
-                        quantity=qty_int,
-                    )
-
-            # BUG-118 (extension équipe, confirmée par le client le 2026-11-01) :
-            # capture l'instantané du solde DÉCLARÉ par CETTE équipe (RESTE DU
-            # JOUR), par catégorie de pain, pour le nœud/date/équipe de cette
-            # session. Borné par équipe : ne peut jamais écraser le snapshot
-            # d'une autre équipe clôturant le même jour (voir
-            # DailyBreadStockSnapshot.record_snapshot docstring).
-            DailyBreadStockSnapshot.record_snapshot(session)
-
-        if is_anomaly:
-            create_notification(
-                title=f"Anomalie Clôture Production — {session.node.code}",
-                message=(
-                    f"Session Éq.{session.team} du {session.date} : ventes/dispositions "
-                    f"({result['sales']['breads'] + result['returns']['breads']} pains) "
-                    f"dépassent la production déclarée ({result['production_declared']['breads']} "
-                    f"pains) — écart de {abs(reliquat_breads)} pain(s) à investiguer."
-                ),
-                severity='DANGER', node_origin=session.node.code,
-            )
-
-        log_activity(
-            request.user, "Clôture Production",
-            f"{session.node.code} Éq.{session.team} {session.date} clôturée : "
-            f"produit {result['production_declared']['breads']}, vendu "
-            f"{result['sales']['breads']}, disposé {result['returns']['breads']}, "
-            f"NV {nv_breads}" + (" (anomalie)" if is_anomaly else "") + ".",
-            node_origin=session.node_origin,
-        )
+        # BUG-155 : le cœur de la clôture (recoupement, transaction, upsert
+        # REMAINING, snapshot, notification d'anomalie, log_activity) est
+        # désormais factorisé dans `_close_production_session`, partagée à
+        # l'identique avec la clôture forcée automatique de
+        # `shift_end_status()` — comportement RIGOUREUSEMENT inchangé pour
+        # cet appel volontaire (remaining fourni ou non par l'utilisateur).
+        _close_production_session(session, remaining_entries, request.user)
 
         return Response(ProductionSessionSerializer(session).data)
+
+    @action(detail=False, methods=['get'], url_path='shift-end-status')
+    def shift_end_status(self, request):
+        """
+        BUG-155 (remarque.md l.414) : détection — et, le cas échéant,
+        clôture forcée automatique — du dépassement de l'heure de fin de
+        créneau d'une équipe (`Node.team_a_end_time`/`team_b_end_time`)
+        sans clôture manuelle de sa `ProductionSession` du jour.
+
+        `GET /api/production/sessions/shift-end-status/?node=<code ou pk>`
+
+        Pas d'infra de tâches planifiées dans ce projet (ni Celery, ni
+        APScheduler, ni cron, confirmé) : la détection se fait par
+        évaluation PARESSEUSE, déclenchée par cet appel lui-même (le
+        frontend, BUG-156, l'appelle au même rythme que le polling des
+        notifications déjà en place) — pas par un job serveur autonome.
+
+        Permissions/isolation par nœud : identique à
+        `BreadStockByDateView`/`DailyClosureReportView` — un non-HQ ignore
+        tout `node` reçu et n'est jamais évalué que sur le sien ; un HQ doit
+        préciser `node` explicitement.
+
+        Pour chaque équipe (A puis B, dans cet ordre — une seule équipe à la
+        fois est signalée par appel, les créneaux A/B ne se chevauchent
+        jamais, CLAUDE.md §5.2) dont l'heure de fin de créneau est déjà
+        passée aujourd'hui :
+        - Session déjà close, ou absente pour cette équipe/jour (rien à
+          clôturer) → équipe ignorée, passe à la suivante.
+        - Dépassement < `SHIFT_END_GRACE_MINUTES` (30 min) → PAS de clôture ;
+          `{"team": "A"|"B", "session": <id>, "pending_validation": true,
+          "remaining": [{"bread_price": id, "label": ..., "quantity_suggested":
+          <BreadStock.qty_available actuel, y compris négatif — BUG-158>}, ...],
+          "auto_closed": false}`
+          pour que le frontend ouvre la modale de validation forcée
+          (BUG-156), pré-remplie depuis le stock physique.
+        - Dépassement >= `SHIFT_END_GRACE_MINUTES` → clôture forcée
+          automatique via `_close_production_session` (même logique EXACTE
+          que `close()`, remaining = quantités physiques actuelles, y compris
+          négatives, avec notification WARNING dans ce cas — BUG-158) ;
+          `{"pending_validation": false, "auto_closed": true, "team": "A"|"B"}`.
+
+        Si aucune équipe n'est dans ce cas (aucun créneau dépassé, ou toutes
+        les sessions concernées déjà closes/absentes) : `{"pending_validation": false}`.
+        """
+        from datetime import datetime, timedelta
+
+        user = request.user
+        node_param = request.query_params.get('node')
+        if not user.can_access_all_nodes:
+            if not user.node_id:
+                return Response({'pending_validation': False})
+            node = user.node
+        else:
+            if not node_param:
+                return Response(
+                    {'detail': "Le paramètre `node` (code ou identifiant) est requis."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            node = _resolve_node(node_param)
+            if node is None:
+                return Response(
+                    {'detail': f"Boulangerie « {node_param} » introuvable."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        now = timezone.localtime()
+        today = now.date()
+        current_time = now.time()
+
+        for team, end_time in (('A', node.team_a_end_time), ('B', node.team_b_end_time)):
+            if end_time is None or current_time < end_time:
+                continue
+            session = ProductionSession.objects.filter(node=node, team=team, date=today).first()
+            if session is None or session.is_closed:
+                continue
+
+            end_dt = timezone.make_aware(
+                datetime.combine(today, end_time), timezone.get_current_timezone(),
+            )
+            elapsed = now - end_dt
+
+            stocks = _current_bread_stocks(node)
+
+            if elapsed >= timedelta(minutes=SHIFT_END_GRACE_MINUTES):
+                # BUG-158 (instruction client, 2026-11-10) : le reste du jour
+                # est enregistré tel quel, y compris négatif (sorties au-delà
+                # du disponible). Une notification WARNING signale chaque
+                # catégorie négative — `BreadStock` n'est pas corrigé ici.
+                remaining_entries = [(bs.bread_price_id, bs.qty_available) for bs in stocks]
+                negative_stocks = [bs for bs in stocks if bs.qty_available < 0]
+                with transaction.atomic():
+                    # BUG-165 : relecture verrouillée — si une requête
+                    # concurrente a déjà clôturé la session, on ne fait rien
+                    # (ni notification ni log) et on ne revendique pas la
+                    # clôture (`auto_closed` absent) pour ne pas dupliquer
+                    # l'annonce côté frontend (BUG-157).
+                    locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
+                    if locked.is_closed:
+                        continue
+                    session = locked
+                    _close_production_session(session, remaining_entries, user)
+                    if negative_stocks:
+                        details = ", ".join(
+                            f"{bs.bread_price} ({bs.qty_available})" for bs in negative_stocks
+                        )
+                        create_notification(
+                            title=f"Stock de pain négatif à la clôture automatique — {node.code}",
+                            message=(
+                                f"Session Éq.{session.team} du {session.date} clôturée "
+                                f"automatiquement : stock physique négatif pour {details}. "
+                                f"Le reste du jour a été enregistré avec cette valeur négative ; "
+                                f"le stock n'a pas été corrigé, écart à investiguer."
+                            ),
+                            severity='WARNING', node_origin=node.code,
+                        )
+                return Response({'pending_validation': False, 'auto_closed': True, 'team': team})
+
+            remaining = [
+                {
+                    'bread_price': bs.bread_price_id,
+                    'label': str(bs.bread_price),
+                    # BUG-158 : valeur réelle, y compris négative (acceptée par `close()`).
+                    'quantity_suggested': bs.qty_available,
+                }
+                for bs in stocks
+            ]
+            return Response({
+                'team': team,
+                'session': session.pk,
+                'pending_validation': True,
+                'remaining': remaining,
+                'auto_closed': False,
+            })
+
+        return Response({'pending_validation': False})
 
 
 class ConsumableTypeViewSet(viewsets.ModelViewSet):
@@ -2047,9 +2236,16 @@ class DailyOpeningConfirmationView(APIView):
                     {'detail': "Chaque ligne doit fournir `bread_price` et `qty` entiers."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if qty < 0:
+            # BUG-162 (décision client 2026-11-10 : « Enregistre le stock même
+            # s'il est négatif ») : une quantité négative est acceptée et
+            # enregistrée telle quelle (stock de départ, BreadStock.qty_adjusted).
+            # Les valeurs non entières restent refusées ci-dessus
+            # (int('1.5') lève ValueError ; un float JSON non entier est refusé
+            # ci-dessous).
+            raw_qty = entry.get('qty')
+            if isinstance(raw_qty, bool) or (isinstance(raw_qty, float) and raw_qty != qty):
                 return Response(
-                    {'detail': "La quantité confirmée ne peut pas être négative."},
+                    {'detail': "Chaque ligne doit fournir `bread_price` et `qty` entiers."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if bread_price_id in seen_bp_ids:

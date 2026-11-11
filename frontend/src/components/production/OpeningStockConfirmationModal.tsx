@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Modal } from '@/components/shared/Modal';
+import { SignedIntegerField } from '@/components/production/SignedIntegerField';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import {
@@ -54,6 +55,11 @@ interface OpeningStockConfirmationModalProps {
 }
 
 type DraftLines = Record<number, string>;
+
+function parseDraft(raw: string | undefined): number {
+  const n = raw === undefined || raw === '' ? 0 : parseInt(raw, 10);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function buildDraftFromProposed(report: OpeningConfirmationReport): DraftLines {
   const draft: DraftLines = {};
@@ -195,7 +201,8 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       const lines = report.categories.map(category => {
         const raw = draft[category.bread_price];
         const parsed = raw === undefined || raw === '' ? 0 : parseInt(raw, 10);
-        return { bread_price: category.bread_price, qty: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0 };
+        // BUG-162 : un stock de départ négatif est enregistré tel quel (décision client).
+        return { bread_price: category.bread_price, qty: Number.isFinite(parsed) ? parsed : 0 };
       });
       const { data } = await productionApi.openingConfirmation.submit({ team: selectedTeam, lines });
       // BUG-137 : la boîte modale confirme toujours UNE catégorie à la fois
@@ -369,6 +376,15 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
             Pains restants par catégorie
           </label>
 
+          {report.categories.some(c => parseDraft(draft[c.bread_price]) < 0) && (
+            <div style={{
+              fontSize: '0.78rem', marginBottom: '10px', color: 'hsl(var(--color-danger))',
+              backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+            }}>
+              Stock négatif : la valeur sera enregistrée telle quelle.
+            </div>
+          )}
+
           {report.categories.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>
               Aucune catégorie de pain active pour cette boulangerie.
@@ -393,15 +409,12 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
                       {category.label}
                     </div>
                   </div>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    inputMode="numeric"
-                    value={draft[category.bread_price] ?? ''}
-                    onChange={e => handleQtyChange(category.bread_price, e.target.value)}
-                    className="form-input"
-                    style={{ width: '110px', textAlign: 'right', fontWeight: 700 }}
+                  <SignedIntegerField
+                    value={parseDraft(draft[category.bread_price])}
+                    onChange={n => handleQtyChange(category.bread_price, String(n))}
+                    ariaLabel={`Stock de départ — ${category.label}`}
+                    disabled={submitting}
+                    width="150px"
                   />
                 </div>
               ))}

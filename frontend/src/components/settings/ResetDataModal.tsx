@@ -201,9 +201,17 @@ export const ResetDataModal: React.FC<ResetDataModalProps> = ({ isOpen, onClose 
                   className="form-input"
                   placeholder={CONFIRM_PHRASE}
                   disabled={step === 'submitting'}
+                  name="reset-confirm-phrase"
                   autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
                   style={{ height: '36px', fontSize: '0.85rem', padding: '0 10px' }}
                 />
+                {confirmText.length > 0 && !confirmMatches && (
+                  <div style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', marginTop: '4px', fontWeight: 700 }}>
+                    La phrase ne correspond pas : tapez exactement « {CONFIRM_PHRASE} ».
+                  </div>
+                )}
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px', textTransform: 'uppercase' }}>
@@ -215,7 +223,8 @@ export const ResetDataModal: React.FC<ResetDataModalProps> = ({ isOpen, onClose 
                   onChange={e => setPassword(e.target.value)}
                   className="form-input"
                   disabled={step === 'submitting'}
-                  autoComplete="current-password"
+                  name="reset-current-password"
+                  autoComplete="new-password"
                   style={{ height: '36px', fontSize: '0.85rem', padding: '0 10px' }}
                 />
               </div>

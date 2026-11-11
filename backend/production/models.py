@@ -760,7 +760,13 @@ class BreadDisposal(SyncableModel):
     session       = models.ForeignKey(ProductionSession, on_delete=models.CASCADE, related_name='disposals', verbose_name=_("Session de Production"))
     bread_price   = models.ForeignKey(BreadPrice, on_delete=models.PROTECT, verbose_name=_("Catégorie Pain"))
     disposal_type = models.CharField(max_length=20, choices=DisposalType.choices, verbose_name=_("Type"))
-    quantity      = models.PositiveIntegerField(verbose_name=_("Quantité"))
+    # BUG-158 (instruction client, 2026-11-10 : « enregistre le stock même s'il
+    # est négatif à la clôture automatique ») : `IntegerField` et non plus
+    # `PositiveIntegerField`, car un « reste du jour » (type REMAINING) reprend
+    # le stock physique, qui peut être négatif. Le négatif reste interdit pour
+    # tous les autres types : contrainte base ci-dessous + validation du
+    # serializer.
+    quantity      = models.IntegerField(verbose_name=_("Quantité"))
     unit_price_sold = models.PositiveIntegerField(default=0, verbose_name=_("Prix de vente unitaire (FC)"), help_text=_("Pour les ventes forfaitaires uniquement"))
     total_value   = models.DecimalField(max_digits=12, decimal_places=2, default='0.00', verbose_name=_("Valeur totale (FC)"))
     notes         = models.CharField(max_length=255, blank=True, default='', verbose_name=_("Notes"))
@@ -769,6 +775,12 @@ class BreadDisposal(SyncableModel):
         verbose_name = _("Disposition Pain")
         verbose_name_plural = _("Dispositions Pains")
         ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=0) | models.Q(disposal_type='REMAINING'),
+                name='breaddisposal_negative_qty_only_remaining',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.node.code} | {self.get_disposal_type_display()} | {self.quantity} × {self.bread_price.label}"

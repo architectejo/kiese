@@ -5,6 +5,12 @@ import { FiX } from 'react-icons/fi';
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// BUG-157 : nombre de <Modal> ouverts en même temps. Deux boîtes peuvent
+// coexister (annonce de clôture automatique par-dessus la modale forcée de
+// l'autre équipe) : fermer la première ne doit pas retirer le verrou de
+// défilement `body.modal-open` tant que la seconde est encore ouverte.
+let openModalCount = 0;
+
 export interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -60,6 +66,7 @@ export const Modal: React.FC<ModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    openModalCount += 1;
     document.body.classList.add('modal-open');
     previouslyFocused.current = document.activeElement as HTMLElement | null;
 
@@ -91,7 +98,8 @@ export const Modal: React.FC<ModalProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => {
       cancelAnimationFrame(raf);
-      document.body.classList.remove('modal-open');
+      openModalCount = Math.max(0, openModalCount - 1);
+      if (openModalCount === 0) document.body.classList.remove('modal-open');
       window.removeEventListener('keydown', onKeyDown);
       previouslyFocused.current?.focus?.();
     };

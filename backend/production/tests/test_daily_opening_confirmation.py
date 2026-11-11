@@ -181,12 +181,16 @@ class DailyOpeningConfirmationTests(TestCase):
         self.assertEqual(confirmation.lines.count(), 1)
         self.assertFalse(confirmation.lines.filter(bread_price=self.bp1000).exists())
 
-    def test_post_rejects_negative_quantity(self):
+    def test_post_accepts_negative_quantity(self):
+        """BUG-162 : CHANGEMENT DE RÈGLE demandé par le client (2026-11-10,
+        « Enregistre le stock même s'il est négatif »). Avant : 400."""
         resp = self.api.post('/api/production/opening-confirmation/', {
             'team': 'A', 'date': '2026-11-09',
             'lines': [{'bread_price': self.bp500.pk, 'qty': -5}],
         }, format='json')
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        line = DailyOpeningConfirmationLine.objects.get(bread_price=self.bp500)
+        self.assertEqual(line.qty_confirmed, -5)
 
     def test_post_rejects_invalid_team(self):
         resp = self.api.post('/api/production/opening-confirmation/', {

@@ -232,3 +232,17 @@ class BreadDisposalSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'total_value', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        # BUG-158 : seule une ligne REMAINING (« reste du jour », reflet du
+        # stock physique) peut porter une quantité négative. Vérifié sur l'état
+        # final (création, PUT ou PATCH partiel) pour qu'un changement de type
+        # d'une ligne REMAINING négative soit aussi refusé.
+        instance = self.instance
+        quantity = attrs.get('quantity', getattr(instance, 'quantity', 0))
+        disposal_type = attrs.get('disposal_type', getattr(instance, 'disposal_type', None))
+        if quantity is not None and quantity < 0 and disposal_type != BreadDisposal.DisposalType.REMAINING:
+            raise serializers.ValidationError({
+                'quantity': "La quantité ne peut pas être négative (sauf pour un reste du jour).",
+            })
+        return attrs

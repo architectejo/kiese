@@ -320,6 +320,48 @@ export interface DailyClosureReport {
   totals: DailyClosureTotals;
 }
 
+// BUG-155/156 : détection de fin de créneau non clôturée — GET
+// /api/production/sessions/shift-end-status/?node=<code> (voir
+// docs/qa/REGISTRE_BUGS.md). Une seule équipe signalée par appel (les
+// créneaux A/B ne se chevauchent jamais, CLAUDE.md §5.2) ; re-sonder
+// immédiatement après résolution (soumission forcée ou clôture automatique)
+// pour traiter l'autre équipe si elle est aussi concernée.
+export type ShiftEndTeam = 'A' | 'B';
+
+export interface ShiftEndRemainingLine {
+  bread_price: number;
+  label: string;
+  quantity_suggested: number;
+}
+
+/** `pending_validation=true` : une fournée attend une validation (manuelle
+ *  ou automatique) de son reste du jour — créneau terminé depuis moins de
+ *  30 min (`SHIFT_END_GRACE_MINUTES`, backend/production/views.py). */
+export interface ShiftEndStatusPending {
+  team: ShiftEndTeam;
+  session: string;
+  pending_validation: true;
+  remaining: ShiftEndRemainingLine[];
+  auto_closed: false;
+}
+
+/** `auto_closed=true` : le serveur a déjà clôturé la fournée de l'équipe
+ *  indiquée (créneau terminé depuis plus de 30 min, personne n'avait
+ *  validé) — rien à saisir, seulement informer. */
+export interface ShiftEndStatusAutoClosed {
+  pending_validation: false;
+  auto_closed: true;
+  team: ShiftEndTeam;
+}
+
+/** Rien à signaler (aucune équipe concernée, ou déjà close). */
+export interface ShiftEndStatusNone {
+  pending_validation: false;
+  auto_closed?: false;
+}
+
+export type ShiftEndStatus = ShiftEndStatusPending | ShiftEndStatusAutoClosed | ShiftEndStatusNone;
+
 // BUG-133/134 : boîte modale « stock de départ » — GET/POST
 // /api/production/opening-confirmation/ (voir docs/qa/REGISTRE_BUGS.md).
 export type OpeningConfirmationTeam = 'A' | 'B';
@@ -1165,6 +1207,11 @@ export const productionApi = {
     // historique inchangé (le formulaire séparé « Stock Restant » reste utilisable).
     close: (id: string, data?: { remaining?: Array<{ bread_price: number; quantity: number }> }) =>
       apiClient.post<ProductionSession>(`/api/production/sessions/${id}/close/`, data),
+    // BUG-155/156 : fournée pas close après l'heure de fin de créneau — `node`
+    // optionnel, ignoré/forcé côté serveur pour un GERANT/FACTURIER non-HQ
+    // (même règle que `openingConfirmation.get()`).
+    shiftEndStatus: (params?: { node?: string }) =>
+      apiClient.get<ShiftEndStatus>('/api/production/sessions/shift-end-status/', { params }),
   },
   breadStocks: {
     list: (params?: Record<string, string>) =>

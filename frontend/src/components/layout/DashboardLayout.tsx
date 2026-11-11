@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
@@ -11,10 +11,13 @@ import {
   FiCoffee, FiBell, FiX, FiCheck, FiInfo, FiAlertTriangle, FiTrash2, FiList,
   FiMapPin, FiUserCheck, FiMenu, FiSave, FiKey, FiHardDrive, FiCalendar
 } from 'react-icons/fi';
-import { coreApi } from '@/api/services';
+import { coreApi, productionApi } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
 import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
+import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 import { useOpeningConfirmationStore } from '@/store/openingConfirmationStore';
+import { AutoClosedNoticeModal } from '@/components/production/AutoClosedNoticeModal';
+import { AutoClosedNotice, isAutoClosedStorageKey, useShiftEndStore } from '@/store/shiftEndStore';
 
 interface SidebarItemProps {
   to: string;
@@ -66,6 +69,14 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   // demandée depuis « Production & Stocks » (null = aucune, comportement
   // automatique inchangé).
   const { forceOpenForTeam, clearManualConfirmation } = useOpeningConfirmationStore();
+  // BUG-156 : boîte modale forcée « fin de créneau » (volet frontend de
+  // BUG-155) — même store partagé que BUG-151 ci-dessus.
+  // BUG-157 : `autoClosedNotices` = file des annonces de clôture automatique
+  // à confirmer (remplace le toast éphémère `autoClosedTeam` de BUG-156).
+  const {
+    pending: shiftEndPending, autoClosedNotices, setPending: setShiftEndPending,
+    loadAutoClosedNotices, notifyAutoClosed, confirmAutoClosedNotice,
+  } = useShiftEndStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -93,6 +104,79 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // BUG-156 : même garde que `OpeningStockConfirmationModal` (BUG-134/138) —
+  // un GERANT ou un FACTURIER non-HQ a un stock physique propre à sa
+  // boulangerie et peut déclencher/voir la détection de fin de créneau
+  // (backend : `IsAuthenticated`, délibérément plus permissif que `close()`
+  // qui reste `IsGerant` — un facturier seul après l'heure de fin doit
+  // pouvoir faire remonter l'alerte, remarque.md, même s'il ne peut pas
+  // soumettre lui-même la clôture).
+  const canSeeShiftEnd = !!user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes;
+  // BUG-157 : identifiant de la boulangerie de l'utilisateur, utilisé dans la
+  // clé `localStorage` des annonces de clôture automatique en attente (une
+  // clé par boulangerie : un poste partagé ne mélange pas deux nœuds).
+  // `null` = utilisateur non concerné (même garde de rôle que BUG-156).
+  const shiftEndNodeKey = canSeeShiftEnd ? (user?.node ?? 'sans-boulangerie') : null;
+
+  // BUG-156 : interroge `GET /api/production/sessions/shift-end-status/`
+  // (BUG-155). Les créneaux A/B ne se chevauchent jamais (CLAUDE.md §5.2) :
+  // une seule équipe est signalée par appel. `allowImmediateRetry` permet de
+  // re-sonder IMMÉDIATEMENT (sans attendre le prochain intervalle de 10 s)
+  // après la résolution de la première équipe — clôture automatique
+  // (résolue par l'appel lui-même) ou clôture forcée soumise par
+  // l'utilisateur (résolue par `handleForcedClosed` ci-dessous) — pour
+  // traiter l'autre équipe si elle aussi est en attente, au lieu d'attendre
+  // le prochain cycle de sondage.
+  const fetchShiftEndStatus = useCallback(async (allowImmediateRetry = true): Promise<void> => {
+    if (!canSeeShiftEnd) return;
+    try {
+      const { data } = await productionApi.sessions.shiftEndStatus();
+      if (data.pending_validation) {
+        setShiftEndPending({ team: data.team, session: data.session, remaining: data.remaining });
+      } else if (data.auto_closed) {
+        // BUG-157 : annonce ajoutée à la file ET persistée — le backend ne
+        // renverra plus `auto_closed: true` pour cette fournée.
+        if (shiftEndNodeKey) notifyAutoClosed(shiftEndNodeKey, data.team);
+        if (allowImmediateRetry) {
+          await fetchShiftEndStatus(false);
+        }
+      } else {
+        setShiftEndPending(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch shift-end status', error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeShiftEnd, shiftEndNodeKey, setShiftEndPending, notifyAutoClosed]);
+
+  // BUG-157 : au montage (donc aussi après un rechargement de page), ré-affiche
+  // toute annonce de clôture automatique non encore confirmée pour la
+  // boulangerie de l'utilisateur. Aucun minuteur d'effacement : seule la
+  // confirmation explicite (`handleAutoClosedConfirm`) retire une annonce.
+  // L'écoute de `storage` garde plusieurs onglets du même poste cohérents
+  // (annonce confirmée ou reçue dans un autre onglet).
+  useEffect(() => {
+    if (!shiftEndNodeKey) return;
+    loadAutoClosedNotices(shiftEndNodeKey);
+    const onStorage = (e: StorageEvent) => {
+      if (isAutoClosedStorageKey(e.key, shiftEndNodeKey)) loadAutoClosedNotices(shiftEndNodeKey);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [shiftEndNodeKey, loadAutoClosedNotices]);
+
+  const handleAutoClosedConfirm = (notice: AutoClosedNotice) => {
+    if (shiftEndNodeKey) confirmAutoClosedNotice(shiftEndNodeKey, notice);
+  };
+
+  const handleForcedClosed = () => {
+    setShiftEndPending(null);
+    // Re-sonde immédiatement : l'autre équipe peut elle aussi être en
+    // attente (ou déjà clôturée automatiquement) au moment où celle-ci
+    // vient d'être traitée.
+    fetchShiftEndStatus();
+  };
+
   useEffect(() => {
     if (!user) {
       fetchCurrentUser();
@@ -101,9 +185,13 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 10000);
+    fetchShiftEndStatus();
+    const interval = setInterval(() => {
+      fetchNotifications();
+      fetchShiftEndStatus();
+    }, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchShiftEndStatus]);
 
   const handleLogout = async () => {
     await logout();
@@ -843,6 +931,37 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           // monté une seule fois ici (consigne inchangée, BUG-134).
           forceOpenForTeam={forceOpenForTeam}
           onManualClose={clearManualConfirmation}
+        />
+      )}
+
+      {/* BUG-156 (volet frontend de BUG-155) : boîte modale forcée « fin de
+          créneau » — même garde de rôle que ci-dessus (`canSeeShiftEnd`),
+          montée une seule fois ici (pas page par page), pilotée par
+          `shiftEndStore.ts` rempli par le sondage périodique ci-dessus. */}
+      {canSeeShiftEnd && shiftEndPending && (
+        <CloseSessionModal
+          isOpen={true}
+          session={null}
+          onClose={() => { /* non fermable sans soumission en mode forcé */ }}
+          onClosed={() => { /* non utilisé en mode forcé, voir onForcedClose */ }}
+          forced={shiftEndPending}
+          onForcedClose={handleForcedClosed}
+        />
+      )}
+
+      {/* BUG-157 (remplace le toast auto-effacé de BUG-156) : annonce de
+          clôture AUTOMATIQUE (créneau dépassé de plus de 30 min, personne
+          n'avait validé) — boîte modale qui reste à l'écran jusqu'à la
+          confirmation explicite. La file est traitée une annonce à la fois
+          (équipes A puis B). Rendue APRÈS la modale forcée ci-dessus : si les
+          deux coexistent (annonce pour une équipe, saisie forcée pour
+          l'autre), l'annonce est au premier plan, puis sa confirmation rend
+          la main à la modale forcée restée montée (saisie conservée). */}
+      {canSeeShiftEnd && autoClosedNotices.length > 0 && (
+        <AutoClosedNoticeModal
+          notice={autoClosedNotices[0]}
+          pendingCount={autoClosedNotices.length}
+          onConfirm={handleAutoClosedConfirm}
         />
       )}
     </div>
