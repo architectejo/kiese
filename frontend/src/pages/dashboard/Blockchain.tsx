@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   FiShield, FiCheckCircle, FiCpu, FiLock, FiAlertTriangle
 } from 'react-icons/fi';
-import { blockchainApi, treasuryApi, TamperAlert, BlockchainSnapshot } from '@/api/services';
+import { blockchainApi, treasuryApi, TamperAlert, BlockchainSnapshot, CashbookEntry } from '@/api/services';
+import { useProgressiveList } from '@/hooks/useProgressiveList';
 
 export const Blockchain: React.FC = () => {
   const [verifying, setVerifying] = useState(false);
@@ -13,7 +14,17 @@ export const Blockchain: React.FC = () => {
     node_snapshots: BlockchainSnapshot[];
   } | null>(null);
   const [alerts, setAlerts] = useState<TamperAlert[]>([]);
-  const [cashbookEntries, setCashbookEntries] = useState<any[]>([]);
+  // BUG-164 : l'aperçu n'affiche que les 10 écritures les plus récentes. Le serveur trie
+  // (-date, -created_at) avant de paginer : on ne demande donc QUE cette page de 10 lignes
+  // (mode `manual`, aucun chargement de suite) au lieu de lire tout le livre de caisse puis
+  // de tronquer. La vérification d'intégrité (`runCheck`, `globalStatus`) est entièrement
+  // calculée par le serveur sur la chaîne complète : elle ne dépend d'aucune liste client.
+  const cashbookQ = useProgressiveList<CashbookEntry>({
+    fetchPage: p => treasuryApi.cashbook.page({ page: String(p), page_size: '10' }),
+    resetKey: 'blockchain-preview',
+    mode: 'manual',
+  });
+  const cashbookEntries = cashbookQ.items.slice(0, 10);
 
   const loadStatus = async () => {
     try {
@@ -28,18 +39,8 @@ export const Blockchain: React.FC = () => {
     }
   };
 
-  const loadCashbook = async () => {
-    try {
-      const res = await treasuryApi.cashbook.list();
-      setCashbookEntries(res.data.slice(0, 10));
-    } catch (err) {
-      console.error('Failed to load cashbook', err);
-    }
-  };
-
   useEffect(() => {
     loadStatus();
-    loadCashbook();
   }, []);
 
   const runVerification = async () => {
@@ -47,6 +48,7 @@ export const Blockchain: React.FC = () => {
     try {
       await blockchainApi.snapshots.runCheck();
       await loadStatus();
+      cashbookQ.reload();
     } catch (err) {
       console.error('Integrity check failed', err);
     } finally {
@@ -235,7 +237,18 @@ export const Blockchain: React.FC = () => {
         </div>
       )}
 
-      {cashbookEntries.length === 0 && !verifying && (
+      {cashbookQ.isLoading && (
+        <div className="glass-card" style={{ padding: '24px', textAlign: 'center', color: 'hsl(var(--text-secondary))', fontSize: '0.8rem' }}>
+          Chargement des dernières écritures…
+        </div>
+      )}
+      {cashbookQ.error && (
+        <div role="alert" className="glass-card" style={{ padding: '14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {cashbookQ.error}
+          <button onClick={cashbookQ.reload} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+        </div>
+      )}
+      {cashbookEntries.length === 0 && !verifying && !cashbookQ.isLoading && !cashbookQ.error && (
         <div className="glass-card" style={{ padding: '32px', textAlign: 'center', color: 'hsl(var(--text-secondary))' }}>
           <FiLock style={{ fontSize: '2rem', marginBottom: '8px', opacity: 0.4 }} />
           <p style={{ fontSize: '0.8rem' }}>Aucune écriture dans le Livre de Caisse. Poussez une clôture de caisse pour créer la première entrée.</p>

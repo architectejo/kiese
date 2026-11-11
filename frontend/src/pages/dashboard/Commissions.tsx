@@ -8,6 +8,7 @@ import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/ser
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
+import { useProgressiveList } from '@/hooks/useProgressiveList';
 
 const MONTHS_FR = [
   'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -16,8 +17,6 @@ const MONTHS_FR = [
 
 export const Commissions: React.FC = () => {
   const { user } = useAuthStore();
-  const [commissions, setCommissions] = useState<ClientCommission[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [payoutItem, setPayoutItem] = useState<ClientCommission | null>(null);
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [ficheItem, setFicheItem]   = useState<ClientCommission | null>(null);
@@ -40,21 +39,22 @@ export const Commissions: React.FC = () => {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateResult, setGenerateResult] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const params: Record<string, any> = {};
-      if (nodeFilter) params['period__node'] = nodeFilter;
-      const res = await commissionsApi.commissions.list(params);
-      setCommissions(res.data);
-    } catch (err) {
-      console.error('Failed to load commissions', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [nodeFilter]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  // BUG-164 : liste lue page par page (page 1 affichée tout de suite, suite en arrière-plan).
+  // KPI, totaux d'impression/export, recherche et filtre de statut (côté client) ne sont
+  // fiables qu'une fois la liste COMPLÈTE : voir `isReady` ci-dessous.
+  const commissionsQ = useProgressiveList<ClientCommission>({
+    fetchPage: p => commissionsApi.commissions.page({
+      ...(nodeFilter ? { period__node: nodeFilter } : {}),
+      page: String(p), page_size: '100',
+    }),
+    resetKey: `cm|${nodeFilter}`,
+  });
+  const commissions = commissionsQ.items;
+  const isLoading = commissionsQ.isLoading;
+  const isReady = commissionsQ.isComplete;
+  const reloadCommissions = commissionsQ.reload;
+  const loadData = useCallback(async () => { reloadCommissions(); }, [reloadCommissions]);
+  const progress = `${commissionsQ.loaded} / ${commissionsQ.total ?? '…'}`;
 
   useEffect(() => {
     if (user?.can_access_all_nodes && nodesList.length === 0) {
@@ -140,11 +140,13 @@ export const Commissions: React.FC = () => {
     }
   };
 
+  // Les trois KPI ne sont affichés que si la liste est complète (jamais de total partiel).
   const totalCalculated = commissions.reduce((s, c) => s + parseFloat(c.commission_gross || '0'), 0);
   const totalPaid = commissions.filter(c => c.is_paid).reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0);
   const totalRemaining = commissions.filter(c => !c.is_paid).reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0);
 
   const handlePrint = () => {
+    if (!isReady) return;
     const dateStr = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
     const totCmd = filteredCommissions.reduce((s, c) => s + parseFloat(c.order_value || '0'), 0);
     const totCm  = filteredCommissions.reduce((s, c) => s + parseFloat(c.commission_gross || '0'), 0);
@@ -196,6 +198,7 @@ export const Commissions: React.FC = () => {
   };
 
   const handleExportExcel = () => {
+    if (!isReady) return;
     const headers = ['Client', 'Commande (FC)', 'Taux CM', 'CM Brute (FC)', 'NET/ORDI (FC)', 'CARTE 1% (FC)', 'NET/CARTE (FC)', 'NET À PAYER (FC)', 'Statut'];
     const rows = filteredCommissions.map(c => [
       c.client_display || c.client,
@@ -255,7 +258,7 @@ export const Commissions: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>COMMISSIONS GÉNÉRÉES</div>
-            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{totalCalculated.toLocaleString('fr-FR')} FC</h3>
+            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{isReady ? `${totalCalculated.toLocaleString('fr-FR')} FC` : `calcul en cours… ${progress}`}</h3>
           </div>
         </div>
         <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px' }}>
@@ -264,7 +267,7 @@ export const Commissions: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>COMMISSIONS PAYÉES</div>
-            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{totalPaid.toLocaleString('fr-FR')} FC</h3>
+            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{isReady ? `${totalPaid.toLocaleString('fr-FR')} FC` : `calcul en cours… ${progress}`}</h3>
           </div>
         </div>
         <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px' }}>
@@ -273,13 +276,20 @@ export const Commissions: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>RESTE À VERSER</div>
-            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{totalRemaining.toLocaleString('fr-FR')} FC</h3>
+            <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{isReady ? `${totalRemaining.toLocaleString('fr-FR')} FC` : `calcul en cours… ${progress}`}</h3>
           </div>
         </div>
       </div>
 
+      {commissionsQ.error && (
+        <div role="alert" className="glass-card" style={{ padding: '10px 14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {commissionsQ.error}
+          <button onClick={reloadCommissions} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+        </div>
+      )}
+
       {/* Bandeau : aucune commission générée pour le mois courant */}
-      {!isLoading && commissions.length === 0 && (
+      {isReady && commissions.length === 0 && (
         <div className="glass-card animate-fade-in" style={{
           padding: '14px 18px',
           borderLeft: '4px solid hsl(var(--color-warning))',
@@ -346,6 +356,11 @@ export const Commissions: React.FC = () => {
             </div>
           )}
         </div>
+        {!isLoading && !isReady && !commissionsQ.error && (searchTerm || statusFilter !== 'All') && (
+          <div role="status" style={{ marginTop: '8px', fontSize: '0.7rem', color: 'hsl(var(--color-warning))' }}>
+            Chargement en cours ({progress}) : la recherche et le filtre portent sur les commissions déjà chargées — le résultat sera complet à la fin du chargement.
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -355,21 +370,28 @@ export const Commissions: React.FC = () => {
             Situation des Ristournes & Rémunérations
           </h2>
           {!isLoading && filteredCommissions.length > 0 && (
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {!isReady && !commissionsQ.error && (
+                <span role="status" style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))' }}>
+                  {progress} chargées — impression et export après chargement complet
+                </span>
+              )}
               <button
                 onClick={handlePrint}
+                disabled={!isReady}
                 className="btn btn-secondary"
                 style={{ padding: '5px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}
-                title="Imprimer le tableau"
+                title={isReady ? 'Imprimer le tableau' : 'Disponible une fois toutes les commissions chargées'}
               >
                 <FiPrinter />
                 <span>Imprimer</span>
               </button>
               <button
                 onClick={handleExportExcel}
+                disabled={!isReady}
                 className="btn btn-secondary"
                 style={{ padding: '5px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}
-                title="Exporter en Excel (CSV)"
+                title={isReady ? 'Exporter en Excel (CSV)' : 'Disponible une fois toutes les commissions chargées'}
               >
                 <FiDownload />
                 <span>Excel</span>
@@ -467,7 +489,7 @@ export const Commissions: React.FC = () => {
                 })}
                 {filteredCommissions.length === 0 && (
                   <tr><td colSpan={10} style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-muted))' }}>
-                    {commissions.length === 0 ? 'Aucune commission enregistrée' : 'Aucun résultat pour ces filtres'}
+                    {commissions.length === 0 ? 'Aucune commission enregistrée' : isReady ? 'Aucun résultat pour ces filtres' : 'Aucun résultat parmi les commissions déjà chargées…'}
                   </td></tr>
                 )}
               </tbody>

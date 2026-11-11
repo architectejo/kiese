@@ -3,30 +3,17 @@ import {
   FiUserCheck, FiPlus, FiEdit2, FiTrash2, FiRefreshCw, 
   FiKey, FiShield, FiCheckCircle, FiXCircle
 } from 'react-icons/fi';
-import { apiClient } from '@/api/client';
-import { BakeryNode } from './Nodes';
+import { coreApi, BakeryNode, UserAccount, UserWritePayload } from '@/api/services';
+import { extractApiError } from '@/hooks/useProgressiveList';
 import { Modal } from '@/components/shared/Modal';
 
-interface User {
-  id: number;
-  username: string;
-  first_name: string;
-  last_name: string;
-  email: string;
-  role: string;
-  role_display: string;
-  team: string;
-  team_display: string;
-  node: string | null;
-  node_display: string | null;
-  phone: string;
-  is_active: boolean;
-}
+type User = UserAccount;
 
 export const Users: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [nodes, setNodes] = useState<BakeryNode[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -51,17 +38,19 @@ export const Users: React.FC = () => {
 
   const fetchData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
+      // BUG-163 : `list()` suit toutes les pages (l'API est paginée à 25) — l'annuaire
+      // n'était plus complet au-delà de 25 comptes.
       const [usersRes, nodesRes] = await Promise.all([
-        apiClient.get('/api/core/users/'),
-        apiClient.get('/api/core/nodes/')
+        coreApi.users.list(),
+        coreApi.nodes.list(),
       ]);
-      const usersData = Array.isArray(usersRes.data) ? usersRes.data : (usersRes.data.results || []);
-      const nodesData = Array.isArray(nodesRes.data) ? nodesRes.data : (nodesRes.data.results || []);
-      setUsers(usersData);
-      setNodes(nodesData);
+      setUsers(usersRes.data);
+      setNodes(nodesRes.data);
     } catch (error) {
       console.error('Failed to fetch data', error);
+      setLoadError(extractApiError(error, "Impossible de charger l'annuaire des utilisateurs."));
     } finally {
       setIsLoading(false);
     }
@@ -112,15 +101,15 @@ export const Users: React.FC = () => {
     if (isSavingUser) return;
     setIsSavingUser(true);
     try {
-      const payload: Record<string, any> = { ...formData };
+      const payload: UserWritePayload = { ...formData };
       if (!payload.node) delete payload.node; // Don't send empty node if not selected
 
       if (editingUser) {
         // Remove password from payload when editing
         delete payload.password;
-        await apiClient.put(`/api/core/users/${editingUser.id}/`, payload);
+        await coreApi.users.update(editingUser.id, payload);
       } else {
-        await apiClient.post('/api/core/users/', payload);
+        await coreApi.users.create(payload);
       }
       handleCloseModal();
       fetchData();
@@ -137,7 +126,7 @@ export const Users: React.FC = () => {
       return;
     }
     try {
-      await apiClient.delete(`/api/core/users/${id}/`);
+      await coreApi.users.delete(id);
       fetchData();
     } catch (error) {
       console.error('Error deleting user', error);
@@ -153,7 +142,7 @@ export const Users: React.FC = () => {
   const handleResetPassword = async () => {
     if (!passwordResetUser) return;
     try {
-      await apiClient.post(`/api/core/users/${passwordResetUser.id}/reset_password/`, {});
+      await coreApi.users.resetPassword(passwordResetUser.id);
       setIsPasswordModalOpen(false);
       alert(`Mot de passe réinitialisé — nouveau mot de passe : ${passwordResetUser.username}`);
       setPasswordResetUser(null);
@@ -220,6 +209,12 @@ export const Users: React.FC = () => {
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-secondary))' }}>
                     Chargement des utilisateurs...
+                  </td>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={6} role="alert" style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--color-danger))', fontWeight: 700 }}>
+                    {loadError}
                   </td>
                 </tr>
               ) : users.length === 0 ? (

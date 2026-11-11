@@ -9,6 +9,7 @@ import { salesApi, clientsApi, productionApi, Client, Invoice, ProductionSession
 import { useAuthStore } from '@/store/authStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
+import { useProgressiveList, extractApiError } from '@/hooks/useProgressiveList';
 
 const buildReceipt = (inv: Invoice): ReceiptData => ({
   receiptNumber: inv.receipt_number,
@@ -30,12 +31,19 @@ const buildReceipt = (inv: Invoice): ReceiptData => ({
   isSoldee: inv.is_soldee === true,
 });
 
+// BUG-163 : plus de chargement intégral à l'ouverture. Factures livrées, clients à risque et
+// (à la demande) fiches clients sont lus par pages via `useProgressiveList` ; seules les données
+// bornées (résumé du jour, fournées des 7 derniers jours, compteurs serveur) restent ici.
+const INVOICES_PAGE_SIZE = '100';
+const RISK_PAGE_SIZE = '100';
+const CLIENTS_PAGE_SIZE = '500';
+const TREND_DAYS = 6;
+
+const invoiceDayKey = (inv: Invoice): string => inv.invoice_date || inv.created_at?.split('T')[0] || '?';
+
 interface DashboardData {
   totalClients: number;
   activeClients: number;
-  clients: Client[];
-  riskAlerts: Client[];
-  invoices: Invoice[];
   dailySummaryRows: DailySummaryRow[];
   dailySummary: { total: number; cash: number; credit: number };
   todaySessions: ProductionSession[];
@@ -50,6 +58,7 @@ export const Dashboard: React.FC = () => {
   const isHQ = !!user?.can_access_all_nodes;
   const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [kpiModal, setKpiModal] = useState<KpiModalKey>(null);
   const [invoicesModalOpen, setInvoicesModalOpen] = useState(false);
@@ -60,14 +69,42 @@ export const Dashboard: React.FC = () => {
   const [invoiceFilterQuery, setInvoiceFilterQuery] = useState('');
   const [invoiceFilterDate, setInvoiceFilterDate] = useState('');
 
+  // Factures livrées : triées côté serveur (date de facture décroissante, puis création
+  // décroissante = même ordre que l'ancien tri client). Le chargement d'arrière-plan s'arrête
+  // dès que 7 jours distincts sont lus : les 6 derniers jours du graphique sont alors complets.
+  const invoicesList = useProgressiveList<Invoice>({
+    resetKey: 'dashboard-invoices',
+    stopWhen: (items) => new Set(items.map(invoiceDayKey)).size > TREND_DAYS,
+    fetchPage: (page) => salesApi.listPage({
+      status: 'DELIVERED',
+      ordering: '-invoice_date,-created_at',
+      page: String(page),
+      page_size: INVOICES_PAGE_SIZE,
+    }),
+  });
+  // Clients à risque (catégorie RISK) : `count` serveur exact dès la page 1.
+  const riskList = useProgressiveList<Client>({
+    resetKey: 'dashboard-risk',
+    fetchPage: (page) => clientsApi.listPage({
+      category: 'RISK',
+      page: String(page),
+      page_size: RISK_PAGE_SIZE,
+    }),
+  });
+  // Fiches clients : uniquement pour le détail par boulangerie (fenêtre « Clients Actifs »).
+  const clientsList = useProgressiveList<Client>({
+    resetKey: 'dashboard-clients',
+    enabled: kpiModal === 'clients',
+    fetchPage: (page) => clientsApi.listPage({ page: String(page), page_size: CLIENTS_PAGE_SIZE }),
+  });
+
   const loadDashboard = async () => {
     setIsLoading(true);
+    setLoadError(null);
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     try {
-      const [clientsRes, riskRes, invoicesRes, summaryRes, sessionsRes, activeRes] = await Promise.all([
-        clientsApi.list(),
-        clientsApi.riskAlerts(),
-        salesApi.list({ status: 'DELIVERED' }),
+      const [clientsCountRes, summaryRes, sessionsRes, activeRes] = await Promise.all([
+        clientsApi.listPage({ page: '1', page_size: '1' }),
         salesApi.dailySummary(),
         productionApi.sessions.list({ date_from: sevenDaysAgo, page_size: '200' }),
         clientsApi.activeLastMonth(),
@@ -77,28 +114,37 @@ export const Dashboard: React.FC = () => {
       const dailyCash = summaryRaw.filter(s => s.payment_type === 'CASH').reduce((a, s) => a + (parseFloat(String(s.total)) || 0), 0);
       const dailyCredit = summaryRaw.filter(s => s.payment_type === 'CREDIT').reduce((a, s) => a + (parseFloat(String(s.total)) || 0), 0);
 
-      const sortedInvoices = [...invoicesRes.data].sort((a, b) =>
-        new Date(b.invoice_date || b.created_at).getTime() - new Date(a.invoice_date || a.created_at).getTime()
-      );
-
       setData({
-        totalClients: clientsRes.data.length,
-        activeClients: activeRes.data.count ?? clientsRes.data.filter(c => c.is_active).length,
-        clients: clientsRes.data,
-        riskAlerts: riskRes.data,
-        invoices: sortedInvoices,
+        totalClients: clientsCountRes.data.count,
+        activeClients: activeRes.data.count ?? 0,
         dailySummaryRows: summaryRaw,
         dailySummary: { total: dailyCash + dailyCredit, cash: dailyCash, credit: dailyCredit },
         todaySessions: sessionsRes.data,
       });
     } catch (err) {
       console.error('Dashboard load failed', err);
+      setLoadError(extractApiError(err, 'Impossible de charger le tableau de bord.'));
     } finally {
       setIsLoading(false);
     }
   };
 
+  const refreshAll = () => {
+    loadDashboard();
+    invoicesList.reload();
+    riskList.reload();
+    if (kpiModal === 'clients') clientsList.reload();
+  };
+
   useEffect(() => { loadDashboard(); }, []);
+
+  const invoices = invoicesList.items;
+  const riskAlerts = riskList.items;
+  // Les tendances calculées côté client ne sont affichées comme définitives qu'une fois les
+  // 7 jours les plus récents entièrement lus (ou la liste complète) — jamais un total partiel.
+  const trendReady = invoicesList.isComplete || new Set(invoices.map(invoiceDayKey)).size > TREND_DAYS;
+  const progressText = (l: { loaded: number; total: number | null }) =>
+    `${l.loaded.toLocaleString('fr-FR')} / ${(l.total ?? l.loaded).toLocaleString('fr-FR')}`;
 
   // Build flour doughnut from sessions (grouped by node)
   const flourByNode: Record<string, number> = {};
@@ -117,8 +163,8 @@ export const Dashboard: React.FC = () => {
   // order value invoiced per day, regardless of how much was paid).
   const trendMap: Record<string, number> = {};
   const commandeMap: Record<string, number> = {};
-  (data?.invoices || []).forEach(inv => {
-    const day = inv.invoice_date || inv.created_at?.split('T')[0] || '?';
+  (trendReady ? invoices : []).forEach(inv => {
+    const day = invoiceDayKey(inv);
     trendMap[day] = (trendMap[day] || 0) + parseFloat(inv.payment_amount || '0');
     commandeMap[day] = (commandeMap[day] || 0) + parseFloat(inv.order_total || '0');
   });
@@ -145,8 +191,8 @@ export const Dashboard: React.FC = () => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const todayPains = dailyPainsMap[todayStr] || 0;
 
-  const recentInvoices = (data?.invoices || []).slice(0, 5);
-  const riskAlertsPreview = (data?.riskAlerts || []).slice(0, 4);
+  const recentInvoices = invoices.slice(0, 5);
+  const riskAlertsPreview = riskAlerts.slice(0, 4);
 
   // ── Per-boulangerie breakdowns for KPI detail modals ──────────────────────
   const caByNode: Record<string, { cash: number; credit: number }> = {};
@@ -185,13 +231,13 @@ export const Dashboard: React.FC = () => {
   const volumeCategoryKeys = Object.keys(volumeByCategory).sort((a, b) => volumeByCategory[a].price - volumeByCategory[b].price);
 
   const riskByNode: Record<string, number> = {};
-  (data?.riskAlerts || []).forEach(c => {
+  (riskList.isComplete ? riskAlerts : []).forEach(c => {
     const key = c.node_display || c.node;
     riskByNode[key] = (riskByNode[key] || 0) + 1;
   });
 
   const clientsByNode: Record<string, { total: number; active: number }> = {};
-  (data?.clients || []).forEach(c => {
+  (clientsList.isComplete ? clientsList.items : []).forEach(c => {
     const key = c.node_display || c.node;
     if (!clientsByNode[key]) clientsByNode[key] = { total: 0, active: 0 };
     clientsByNode[key].total += 1;
@@ -199,7 +245,7 @@ export const Dashboard: React.FC = () => {
   });
 
   // ── Invoices grouped by month for the "Voir Plus" modal — filtrable par client, N° Reçu ou date ──
-  const filteredModalInvoices = (data?.invoices || []).filter(inv => {
+  const filteredModalInvoices = invoices.filter(inv => {
     const q = invoiceFilterQuery.trim().toLowerCase();
     const matchesQuery = !q ||
       inv.receipt_number.toLowerCase().includes(q) ||
@@ -224,7 +270,7 @@ export const Dashboard: React.FC = () => {
       {/* Refresh */}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button
-          onClick={loadDashboard}
+          onClick={refreshAll}
           disabled={isLoading}
           className="btn btn-secondary"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 14px', fontSize: '0.78rem' }}
@@ -233,6 +279,12 @@ export const Dashboard: React.FC = () => {
           <span>Actualiser</span>
         </button>
       </div>
+
+      {loadError && (
+        <div role="alert" className="glass-card" style={{ color: 'hsl(var(--color-danger))', fontWeight: 700, fontSize: '0.85rem', padding: '12px 14px' }}>
+          {loadError}
+        </div>
+      )}
 
       {/* KPI Stats Grid */}
       <div className="kpi-grid" style={{ gap: '16px' }}>
@@ -254,7 +306,7 @@ export const Dashboard: React.FC = () => {
           {
             key: 'risk' as KpiModalKey,
             label: 'Alertes Risques Actives',
-            value: isLoading ? '—' : `${data?.riskAlerts.length ?? 0} clients`,
+            value: riskList.total === null ? '—' : `${riskList.total.toLocaleString('fr-FR')} clients`,
             change: 'Dépassement de plafond',
             icon: <FiAlertTriangle />, color: 'hsl(var(--color-danger))'
           },
@@ -306,7 +358,17 @@ export const Dashboard: React.FC = () => {
             <span className="badge badge-success">Live CDF</span>
           </div>
           <div style={{ padding: '8px' }}>
-            <DualTrendChart data={dualTrendData.length > 0 ? dualTrendData : dualFallback} />
+            {trendReady ? (
+              <DualTrendChart data={dualTrendData.length > 0 ? dualTrendData : dualFallback} />
+            ) : invoicesList.error ? (
+              <div role="alert" style={{ textAlign: 'center', padding: '48px 16px', color: 'hsl(var(--color-danger))', fontSize: '0.85rem', fontWeight: 700 }}>
+                {invoicesList.error}
+              </div>
+            ) : (
+              <div role="status" style={{ textAlign: 'center', padding: '48px 16px', color: 'hsl(var(--text-muted))', fontSize: '0.85rem', fontWeight: 700 }}>
+                Calcul en cours… ({progressText(invoicesList)} factures lues)
+              </div>
+            )}
           </div>
         </div>
 
@@ -334,15 +396,20 @@ export const Dashboard: React.FC = () => {
               <FiCheckCircle style={{ color: 'hsl(var(--color-success))' }} />
               Dernières Factures Livrées
             </h2>
-            {(data?.invoices.length ?? 0) > 5 && (
-              <button onClick={() => setInvoicesModalOpen(true)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {(invoicesList.total ?? 0) > 5 && (
+              <button onClick={() => { setInvoicesModalOpen(true); invoicesList.loadAll(); }} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <span>Voir Plus</span>
                 <FiChevronRight size={12} />
               </button>
             )}
           </div>
-          {isLoading ? (
+          {invoicesList.isLoading ? (
             <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>Chargement...</div>
+          ) : invoicesList.error ? (
+            <div role="alert" style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--color-danger))', fontSize: '0.85rem', fontWeight: 700 }}>
+              {invoicesList.error}{' '}
+              <button onClick={invoicesList.reload} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+            </div>
           ) : recentInvoices.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>Aucune facture livrée.</div>
           ) : (
@@ -392,15 +459,20 @@ export const Dashboard: React.FC = () => {
               <FiAlertTriangle style={{ color: 'hsl(var(--color-danger))' }} />
               Alertes Risques Clients
             </h2>
-            {(data?.riskAlerts.length ?? 0) > 4 && (
+            {(riskList.total ?? 0) > 4 && (
               <button onClick={() => setRiskModalOpen(true)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <span>Voir Plus</span>
                 <FiChevronRight size={12} />
               </button>
             )}
           </div>
-          {isLoading ? (
+          {riskList.isLoading ? (
             <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-muted))', fontSize: '0.85rem' }}>Chargement...</div>
+          ) : riskList.error ? (
+            <div role="alert" style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--color-danger))', fontSize: '0.85rem', fontWeight: 700 }}>
+              {riskList.error}{' '}
+              <button onClick={riskList.reload} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+            </div>
           ) : riskAlertsPreview.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--color-success))', fontSize: '0.85rem', fontWeight: 700 }}>
               <FiCheckCircle style={{ fontSize: '1.5rem', display: 'block', margin: '0 auto 8px' }} />
@@ -569,7 +641,11 @@ export const Dashboard: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody style={{ fontSize: '0.78rem' }}>
-                      {Object.entries(riskByNode).length === 0 ? (
+                      {!riskList.isComplete ? (
+                        <tr><td colSpan={2} role="status" style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))' }}>
+                          {riskList.error ?? `Calcul en cours… (${progressText(riskList)} clients lus)`}
+                        </td></tr>
+                      ) : Object.entries(riskByNode).length === 0 ? (
                         <tr><td colSpan={2} style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))' }}>Aucune alerte.</td></tr>
                       ) : Object.entries(riskByNode).map(([node, count]) => (
                         <tr key={node}>
@@ -600,7 +676,11 @@ export const Dashboard: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody style={{ fontSize: '0.78rem' }}>
-                      {Object.entries(clientsByNode).length === 0 ? (
+                      {!clientsList.isComplete ? (
+                        <tr><td colSpan={3} role="status" style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))' }}>
+                          {clientsList.error ?? `Calcul en cours… (${progressText(clientsList)} fiches lues)`}
+                        </td></tr>
+                      ) : Object.entries(clientsByNode).length === 0 ? (
                         <tr><td colSpan={3} style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))' }}>Aucun client.</td></tr>
                       ) : Object.entries(clientsByNode).map(([node, v]) => (
                         <tr key={node}>
@@ -649,6 +729,14 @@ export const Dashboard: React.FC = () => {
                 </button>
               )}
             </div>
+            {!invoicesList.isComplete && (
+              <div role="status" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '10px' }}>
+                {invoicesList.error ?? `Chargement de l'historique : ${progressText(invoicesList)} factures lues — la recherche et les groupes par mois portent sur les factures déjà chargées.`}
+                {invoicesList.error && (
+                  <button onClick={invoicesList.loadAll} className="btn btn-secondary" style={{ marginLeft: '8px', padding: '3px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+                )}
+              </div>
+            )}
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {filteredModalInvoices.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '32px', color: 'hsl(var(--text-muted))', fontSize: '0.8rem' }}>
@@ -704,7 +792,12 @@ export const Dashboard: React.FC = () => {
               Cliquez sur un client pour voir le détail.
             </p>
             <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {(data?.riskAlerts || []).map(client => (
+              {!riskList.isComplete && (
+                <div role="status" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'hsl(var(--text-secondary))' }}>
+                  {riskList.error ?? `Chargement : ${progressText(riskList)} clients lus…`}
+                </div>
+              )}
+              {riskAlerts.map(client => (
                 <div key={client.id} onClick={() => setSelectedRiskClient(client)} style={{
                   backgroundColor: 'hsl(var(--color-danger) / 0.08)',
                   border: '1px solid hsl(var(--color-danger) / 0.2)',

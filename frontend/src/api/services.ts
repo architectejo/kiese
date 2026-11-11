@@ -52,6 +52,56 @@ export interface BakeryNode {
   team_b_end_time: string | null;
 }
 
+// BUG-163 : lignes du Journal d'Activités, notifications et comptes (ex-types
+// locaux de `Activities.tsx`, `DashboardLayout.tsx` et `Users.tsx`).
+export interface ActivityLogItem {
+  id: string;
+  user_name: string;
+  user_display: string;
+  action: string;
+  description: string;
+  node_origin: string;
+  created_at: string;
+}
+
+export interface SystemNotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  severity: 'INFO' | 'SUCCESS' | 'WARNING' | 'DANGER';
+  is_read: boolean;
+  node_origin: string;
+  created_at: string;
+}
+
+export interface UserAccount {
+  id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  role: string;
+  role_display: string;
+  team: string;
+  team_display: string;
+  node: string | null;
+  node_display: string | null;
+  phone: string;
+  is_active: boolean;
+}
+
+export interface UserWritePayload {
+  username: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  role: string;
+  team: string;
+  node?: string;
+  password?: string;
+}
+
 export interface BreadPrice {
   id: number;          // integer PK — not UUID
   category: 'MINI' | 'MOYEN' | 'GRAND' | 'PREMIUM';
@@ -1059,6 +1109,31 @@ export const coreApi = {
     delete: (id: number) =>
       apiClient.delete(`/api/core/colis/${id}/`),
   },
+  // BUG-163 : Journal d'Activités — page brute (page/page_size), l'appelant
+  // pilote lui-même « Voir plus » (le journal croît sans fin : jamais de
+  // chargement complet automatique).
+  activities: {
+    page: (params?: Record<string, string>) =>
+      getPage<ActivityLogItem>('/api/core/activities/', params),
+  },
+  // BUG-163 : notifications — page brute ; le sondage de 10 s relit la page 1.
+  notifications: {
+    page: (params?: Record<string, string>) =>
+      getPage<SystemNotificationItem>('/api/core/notifications/', params),
+    markRead: (id: string) => apiClient.post(`/api/core/notifications/${id}/mark_read/`),
+    markAllRead: () => apiClient.post('/api/core/notifications/mark_all_read/'),
+    delete: (id: string) => apiClient.delete(`/api/core/notifications/${id}/`),
+  },
+  // BUG-163 : annuaire du personnel — `list` suit toutes les pages (petit volume).
+  users: {
+    list: () => getList<UserAccount>('/api/core/users/'),
+    create: (data: UserWritePayload) => apiClient.post<UserAccount>('/api/core/users/', data),
+    update: (id: number, data: UserWritePayload) =>
+      apiClient.put<UserAccount>(`/api/core/users/${id}/`, data),
+    delete: (id: number) => apiClient.delete(`/api/core/users/${id}/`),
+    resetPassword: (id: number) =>
+      apiClient.post(`/api/core/users/${id}/reset_password/`, {}),
+  },
 };
 
 // ── Client API ───────────────────────────────────────────────────────────────
@@ -1146,6 +1221,10 @@ export const clientsApi = {
 export const salesApi = {
   list: (params?: Record<string, string>) =>
     getList<Invoice>('/api/sales/invoices/', params),
+  // BUG-163 : page brute (page/page_size) pour l'affichage progressif du
+  // tableau de bord — ne pas utiliser `list`, qui attend toutes les pages.
+  listPage: (params?: Record<string, string>) =>
+    getPage<Invoice>('/api/sales/invoices/', params),
   create: (data: InvoiceCreatePayload) =>
     apiClient.post<Invoice>('/api/sales/invoices/', data),
   // BUG-090 : `invoiceDate` optionnel (`AAAA-MM-JJ`) — même règle que BUG-083 sur les
@@ -1192,6 +1271,8 @@ export const productionApi = {
   sessions: {
     list: (params?: Record<string, string>) =>
       getList<ProductionSession>('/api/production/sessions/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<ProductionSession>('/api/production/sessions/', params),
     create: (data: Partial<ProductionSession>) =>
       apiClient.post<ProductionSession>('/api/production/sessions/', data),
     update: (id: string, data: Partial<ProductionSession>) =>
@@ -1239,6 +1320,8 @@ export const productionApi = {
   transfers: {
     list: (params?: Record<string, string>) =>
       getList<BreadTransfer>('/api/production/transfers/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<BreadTransfer>('/api/production/transfers/', params),
     create: (data: Partial<Omit<BreadTransfer, 'lines'>> & { lines?: Array<{ bread_price: number; quantity_sent: number }> }) =>
       apiClient.post<BreadTransfer>('/api/production/transfers/', data),
     respond: (id: string, approved: boolean, lines?: Array<{ bread_price: number; quantity_sent: number }>) =>
@@ -1263,6 +1346,8 @@ export const productionApi = {
   disposals: {
     list: (params?: Record<string, string>) =>
       getList<BreadDisposal>('/api/production/disposals/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<BreadDisposal>('/api/production/disposals/', params),
     create: (data: Partial<BreadDisposal>) =>
       apiClient.post<BreadDisposal>('/api/production/disposals/', data),
   },
@@ -1298,6 +1383,8 @@ export const commissionsApi = {
   commissions: {
     list: (params?: Record<string, string>) =>
       getList<ClientCommission>('/api/commissions/commissions/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<ClientCommission>('/api/commissions/commissions/', params),
     markPaid: (id: string) =>
       apiClient.post(`/api/commissions/commissions/${id}/mark_paid/`),
     setManuel: (id: string, data: { manuel_adjustment: string | null; manuel_notes?: string }) =>
@@ -1313,6 +1400,9 @@ export const treasuryApi = {
   reports: {
     list: (params?: Record<string, string>) =>
       getList<FacturierReport>('/api/treasury/reports/', params),
+    // BUG-164 : page brute pour le chargement progressif (`useProgressiveList`).
+    page: (params?: Record<string, string>) =>
+      getPage<FacturierReport>('/api/treasury/reports/', params),
     create: (data: Partial<FacturierReport>) =>
       apiClient.post<FacturierReport>('/api/treasury/reports/', data),
     validate: (id: string) =>
@@ -1323,12 +1413,16 @@ export const treasuryApi = {
   expenses: {
     list: (params?: Record<string, string>) =>
       getList<LocalExpense>('/api/treasury/expenses/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<LocalExpense>('/api/treasury/expenses/', params),
     create: (data: Partial<LocalExpense>) =>
       apiClient.post<LocalExpense>('/api/treasury/expenses/', data),
   },
   closures: {
     list: (params?: Record<string, string>) =>
       getList<CashClosure>('/api/treasury/closures/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<CashClosure>('/api/treasury/closures/', params),
     create: (data: Partial<CashClosure>) =>
       apiClient.post<CashClosure>('/api/treasury/closures/', data),
     update: (id: string, data: Partial<CashClosure>) =>
@@ -1343,6 +1437,8 @@ export const treasuryApi = {
   cashbook: {
     list: (params?: Record<string, string>) =>
       getList<CashbookEntry>('/api/treasury/cashbook/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<CashbookEntry>('/api/treasury/cashbook/', params),
     integrityCheck: () =>
       apiClient.get<{ chain_valid: boolean; tampered_count: number }>(
         '/api/treasury/cashbook/integrity_check/'
@@ -1353,6 +1449,8 @@ export const treasuryApi = {
   vouchers: {
     list: (params?: Record<string, string>) =>
       getList<DisbursementVoucher>('/api/treasury/vouchers/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<DisbursementVoucher>('/api/treasury/vouchers/', params),
     create: (data: Partial<DisbursementVoucher>) =>
       apiClient.post<DisbursementVoucher>('/api/treasury/vouchers/', data),
     finalReport: (params?: Record<string, string>) =>
@@ -1363,6 +1461,8 @@ export const treasuryApi = {
   journal: {
     list: (params?: Record<string, string>) =>
       getList<JournalEntry>('/api/treasury/journal/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<JournalEntry>('/api/treasury/journal/', params),
     create: (data: Partial<JournalEntry> & { node?: string }) =>
       apiClient.post<JournalEntry>('/api/treasury/journal/', data),
     suggestedCa: (params: { node: string; date: string }) =>
@@ -1377,6 +1477,8 @@ export const treasuryApi = {
   savings: {
     list: (params?: Record<string, string>) =>
       getList<DailySavings>('/api/treasury/savings/', params),
+    page: (params?: Record<string, string>) =>
+      getPage<DailySavings>('/api/treasury/savings/', params),
     create: (data: Partial<DailySavings> & { node?: string }) =>
       apiClient.post<DailySavings>('/api/treasury/savings/', data),
     update: (id: number, data: Partial<DailySavings>) =>

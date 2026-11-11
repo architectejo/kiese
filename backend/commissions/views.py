@@ -180,7 +180,8 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['period', 'period__node', 'client', 'is_paid', 'annual_bonus_incorporated']
     search_fields    = ['client__first_name', 'client__last_name', 'client__code']
-    ordering         = ['client__last_name']
+    # BUG-172 : `pk` en dernier critère -> ordre total (pagination déterministe).
+    ordering         = ['client__last_name', 'pk']
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):

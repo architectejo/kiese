@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { useThemeStore } from '@/store/themeStore';
-import { apiClient } from '@/api/client';
 import {
   FiHome, FiUsers, FiLayers, FiDollarSign,
   FiTrendingUp, FiDatabase, FiSettings, FiLogOut,
@@ -11,8 +10,9 @@ import {
   FiCoffee, FiBell, FiX, FiCheck, FiInfo, FiAlertTriangle, FiTrash2, FiList,
   FiMapPin, FiUserCheck, FiMenu, FiSave, FiKey, FiHardDrive, FiCalendar
 } from 'react-icons/fi';
-import { coreApi, productionApi } from '@/api/services';
+import { coreApi, productionApi, SystemNotificationItem } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { extractApiError } from '@/hooks/useProgressiveList';
 import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
 import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 import { useOpeningConfirmationStore } from '@/store/openingConfirmationStore';
@@ -52,15 +52,10 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ to, icon, label, active }) =>
   </Link>
 );
 
-export interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  severity: 'INFO' | 'SUCCESS' | 'WARNING' | 'DANGER';
-  is_read: boolean;
-  node_origin: string;
-  created_at: string;
-}
+export type NotificationItem = SystemNotificationItem;
+
+// BUG-163 : taille de page des notifications (sondage = page 1 ; « Voir plus » = pages suivantes).
+const NOTIFICATIONS_PAGE_SIZE = '25';
 
 export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, fetchCurrentUser } = useAuthStore();
@@ -82,7 +77,19 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Notification States
+  // `notifications` = page 1, relue toutes les 10 s par le sondage. `olderNotifications` =
+  // pages suivantes demandées par « Voir plus » (BUG-163) : jamais écrasées par le sondage.
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [olderNotifications, setOlderNotifications] = useState<NotificationItem[]>([]);
+  const [notifTotal, setNotifTotal] = useState<number | null>(null);
+  const [notifHasMore, setNotifHasMore] = useState(false);
+  const [notifLoadingMore, setNotifLoadingMore] = useState(false);
+  const [notifMoreError, setNotifMoreError] = useState<string | null>(null);
+  const notifLastPageRef = useRef(1);
+  // BUG-171 : états lus de façon synchrone par le sondage pour détecter un décalage de rangs.
+  const notifPage1IdsRef = useRef<Set<string>>(new Set());
+  const notifOlderIdsRef = useRef<Set<string>>(new Set());
+  const notifTotalRef = useRef<number | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -96,9 +103,31 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   const fetchNotifications = async () => {
     try {
-      const response = await apiClient.get('/api/core/notifications/');
-      const data = Array.isArray(response.data) ? response.data : (response.data.results || []);
-      setNotifications(data);
+      const response = await coreApi.notifications.page({ page: '1', page_size: NOTIFICATIONS_PAGE_SIZE });
+      const results = response.data.results ?? [];
+      // BUG-171 : si des pages suivantes ont été chargées et que la liste a bougé hors de
+      // nos actions (nouvelle notification => décalage de rangs, un « trou » entre la page 1 et
+      // les pages chargées ; suppression par un autre utilisateur => élément périmé), on
+      // abandonne les pages suivantes : l'utilisateur les relit par « Voir plus », sans trou.
+      if (notifLastPageRef.current > 1) {
+        const known = notifPage1IdsRef.current;
+        const older = notifOlderIdsRef.current;
+        const hasUnknown = results.some(n => !known.has(n.id) && !older.has(n.id));
+        const totalChanged = notifTotalRef.current !== null && notifTotalRef.current !== response.data.count;
+        if (hasUnknown || totalChanged) {
+          notifLastPageRef.current = 1;
+          notifOlderIdsRef.current = new Set();
+          setOlderNotifications([]);
+          setNotifMoreError(null);
+        }
+      }
+      notifPage1IdsRef.current = new Set(results.map(n => n.id));
+      notifTotalRef.current = response.data.count;
+      setNotifications(results);
+      setNotifTotal(response.data.count);
+      // Tant qu'aucune page suivante n'a été demandée (ou après réinitialisation), `next` de
+      // la page 1 fait foi.
+      if (notifLastPageRef.current === 1) setNotifHasMore(response.data.next != null);
     } catch (error) {
       console.error("Failed to fetch notifications", error);
     }
@@ -198,9 +227,34 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     navigate('/login');
   };
 
+  const loadMoreNotifications = async () => {
+    if (notifLoadingMore || !notifHasMore) return;
+    setNotifLoadingMore(true);
+    setNotifMoreError(null);
+    try {
+      const page = notifLastPageRef.current + 1;
+      const response = await coreApi.notifications.page({ page: String(page), page_size: NOTIFICATIONS_PAGE_SIZE });
+      notifLastPageRef.current = page;
+      notifTotalRef.current = response.data.count;
+      setNotifHasMore(response.data.next != null);
+      setNotifTotal(response.data.count);
+      setOlderNotifications(prev => {
+        const seen = new Set(prev.map(n => n.id));
+        const merged = prev.concat((response.data.results ?? []).filter(n => !seen.has(n.id)));
+        notifOlderIdsRef.current = new Set(merged.map(n => n.id));
+        return merged;
+      });
+    } catch (error) {
+      setNotifMoreError(extractApiError(error, 'Impossible de charger les notifications suivantes.'));
+    } finally {
+      setNotifLoadingMore(false);
+    }
+  };
+
   const markRead = async (id: string) => {
     try {
-      await apiClient.post(`/api/core/notifications/${id}/mark_read/`);
+      await coreApi.notifications.markRead(id);
+      setOlderNotifications(prev => prev.map(n => (n.id === id ? { ...n, is_read: true } : n)));
       fetchNotifications();
     } catch (error) {
       console.error(error);
@@ -209,7 +263,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   const markAllRead = async () => {
     try {
-      await apiClient.post(`/api/core/notifications/mark_all_read/`);
+      await coreApi.notifications.markAllRead();
+      setOlderNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
       fetchNotifications();
     } catch (error) {
       console.error(error);
@@ -218,7 +273,12 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   const deleteNotification = async (id: string) => {
     try {
-      await apiClient.delete(`/api/core/notifications/${id}/`);
+      await coreApi.notifications.delete(id);
+      // Suppression faite ici : on anticipe le nouveau total pour que le sondage ne la prenne
+      // pas pour une modification externe (BUG-171).
+      if (notifTotalRef.current !== null) notifTotalRef.current -= 1;
+      notifOlderIdsRef.current.delete(id);
+      setOlderNotifications(prev => prev.filter(n => n.id !== id));
       fetchNotifications();
     } catch (error) {
       console.error(error);
@@ -293,6 +353,10 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   );
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
+  // Liste complète affichée dans la boîte « Toutes les Notifications » : page 1 + pages
+  // chargées par « Voir plus » (sans doublon). Le compteur de non lues reste celui de la page 1.
+  const page1Ids = new Set(notifications.map(n => n.id));
+  const allNotifications = notifications.concat(olderNotifications.filter(n => !page1Ids.has(n.id)));
 
   const getSeverityStyle = (severity: string) => {
     switch (severity) {
@@ -717,12 +781,12 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
             {/* Notifications Scroll List */}
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingRight: '8px', marginBottom: '16px' }}>
-              {notifications.length === 0 ? (
+              {allNotifications.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'hsl(var(--text-muted))', padding: '32px' }}>
                   Aucune notification présente dans le registre.
                 </div>
               ) : (
-                notifications.map((notif) => {
+                allNotifications.map((notif) => {
                   const style = getSeverityStyle(notif.severity);
                   return (
                     <div 
@@ -796,6 +860,28 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
                     </div>
                   );
                 })
+              )}
+              {allNotifications.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '4px 0 8px' }}>
+                  <span role="status" style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))', fontWeight: 700 }}>
+                    {allNotifications.length.toLocaleString('fr-FR')} affichée(s) / {Math.max(notifTotal ?? 0, allNotifications.length).toLocaleString('fr-FR')} au total
+                  </span>
+                  {notifMoreError && (
+                    <span role="alert" style={{ fontSize: '0.75rem', color: 'hsl(var(--color-danger))', fontWeight: 700 }}>
+                      {notifMoreError}
+                    </span>
+                  )}
+                  {notifHasMore && (
+                    <button
+                      onClick={loadMoreNotifications}
+                      disabled={notifLoadingMore}
+                      className="btn btn-secondary"
+                      style={{ padding: '10px 20px', minHeight: '44px', fontSize: '0.8rem', fontWeight: 700 }}
+                    >
+                      {notifLoadingMore ? 'Chargement…' : 'Voir plus'}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
       </Modal>

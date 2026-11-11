@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import {
@@ -14,6 +14,7 @@ import {
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { Modal } from '@/components/shared/Modal';
+import { useProgressiveList, type ProgressiveList } from '@/hooks/useProgressiveList';
 
 // ── Bill denominations — §5.2 ────────────────────────────────────────────────
 const BILLS = [
@@ -44,6 +45,13 @@ const JOURNAL_IMPUT = [
   { value: 'ACHAT',    label: 'Achat matériel / fourniture' },
   { value: 'AUTRE',    label: 'Autre' },
 ];
+
+// BUG-164 : taille de page demandée au serveur pour le chargement progressif (max 500).
+const PAGE_SIZE = '100';
+
+// BUG-164 : libellé affiché à la place d'un total tant que la liste n'est pas complète.
+const progressLabel = (q: ProgressiveList<{ id: string | number }>): string =>
+  q.error ? 'indisponible' : `calcul en cours… ${q.loaded}/${q.total ?? '…'}`;
 
 const fmt = (v: string | number | undefined) =>
   parseFloat(String(v || '0')).toLocaleString('fr-FR');
@@ -99,10 +107,11 @@ export const Treasury: React.FC = () => {
   const today = new Date().toISOString().split('T')[0];
 
   // ── Data state ─────────────────────────────────────────────────────────────
-  const [reports, setReports]   = useState<FacturierReport[]>([]);
-  const [closures, setClosures] = useState<CashClosure[]>([]);
-  const [expenses, setExpenses] = useState<LocalExpense[]>([]);
-  const [cashbook, setCashbook] = useState<CashbookEntry[]>([]);
+  // BUG-164 : les listes (rapports, clôtures, dépenses, livre de caisse, bons, journal,
+  // épargne, historique de dépenses) sont lues page par page (`useProgressiveList`).
+  // Tout total / solde / compteur calculé côté client n'est affiché que lorsque la liste
+  // concernée est COMPLÈTE (`isComplete`) ; sinon « calcul en cours… X / Y ».
+  const [extraReports, setExtraReports] = useState<FacturierReport[]>([]);
   const [nodeFilter, setNodeFilter] = useState('');
   const [allNodes, setAllNodes]     = useState<BakeryNode[]>([]);
   const [todaySessions, setTodaySessions] = useState<ProductionSession[]>([]);
@@ -110,7 +119,7 @@ export const Treasury: React.FC = () => {
     by_category: Array<{ unit_price: number; total_qty: number; total_fc: number }>;
     grand_total_qty: number; grand_total_fc: number;
   } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [auxLoading, setAuxLoading] = useState(true);
 
   // §5.2 Billetage state
   const [bills, setBills] = useState<Record<BillKey, number>>({
@@ -139,21 +148,16 @@ export const Treasury: React.FC = () => {
   const [expenseHistoryOpen, setExpenseHistoryOpen] = useState(false);
   const [expenseHistoryMonth, setExpenseHistoryMonth] = useState(() => new Date().getMonth() + 1);
   const [expenseHistoryYear, setExpenseHistoryYear] = useState(() => new Date().getFullYear());
-  const [expenseHistoryEntries, setExpenseHistoryEntries] = useState<LocalExpense[]>([]);
-  const [expenseHistoryLoading, setExpenseHistoryLoading] = useState(false);
-
-  const loadExpenseHistory = useCallback(async () => {
-    setExpenseHistoryLoading(true);
-    try {
-      const params: Record<string, string> = { month: String(expenseHistoryMonth), year: String(expenseHistoryYear) };
-      if (nodeFilter) params.node = nodeFilter;
-      const res = await treasuryApi.expenses.list(params);
-      setExpenseHistoryEntries(Array.isArray(res.data) ? res.data : []);
-    } catch { setExpenseHistoryEntries([]); }
-    finally { setExpenseHistoryLoading(false); }
-  }, [expenseHistoryMonth, expenseHistoryYear, nodeFilter]);
-
-  useEffect(() => { if (expenseHistoryOpen) loadExpenseHistory(); }, [expenseHistoryOpen, loadExpenseHistory]);
+  const expenseHistoryQ = useProgressiveList<LocalExpense>({
+    fetchPage: p => treasuryApi.expenses.page({
+      month: String(expenseHistoryMonth), year: String(expenseHistoryYear),
+      ...(nodeFilter ? { node: nodeFilter } : {}), page: String(p), page_size: PAGE_SIZE,
+    }),
+    resetKey: `exph|${expenseHistoryMonth}|${expenseHistoryYear}|${nodeFilter}`,
+    enabled: expenseHistoryOpen,
+  });
+  const expenseHistoryEntries = expenseHistoryQ.items;
+  const expenseHistoryLoading = expenseHistoryQ.isLoading;
 
   const [generatingReport, setGeneratingReport] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -174,8 +178,6 @@ export const Treasury: React.FC = () => {
   const [checkingIntegrity, setCheckingIntegrity] = useState(false);
 
   // §5.1.3b — Bordereaux de Versement (Direction)
-  const [vouchers, setVouchers] = useState<DisbursementVoucher[]>([]);
-  const [vouchersLoading, setVouchersLoading] = useState(false);
   const [showVoucherForm, setShowVoucherForm] = useState(false);
   const [voucherMotif, setVoucherMotif] = useState('');
   const [voucherBeneficiary, setVoucherBeneficiary] = useState('');
@@ -201,8 +203,6 @@ export const Treasury: React.FC = () => {
   const [dccSubmitting, setDccSubmitting] = useState(false);
 
   // §5.1.4 Journal de Caisse par Boulangerie
-  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
-  const [journalLoading, setJournalLoading] = useState(false);
   const [journalMonth, setJournalMonth] = useState(() => new Date().getMonth() + 1);
   const [journalYear, setJournalYear]   = useState(() => new Date().getFullYear());
   const [journalReport, setJournalReport] = useState<{
@@ -221,8 +221,6 @@ export const Treasury: React.FC = () => {
   const [jLastResult, setJLastResult] = useState<JournalEntry | null>(null);
 
   // §5.1.5 Épargne Journalière
-  const [savingsEntries, setSavingsEntries] = useState<DailySavings[]>([]);
-  const [savingsLoading, setSavingsLoading] = useState(false);
   const [savingsMonth, setSavingsMonth] = useState(() => new Date().getMonth() + 1);
   const [savingsYear, setSavingsYear]   = useState(() => new Date().getFullYear());
   const [savingsTotal, setSavingsTotal] = useState<{
@@ -236,36 +234,104 @@ export const Treasury: React.FC = () => {
   const [sSubmitting, setSSubmitting] = useState(false);
   const [savingsDayFilter, setSavingsDayFilter] = useState('');
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
+  // BUG-044 : le Livre de Caisse Direction (`treasuryApi.cashbook.list`) est réservé au
+  // siège (`IsHeadquarters`, cf. BUG-026) — on ne l'appelle même pas pour un rôle non-HQ,
+  // au lieu de laisser la requête échouer en 403.
+  const isHq = !!user?.can_access_all_nodes;
+  const nodeParam: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
+
+  const reportsQ = useProgressiveList<FacturierReport>({
+    fetchPage: p => treasuryApi.reports.page({ date: today, ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `rep|${today}|${nodeFilter}`,
+  });
+  const closuresQ = useProgressiveList<CashClosure>({
+    fetchPage: p => treasuryApi.closures.page({ date: today, ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `clo|${today}|${nodeFilter}`,
+  });
+  const expensesQ = useProgressiveList<LocalExpense>({
+    fetchPage: p => treasuryApi.expenses.page({ date: today, ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `exp|${today}|${nodeFilter}`,
+  });
+  // Ordre serveur (-date, -created_at) : la page 1 contient donc toujours l'écriture la
+  // plus récente (voir `consolidatedBalance`).
+  const cashbookQ = useProgressiveList<CashbookEntry>({
+    fetchPage: p => treasuryApi.cashbook.page({ date_from: dateFrom, date_to: dateTo, ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `cb|${dateFrom}|${dateTo}|${nodeFilter}`,
+    enabled: isHq,
+  });
+  const vouchersQ = useProgressiveList<DisbursementVoucher>({
+    fetchPage: p => treasuryApi.vouchers.page({ date_from: dateFrom, date_to: dateTo, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `vou|${dateFrom}|${dateTo}`,
+    enabled: isHq,
+  });
+  const journalQ = useProgressiveList<JournalEntry>({
+    fetchPage: p => treasuryApi.journal.page({ month: String(journalMonth), year: String(journalYear), ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `jrn|${journalMonth}|${journalYear}|${nodeFilter}`,
+  });
+  const savingsQ = useProgressiveList<DailySavings>({
+    fetchPage: p => treasuryApi.savings.page({ month: String(savingsMonth), year: String(savingsYear), ...nodeParam, page: String(p), page_size: PAGE_SIZE }),
+    resetKey: `sav|${savingsMonth}|${savingsYear}|${nodeFilter}`,
+  });
+
+  const reports = useMemo(
+    // BUG-175 : un rapport rétroactif n'est gardé que pour la boulangerie consultée.
+    () => [
+      ...extraReports.filter(x => (!nodeFilter || x.node === nodeFilter) && !reportsQ.items.some(r => r.id === x.id)),
+      ...reportsQ.items,
+    ],
+    [extraReports, reportsQ.items, nodeFilter],
+  );
+  const closures = closuresQ.items;
+  const expenses = expensesQ.items;
+  const cashbook = cashbookQ.items;
+  const vouchers = vouchersQ.items;
+  const vouchersLoading = vouchersQ.isLoading;
+  const journalEntries = journalQ.items;
+  const journalLoading = journalQ.isLoading;
+  const savingsEntries = savingsQ.items;
+  const savingsLoading = savingsQ.isLoading;
+
+  // Aperçus de la journée (sessions, ventes par catégorie) : requêtes ciblées, hors listes.
+  const loadAux = useCallback(async () => {
+    setAuxLoading(true);
     const nf = nodeFilter || undefined;
-    // BUG-044 : le Livre de Caisse Direction (`treasuryApi.cashbook.list`) est réservé au
-    // siège (`IsHeadquarters`, cf. BUG-026) — on ne l'appelle même pas pour un rôle non-HQ,
-    // au lieu de laisser la requête échouer en 403.
-    const isHq = !!user?.can_access_all_nodes;
     try {
-      const [reportRes, closureRes, expRes, cashRes, sessionRes, breadRes] = await Promise.all([
-        treasuryApi.reports.list({ date: today,  ...(nf && { node: nf }) }),
-        treasuryApi.closures.list({ date: today, ...(nf && { node: nf }) }),
-        treasuryApi.expenses.list({ date: today, ...(nf && { node: nf }) }),
-        isHq ? treasuryApi.cashbook.list({ date_from: dateFrom, date_to: dateTo, ...(nf && { node: nf }) }) : Promise.resolve({ data: [] as CashbookEntry[] }),
+      const [sessionRes, breadRes] = await Promise.all([
         productionApi.sessions.list({ date: today, ...(nf && { node: nf }) }),
         salesApi.breadSummary({ date: today, ...(nf && { node: nf }) }),
       ]);
-      setReports(Array.isArray(reportRes.data) ? reportRes.data : []);
-      setClosures(Array.isArray(closureRes.data) ? closureRes.data : []);
-      setExpenses(Array.isArray(expRes.data) ? expRes.data : []);
-      setCashbook(Array.isArray(cashRes.data) ? cashRes.data : []);
       setTodaySessions(Array.isArray(sessionRes.data) ? sessionRes.data : []);
       setBreadSold(breadRes.data ?? null);
     } catch (err) {
       console.error('Treasury load failed', err);
     } finally {
-      setIsLoading(false);
+      setAuxLoading(false);
     }
-  }, [today, dateFrom, dateTo, nodeFilter, user?.can_access_all_nodes]);
+  }, [today, nodeFilter]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  const reloadReports = reportsQ.reload;
+  const reloadClosures = closuresQ.reload;
+  const reloadExpenses = expensesQ.reload;
+  const reloadCashbook = cashbookQ.reload;
+  // Rechargement complet après une action (valider, clôturer, dépense, bordereau…).
+  const loadData = useCallback(async () => {
+    // BUG-175 : les rapports rétroactifs ajoutés localement ne survivent pas au rechargement
+    // (la liste serveur fait alors foi, comme avant BUG-164).
+    setExtraReports([]);
+    reloadReports(); reloadClosures(); reloadExpenses(); reloadCashbook();
+    await loadAux();
+  }, [reloadReports, reloadClosures, reloadExpenses, reloadCashbook, loadAux]);
+
+  useEffect(() => { loadAux(); }, [loadAux]);
+
+  // BUG-175 : changement de boulangerie ou de jour => aucun rapport rétroactif résiduel.
+  useEffect(() => { setExtraReports([]); }, [nodeFilter, today]);
+
+  // Totaux « du jour » : fiables seulement quand rapports ET dépenses sont complets.
+  const reportsReady = reportsQ.isComplete;
+  const expensesReady = expensesQ.isComplete;
+  const dayReady = reportsReady && expensesReady;
+  const isLoading = auxLoading || reportsQ.isLoading || closuresQ.isLoading || expensesQ.isLoading || cashbookQ.isLoading;
 
   // Load nodes list (HQ needs it for the bakery filter; every role needs it
   // to resolve their own node's "Valeur Théorique par Sac de Farine (FC)" —
@@ -297,22 +363,23 @@ export const Treasury: React.FC = () => {
   }, []);
 
   // §5.1.4 — Journal de Caisse load
-  const loadJournal = useCallback(async () => {
-    setJournalLoading(true);
+  // Les écritures sont lues par `journalQ` (progressif) ; le rapport mensuel (totaux
+  // calculés par le serveur) est lu à part.
+  const reloadJournalEntries = journalQ.reload;
+  const loadJournalReport = useCallback(async () => {
     const params: Record<string, string> = { month: String(journalMonth), year: String(journalYear) };
     if (nodeFilter) params.node = nodeFilter;
     try {
-      const [entriesRes, reportRes] = await Promise.all([
-        treasuryApi.journal.list(params),
-        treasuryApi.journal.monthlyReport(params),
-      ]);
-      setJournalEntries(Array.isArray(entriesRes.data) ? entriesRes.data : []);
+      const reportRes = await treasuryApi.journal.monthlyReport(params);
       setJournalReport(reportRes.data ?? null);
     } catch { /* ignore */ }
-    finally { setJournalLoading(false); }
   }, [journalMonth, journalYear, nodeFilter]);
+  const loadJournal = useCallback(async () => {
+    reloadJournalEntries();
+    await loadJournalReport();
+  }, [reloadJournalEntries, loadJournalReport]);
 
-  useEffect(() => { loadJournal(); }, [loadJournal]);
+  useEffect(() => { loadJournalReport(); }, [loadJournalReport]);
 
   // BUG-105 — pré-remplissage/confrontation du montant « Recettes du jour (CA) »
   // avec la Clôture (Niveau 2) du même (nœud, date) — ne bloque jamais la saisie :
@@ -340,22 +407,21 @@ export const Treasury: React.FC = () => {
   }, [jImput, jDate, user?.node, nodeFilter]);
 
   // §5.1.5 — Épargne Journalière load
-  const loadSavings = useCallback(async () => {
-    setSavingsLoading(true);
+  const reloadSavingsEntries = savingsQ.reload;
+  const loadSavingsTotal = useCallback(async () => {
     const params: Record<string, string> = { month: String(savingsMonth), year: String(savingsYear) };
     if (nodeFilter) params.node = nodeFilter;
     try {
-      const [entriesRes, totalRes] = await Promise.all([
-        treasuryApi.savings.list(params),
-        treasuryApi.savings.monthlyTotal(params),
-      ]);
-      setSavingsEntries(Array.isArray(entriesRes.data) ? entriesRes.data : []);
+      const totalRes = await treasuryApi.savings.monthlyTotal(params);
       setSavingsTotal(totalRes.data ?? null);
     } catch { /* ignore */ }
-    finally { setSavingsLoading(false); }
   }, [savingsMonth, savingsYear, nodeFilter]);
+  const loadSavings = useCallback(async () => {
+    reloadSavingsEntries();
+    await loadSavingsTotal();
+  }, [reloadSavingsEntries, loadSavingsTotal]);
 
-  useEffect(() => { loadSavings(); }, [loadSavings]);
+  useEffect(() => { loadSavingsTotal(); }, [loadSavingsTotal]);
 
   const handleSavingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -385,6 +451,9 @@ export const Treasury: React.FC = () => {
   };
 
   // §5.1.5 — filtre par jour + impression journalière
+  // BUG-164 : jours disponibles, totaux filtrés par jour et impression journalière =
+  // calculés sur la liste chargée -> disponibles seulement quand elle est complète.
+  const savingsReady = savingsQ.isComplete;
   const savingsDaysAvailable = Array.from(new Set(savingsEntries.map(s => s.date.split('-')[2]))).sort();
   const filteredSavingsEntries = savingsDayFilter
     ? savingsEntries.filter(s => s.date.split('-')[2] === savingsDayFilter)
@@ -396,8 +465,10 @@ export const Treasury: React.FC = () => {
         total_savings:     String(filteredSavingsEntries.reduce((a, s) => a + parseFloat(s.savings_amount || '0'), 0)),
       }
     : savingsTotal;
+  const savingsTotalsReady = savingsDayFilter ? savingsReady : true;
 
   const handlePrintSavingsDay = (day: string) => {
+    if (!savingsReady) return;
     const entries = savingsEntries.filter(s => s.date.split('-')[2] === day);
     if (entries.length === 0) return;
     const dateLabel = new Date(entries[0].date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
@@ -514,7 +585,7 @@ export const Treasury: React.FC = () => {
         // La liste du jour (`loadData`) est filtrée sur la date d'aujourd'hui — un rapport
         // rétroactif n'y apparaîtrait pas. On l'ajoute localement pour que le facturier/gérant
         // voie immédiatement le résultat de la génération.
-        setReports(prev => [...res.data, ...prev.filter(r => !res.data.some(nr => nr.id === r.id))]);
+        setExtraReports(prev => [...res.data, ...prev.filter(r => !res.data.some(nr => nr.id === r.id))]);
         setGenerateInfo(`Rapport généré pour le ${new Date(targetDate).toLocaleDateString('fr-FR')} (date rétroactive) — n'apparaît pas dans le filtre "Clôtures du Jour".`);
       } else {
         await loadData();
@@ -665,6 +736,8 @@ export const Treasury: React.FC = () => {
   const [confirmMsg, setConfirmMsg]       = useState<string | null>(null);
 
   const handleConfirmDay = async () => {
+    // BUG-164 : ne jamais valider « les rapports en attente » d'une liste partielle.
+    if (!reportsReady) { setConfirmMsg('Chargement des rapports en cours — patientez avant de confirmer la journée.'); return; }
     const pending = reports.filter(r => !r.is_validated);
     if (pending.length === 0) { setConfirmMsg('Tous les rapports sont déjà validés.'); return; }
     setConfirmingDay(true);
@@ -681,6 +754,9 @@ export const Treasury: React.FC = () => {
   };
 
   const handlePrint511 = () => {
+    // BUG-164 : l'impression porte sur la liste COMPLÈTE des rapports (bouton désactivé tant
+    // que le chargement n'est pas terminé ; garde de sécurité ici aussi).
+    if (!reportsReady) return;
     const nodeLabel = allNodes.find(n => n.id === nodeFilter)
       ? `${allNodes.find(n => n.id === nodeFilter)!.code} — ${allNodes.find(n => n.id === nodeFilter)!.name}`
       : user?.node_display || 'Toutes les succursales';
@@ -791,20 +867,17 @@ export const Treasury: React.FC = () => {
   };
 
   // §5.1.3b — Bordereaux de Versement
-  const loadVouchers = useCallback(async () => {
-    if (!user?.can_access_all_nodes) return;
-    setVouchersLoading(true);
-    try {
-      const res = await treasuryApi.vouchers.list({ date_from: dateFrom, date_to: dateTo });
-      setVouchers(Array.isArray(res.data) ? res.data : []);
-    } catch { /* ignore */ }
-    finally { setVouchersLoading(false); }
-  }, [user?.can_access_all_nodes, dateFrom, dateTo]);
-
-  useEffect(() => { loadVouchers(); }, [loadVouchers]);
+  const reloadVouchers = vouchersQ.reload;
+  const loadVouchers = useCallback(async () => { reloadVouchers(); }, [reloadVouchers]);
 
   // Current consolidated balance — cashbook is ordered newest-first, so [0] is the latest entry
+  // BUG-164 : `consolidatedBalance` = `running_balance` de la 1re écriture. Le serveur trie
+  // (-date, -created_at) AVANT de paginer : la page 1 contient donc exactement la même
+  // écriture [0] que la liste complète, et `running_balance` est une valeur stockée dans
+  // l'écriture (aucune somme côté client) -> fiable dès la page 1, sans attendre la
+  // complétude. Elle dépend en revanche du tri serveur : ne jamais re-trier ici.
   const consolidatedBalance = cashbook.length > 0 ? parseFloat(cashbook[0].running_balance) : 0;
+  const consolidatedBalanceReady = !cashbookQ.isLoading && cashbookQ.error === null;
   const voucherBillTotal = BILLS.reduce((sum, b) => sum + voucherBills[b.key] * b.face, 0);
 
   // §5.1.3c — BUG-119 : Comptage physique Direction
@@ -942,7 +1015,7 @@ export const Treasury: React.FC = () => {
   const _actualSalesFC = breadSold?.grand_total_fc ?? 0;
   const _ecart = _actualSalesFC - _totalTheorFC;
   const _balanceOk = Math.abs(_ecart) === 0;
-  const _pendingReports = reports.filter(r => !r.is_validated).length;
+  const _pendingReports = reportsReady ? reports.filter(r => !r.is_validated).length : 0;
 
   let productionRecap: React.ReactElement | null = null;
   if (_totalSacs > 0 || _cats.length > 0) {
@@ -965,7 +1038,12 @@ export const Treasury: React.FC = () => {
               {confirmingDay ? 'Validation...' : `Confirmer & Clôturer (${_pendingReports} rapport${_pendingReports > 1 ? 's' : ''})`}
             </button>
           )}
-          {_pendingReports === 0 && reports.length > 0 && (
+          {!reportsReady && (
+            <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', fontWeight: 700 }}>
+              Rapports : {progressLabel(reportsQ)}
+            </span>
+          )}
+          {reportsReady && _pendingReports === 0 && reports.length > 0 && (
             <span style={{ fontSize: '0.65rem', color: 'hsl(var(--color-success))', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
               <FiCheckCircle size={12} /> Tous les rapports validés
             </span>
@@ -1320,10 +1398,10 @@ export const Treasury: React.FC = () => {
       {/* KPI Bar */}
       <div className="kpi-grid" style={{ gap: '12px' }}>
         {[
-          { label: 'TOTAL CASH DU JOUR', value: `${fmt(totalCash)} FC`, color: 'var(--color-success)', icon: <FiDollarSign /> },
-          { label: 'TOTAL CRÉDIT DU JOUR', value: `${fmt(totalCredit)} FC`, color: 'var(--color-info)', icon: <FiFileText /> },
-          { label: 'SOLDE COMPTABLE CAISSE', value: `${fmt(theoreticalCash)} FC`, color: 'var(--color-warning)', icon: <FiLock /> },
-          { label: 'ÉCART BILLETAGE', value: `${ecartCaisse >= 0 ? '+' : ''}${fmt(ecartCaisse)} FC`, color: ecartCaisse === 0 ? 'var(--color-success)' : 'var(--color-danger)', icon: <FiAlertTriangle /> },
+          { label: 'TOTAL CASH DU JOUR', value: reportsReady ? `${fmt(totalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-success)', icon: <FiDollarSign /> },
+          { label: 'TOTAL CRÉDIT DU JOUR', value: reportsReady ? `${fmt(totalCredit)} FC` : progressLabel(reportsQ), color: 'var(--color-info)', icon: <FiFileText /> },
+          { label: 'SOLDE COMPTABLE CAISSE', value: reportsReady ? `${fmt(theoreticalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-warning)', icon: <FiLock /> },
+          { label: 'ÉCART BILLETAGE', value: dayReady ? `${ecartCaisse >= 0 ? '+' : ''}${fmt(ecartCaisse)} FC` : 'calcul en cours…', color: !dayReady ? 'var(--text-muted)' : ecartCaisse === 0 ? 'var(--color-success)' : 'var(--color-danger)', icon: <FiAlertTriangle /> },
         ].map((k, i) => (
           <div key={i} className="glass-card" style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ width: '34px', height: '34px', borderRadius: '50%', backgroundColor: `hsl(${k.color} / 0.1)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: `hsl(${k.color})`, flexShrink: 0 }}>{k.icon}</div>
@@ -1371,12 +1449,13 @@ export const Treasury: React.FC = () => {
             )}
             <button
               onClick={handlePrint511}
+              disabled={!reportsReady}
               className="btn btn-secondary"
-              title="Imprimer §5.1.1"
+              title={reportsReady ? 'Imprimer §5.1.1' : `Impression disponible une fois tous les rapports chargés (${reportsQ.loaded}/${reportsQ.total ?? '…'})`}
               style={{ padding: '4px 10px', fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: '4px' }}
             >
               <FiPrinter size={13} />
-              Imprimer
+              {reportsReady ? 'Imprimer' : `Chargement ${reportsQ.loaded}/${reportsQ.total ?? '…'}`}
             </button>
             <button
               onClick={handleGenerateReport}
@@ -1404,7 +1483,15 @@ export const Treasury: React.FC = () => {
           </div>
         )}
         {productionRecap}
-        {reports.length === 0 ? (
+        {reportsQ.error && (
+          <div role="alert" style={{ fontSize: '0.65rem', color: 'hsl(var(--color-danger))', backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '5px 8px', borderRadius: 'var(--radius-sm)', marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {reportsQ.error}
+            <button onClick={reloadReports} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>Réessayer</button>
+          </div>
+        )}
+        {reportsQ.isLoading && reports.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>Chargement des rapports…</div>
+        ) : reports.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
             Aucun rapport pour aujourd'hui — cliquez sur "Générer Rapport du Jour" pour agréger les ventes livrées.
           </div>
@@ -1461,9 +1548,9 @@ export const Treasury: React.FC = () => {
                         }),
                         <tr key={`sub-${nodeName}`} style={{ fontWeight: 700, backgroundColor: 'hsl(var(--bg-secondary))', borderTop: '1px solid hsl(var(--border-color))' }}>
                           <td colSpan={2} style={{ fontSize: '0.62rem', color: 'hsl(var(--text-secondary))', paddingLeft: '8px' }}>Sous-total {nodeName}</td>
-                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-success))' }}>{fmt(nodeCash)} FC</td>
-                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{fmt(nodeCredit)} FC</td>
-                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-warning))' }}>{fmt(nodeTheo)} FC</td>
+                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-success))' }}>{reportsReady ? `${fmt(nodeCash)} FC` : '…'}</td>
+                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{reportsReady ? `${fmt(nodeCredit)} FC` : '…'}</td>
+                          <td style={{ textAlign: 'right', color: 'hsl(var(--color-warning))' }}>{reportsReady ? `${fmt(nodeTheo)} FC` : '…'}</td>
                           <td colSpan={2} />
                         </tr>,
                       ];
@@ -1499,9 +1586,15 @@ export const Treasury: React.FC = () => {
                 {/* Grand total row */}
                 <tr style={{ fontWeight: 800, backgroundColor: 'hsl(var(--bg-tertiary))', borderTop: '2px solid hsl(var(--border-color))' }}>
                   <td colSpan={2} style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))' }}>TOTAUX DU JOUR</td>
-                  <td style={{ textAlign: 'right', color: 'hsl(var(--color-success))' }}>{fmt(totalCash)} FC</td>
-                  <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{fmt(totalCredit)} FC</td>
-                  <td style={{ textAlign: 'right', color: 'hsl(var(--color-warning))' }}>{fmt(theoreticalCash)} FC</td>
+                  {reportsReady ? (
+                    <>
+                      <td style={{ textAlign: 'right', color: 'hsl(var(--color-success))' }}>{fmt(totalCash)} FC</td>
+                      <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{fmt(totalCredit)} FC</td>
+                      <td style={{ textAlign: 'right', color: 'hsl(var(--color-warning))' }}>{fmt(theoreticalCash)} FC</td>
+                    </>
+                  ) : (
+                    <td colSpan={3} style={{ textAlign: 'right', fontSize: '0.62rem', fontWeight: 600, color: 'hsl(var(--text-muted))' }}>{progressLabel(reportsQ)}</td>
+                  )}
                   <td colSpan={2} />
                 </tr>
               </tbody>
@@ -1571,27 +1664,31 @@ export const Treasury: React.FC = () => {
                 <span>
                   Recette / Paiement :
                   <span style={{ fontSize: '0.58rem', color: 'hsl(var(--text-muted))', marginLeft: '4px' }}>
-                    {reports.length > 0 ? `(§5.1.1 · ${reports.length} rapport(s))` : '(aucun rapport §5.1.1)'}
+                    {!reportsReady ? `(${progressLabel(reportsQ)})` : reports.length > 0 ? `(§5.1.1 · ${reports.length} rapport(s))` : '(aucun rapport §5.1.1)'}
                   </span>
                 </span>
-                <span style={{ fontWeight: 700, color: reports.length > 0 ? 'inherit' : 'hsl(var(--color-warning))' }}>{fmt(theoreticalCash)} FC</span>
+                <span style={{ fontWeight: 700, color: reports.length > 0 ? 'inherit' : 'hsl(var(--color-warning))' }}>{reportsReady ? `${fmt(theoreticalCash)} FC` : '…'}</span>
               </div>
-              {totalExpenses > 0 && (
+              {(totalExpenses > 0 || !expensesReady) && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'hsl(var(--text-secondary))' }}>
                   <span>— Dépenses Locales :</span>
-                  <span style={{ fontWeight: 700, color: 'hsl(var(--color-danger))' }}>−{fmt(totalExpenses)} FC</span>
+                  <span style={{ fontWeight: 700, color: 'hsl(var(--color-danger))' }}>{expensesReady ? `−${fmt(totalExpenses)} FC` : progressLabel(expensesQ)}</span>
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'hsl(var(--text-secondary))' }}>
                 <span>Solde comptable caisse :</span>
-                <span style={{ fontWeight: 800, color: 'hsl(var(--color-warning))' }}>{fmt(theoreticalCash - totalExpenses)} FC</span>
+                <span style={{ fontWeight: 800, color: 'hsl(var(--color-warning))' }}>{dayReady ? `${fmt(theoreticalCash - totalExpenses)} FC` : '…'}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 800, padding: '5px 8px', borderRadius: 'var(--radius-sm)', backgroundColor: ecartCaisse === 0 ? 'hsl(var(--color-success) / 0.08)' : 'hsl(var(--color-danger) / 0.08)', border: `1px solid hsl(var(--${ecartCaisse === 0 ? 'color-success' : 'color-danger'}) / 0.3)` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 800, padding: '5px 8px', borderRadius: 'var(--radius-sm)', backgroundColor: !dayReady ? 'hsl(var(--bg-tertiary))' : ecartCaisse === 0 ? 'hsl(var(--color-success) / 0.08)' : 'hsl(var(--color-danger) / 0.08)', border: `1px solid hsl(var(--${!dayReady ? 'border-color' : ecartCaisse === 0 ? 'color-success' : 'color-danger'}) / 0.3)` }}>
                 <span>ÉCART DE CAISSE :</span>
-                <span style={{ color: ecartCaisse === 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                  {ecartCaisse >= 0 ? '+' : ''}{ecartCaisse.toLocaleString('fr-FR')} FC
-                  {ecartCaisse > 0 ? ' (Excédent)' : ecartCaisse < 0 ? ' (Manque)' : ' ✓ Équilibré'}
-                </span>
+                {dayReady ? (
+                  <span style={{ color: ecartCaisse === 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
+                    {ecartCaisse >= 0 ? '+' : ''}{ecartCaisse.toLocaleString('fr-FR')} FC
+                    {ecartCaisse > 0 ? ' (Excédent)' : ecartCaisse < 0 ? ' (Manque)' : ' ✓ Équilibré'}
+                  </span>
+                ) : (
+                  <span style={{ color: 'hsl(var(--text-muted))', fontWeight: 600 }}>calcul en cours…</span>
+                )}
               </div>
             </div>
 
@@ -1641,7 +1738,7 @@ export const Treasury: React.FC = () => {
             )}
 
             {/* BUG-046 : une clôture déjà confirmée par le comptable est figée — pas de bouton de soumission dans ce cas. */}
-            {(!todayClosure || editingClosure) && !editingClosure?.is_validated && (
+            {!closuresQ.isLoading && (!todayClosure || editingClosure) && !editingClosure?.is_validated && (
               <button type="submit" className="btn btn-primary" style={{ padding: '7px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', ...(editingClosure ? { backgroundColor: 'hsl(var(--color-warning))', borderColor: 'hsl(var(--color-warning))' } : {}) }}>
                 <FiLock /> {editingClosure
                   ? 'Corriger et Re-soumettre'
@@ -1714,15 +1811,21 @@ export const Treasury: React.FC = () => {
                   <strong style={{ color: 'hsl(var(--color-danger))' }}>-{fmt(e.amount)} FC</strong>
                 </div>
               ))}
-              {expenses.length === 0 && <div style={{ textAlign: 'center', fontSize: '0.68rem', color: 'hsl(var(--text-muted))', padding: '8px' }}>Aucune dépense locale</div>}
+              {expensesQ.isLoading && <div style={{ textAlign: 'center', fontSize: '0.68rem', color: 'hsl(var(--text-muted))', padding: '8px' }}>Chargement des dépenses…</div>}
+              {expensesQ.error && <div role="alert" style={{ textAlign: 'center', fontSize: '0.68rem', color: 'hsl(var(--color-danger))', padding: '8px' }}>{expensesQ.error}</div>}
+              {!expensesQ.isLoading && !expensesQ.error && expenses.length === 0 && <div style={{ textAlign: 'center', fontSize: '0.68rem', color: 'hsl(var(--text-muted))', padding: '8px' }}>Aucune dépense locale</div>}
             </div>
 
             {/* Net caisse */}
             <div style={{ marginTop: '8px', borderTop: '1px solid hsl(var(--border-color))', paddingTop: '6px', display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', fontWeight: 800 }}>
               <span>Caisse Nette Boulangerie :</span>
-              <span style={{ color: netCaisse >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                {fmt(netCaisse)} FC
-              </span>
+              {dayReady ? (
+                <span style={{ color: netCaisse >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
+                  {fmt(netCaisse)} FC
+                </span>
+              ) : (
+                <span style={{ color: 'hsl(var(--text-muted))', fontWeight: 600 }}>calcul en cours…</span>
+              )}
             </div>
           </div>
 
@@ -1732,7 +1835,9 @@ export const Treasury: React.FC = () => {
               <h2 style={{ fontSize: '0.85rem', fontWeight: 800, marginBottom: '10px' }}>
                 Synthèse Globale — Billetage de Toutes les Boulangeries ({today})
               </h2>
-              {closures.length === 0 ? (
+              {closuresQ.isLoading ? (
+                <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Chargement des clôtures…</div>
+              ) : closures.length === 0 ? (
                 <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Aucune clôture aujourd'hui.</div>
               ) : (
                 <table className="premium-table" style={{ fontSize: '0.66rem', minWidth: '720px' }}>
@@ -1761,13 +1866,19 @@ export const Treasury: React.FC = () => {
                   <tfoot>
                     <tr style={{ fontWeight: 800, borderTop: '2px solid hsl(var(--border-color))' }}>
                       <td>TOTAL</td>
-                      {BILLS.map(b => (
-                        <td key={b.key} style={{ textAlign: 'right' }}>
-                          {closures.reduce((s, c) => s + ((c[b.key as keyof CashClosure] as number) || 0), 0)}
-                        </td>
-                      ))}
-                      <td style={{ textAlign: 'right' }}>{fmt(closures.reduce((s, c) => s + parseFloat(String(c.physical_cash_total || '0')), 0))}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(closures.reduce((s, c) => s + parseFloat(String(c.cash_gap || '0')), 0))}</td>
+                      {closuresQ.isComplete ? (
+                        <>
+                          {BILLS.map(b => (
+                            <td key={b.key} style={{ textAlign: 'right' }}>
+                              {closures.reduce((s, c) => s + ((c[b.key as keyof CashClosure] as number) || 0), 0)}
+                            </td>
+                          ))}
+                          <td style={{ textAlign: 'right' }}>{fmt(closures.reduce((s, c) => s + parseFloat(String(c.physical_cash_total || '0')), 0))}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(closures.reduce((s, c) => s + parseFloat(String(c.cash_gap || '0')), 0))}</td>
+                        </>
+                      ) : (
+                        <td colSpan={BILLS.length + 2} style={{ textAlign: 'right', fontWeight: 600, color: 'hsl(var(--text-muted))' }}>{progressLabel(closuresQ)}</td>
+                      )}
                     </tr>
                   </tfoot>
                 </table>
@@ -1778,7 +1889,11 @@ export const Treasury: React.FC = () => {
           {/* Closures — validate + push to cashbook */}
           <div className="glass-card" style={{ padding: '14px' }}>
             <h2 style={{ fontSize: '0.85rem', fontWeight: 800, marginBottom: '10px' }}>Clôtures du Jour</h2>
-            {closures.length === 0 ? (
+            {closuresQ.isLoading ? (
+              <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Chargement des clôtures…</div>
+            ) : closuresQ.error ? (
+              <div role="alert" style={{ textAlign: 'center', fontSize: '0.7rem', color: 'hsl(var(--color-danger))', padding: '10px' }}>{closuresQ.error}</div>
+            ) : closures.length === 0 ? (
               <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Aucune clôture créée</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1863,7 +1978,11 @@ export const Treasury: React.FC = () => {
 
           <div style={{ marginBottom: '12px', padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'hsl(var(--bg-tertiary))', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: 'hsl(var(--text-secondary))' }}>Solde consolidé disponible (Livre de Caisse)</span>
-            <strong style={{ color: consolidatedBalance >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>{fmt(consolidatedBalance)} FC</strong>
+            {consolidatedBalanceReady ? (
+              <strong style={{ color: consolidatedBalance >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>{fmt(consolidatedBalance)} FC</strong>
+            ) : (
+              <strong style={{ color: 'hsl(var(--text-muted))', fontWeight: 600 }}>{cashbookQ.error ? 'indisponible' : 'chargement…'}</strong>
+            )}
           </div>
 
           {showVoucherForm && (
@@ -1899,7 +2018,7 @@ export const Treasury: React.FC = () => {
                 <span>Total du bordereau</span>
                 <strong style={{ color: voucherBillTotal > consolidatedBalance ? 'hsl(var(--color-danger))' : 'hsl(var(--accent-color))' }}>{fmt(voucherBillTotal)} FC</strong>
               </div>
-              {voucherBillTotal > consolidatedBalance && (
+              {consolidatedBalanceReady && voucherBillTotal > consolidatedBalance && (
                 <div style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))' }}>
                   Montant supérieur au solde disponible — la création sera refusée.
                 </div>
@@ -1916,6 +2035,8 @@ export const Treasury: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {vouchersLoading ? (
               <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Chargement...</div>
+            ) : vouchersQ.error ? (
+              <div role="alert" style={{ textAlign: 'center', fontSize: '0.72rem', color: 'hsl(var(--color-danger))', padding: '10px' }}>{vouchersQ.error}</div>
             ) : vouchers.length === 0 ? (
               <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'hsl(var(--text-muted))', padding: '10px' }}>Aucun bordereau sur la période.</div>
             ) : (
@@ -1928,6 +2049,11 @@ export const Treasury: React.FC = () => {
                   <strong style={{ fontSize: '0.78rem', color: 'hsl(var(--color-danger))' }}>−{fmt(v.physical_cash_total)} FC</strong>
                 </div>
               ))
+            )}
+            {!vouchersQ.isLoading && !vouchersQ.isComplete && !vouchersQ.error && (
+              <div style={{ textAlign: 'center', fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>
+                {vouchersQ.loaded} / {vouchersQ.total ?? '…'} bordereaux chargés…
+              </div>
             )}
           </div>
         </div>
@@ -2034,7 +2160,16 @@ export const Treasury: React.FC = () => {
                   </td>
                 </tr>
               ))}
-              {cashbook.length === 0 && !isLoading && (
+              {cashbookQ.isLoading && (
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>Chargement du livre de caisse…</td></tr>
+              )}
+              {cashbookQ.error && (
+                <tr><td colSpan={8} role="alert" style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--color-danger))', fontSize: '0.72rem' }}>
+                  {cashbookQ.error}{' '}
+                  <button onClick={reloadCashbook} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>Réessayer</button>
+                </td></tr>
+              )}
+              {cashbook.length === 0 && !cashbookQ.isLoading && !cashbookQ.error && (
                 <tr>
                   <td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
                     <FiBook style={{ fontSize: '1.8rem', opacity: 0.2, display: 'block', margin: '0 auto 8px' }} />
@@ -2048,21 +2183,33 @@ export const Treasury: React.FC = () => {
               <tfoot>
                 <tr style={{ fontWeight: 800, backgroundColor: 'hsl(var(--bg-tertiary))', fontSize: '0.72rem' }}>
                   <td colSpan={4} style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--text-secondary))' }}>TOTAUX PÉRIODE</td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>
-                    {fmt(cashbook.reduce((a, e) => a + parseFloat(e.entry_amount || '0'), 0))} FC
-                  </td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-danger))' }}>
-                    {fmt(cashbook.reduce((a, e) => a + parseFloat(e.exit_amount || '0'), 0))} FC
-                  </td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--accent-color))' }}>
-                    {cashbook.length > 0 ? fmt(cashbook[cashbook.length - 1].running_balance) : '—'} FC
-                  </td>
+                  {cashbookQ.isComplete ? (
+                    <>
+                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>
+                        {fmt(cashbook.reduce((a, e) => a + parseFloat(e.entry_amount || '0'), 0))} FC
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-danger))' }}>
+                        {fmt(cashbook.reduce((a, e) => a + parseFloat(e.exit_amount || '0'), 0))} FC
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--accent-color))' }}>
+                        {fmt(cashbook[cashbook.length - 1].running_balance)} FC
+                      </td>
+                    </>
+                  ) : (
+                    <td colSpan={3} style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: 'hsl(var(--text-muted))' }}>{progressLabel(cashbookQ)}</td>
+                  )}
                   <td />
                 </tr>
               </tfoot>
             )}
           </table>
         </div>
+
+        {!cashbookQ.isLoading && !cashbookQ.isComplete && !cashbookQ.error && (
+          <div style={{ marginTop: '6px', fontSize: '0.65rem', color: 'hsl(var(--text-muted))', textAlign: 'center' }} aria-live="polite">
+            {cashbookQ.loaded} / {cashbookQ.total ?? '…'} écritures chargées — totaux de la période en cours de calcul…
+          </div>
+        )}
 
         {/* §5.1.3c — BUG-119 : Comptage physique de caisse Direction (contrôle
             annexe, cahier D1-4...xlsx — même logique de billetage/écart que la
@@ -2301,6 +2448,12 @@ export const Treasury: React.FC = () => {
         </form>
 
         {/* Entries table */}
+        {journalQ.error && (
+          <p role="alert" style={{ textAlign: 'center', padding: '8px', color: 'hsl(var(--color-danger))', fontSize: '0.75rem' }}>
+            {journalQ.error}{' '}
+            <button onClick={reloadJournalEntries} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>Réessayer</button>
+          </p>
+        )}
         {journalLoading ? (
           <p style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-secondary))', fontSize: '0.8rem' }}>Chargement...</p>
         ) : journalEntries.length === 0 ? (
@@ -2372,14 +2525,20 @@ export const Treasury: React.FC = () => {
               <tfoot>
                 <tr style={{ fontSize: '0.68rem', fontWeight: 800, backgroundColor: 'hsl(var(--bg-tertiary))' }}>
                   <td colSpan={3} style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--text-secondary))' }}>
-                    {journalEntries.length} écriture(s)
+                    {journalQ.total ?? journalEntries.length} écriture(s)
                   </td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>
-                    {fmt(journalEntries.reduce((a, e) => a + parseFloat(e.entry_amount || '0'), 0))} FC
-                  </td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-danger))' }}>
-                    {fmt(journalEntries.reduce((a, e) => a + parseFloat(e.exit_amount || '0'), 0))} FC
-                  </td>
+                  {journalQ.isComplete ? (
+                    <>
+                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>
+                        {fmt(journalEntries.reduce((a, e) => a + parseFloat(e.entry_amount || '0'), 0))} FC
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-danger))' }}>
+                        {fmt(journalEntries.reduce((a, e) => a + parseFloat(e.exit_amount || '0'), 0))} FC
+                      </td>
+                    </>
+                  ) : (
+                    <td colSpan={2} style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: 'hsl(var(--text-muted))' }}>{progressLabel(journalQ)}</td>
+                  )}
                   <td style={{ textAlign: 'right', padding: '8px 10px', color: journalReport && parseFloat(journalReport.final_balance) < 0 ? 'hsl(var(--color-danger))' : 'hsl(var(--color-success))' }}>
                     {journalReport ? `${fmt(journalReport.final_balance)} FC` : '—'}
                   </td>
@@ -2406,12 +2565,14 @@ export const Treasury: React.FC = () => {
             <select
               value={savingsDayFilter}
               onChange={e => setSavingsDayFilter(e.target.value)}
+              disabled={!savingsReady}
+              title={savingsReady ? undefined : `Filtre par jour disponible une fois la liste chargée (${savingsQ.loaded}/${savingsQ.total ?? '…'})`}
               style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid hsl(var(--border-color))', background: 'hsl(var(--bg-tertiary))', color: 'hsl(var(--text-primary))', fontSize: '0.85rem' }}
             >
               <option value="">Tous les jours</option>
               {savingsDaysAvailable.map(d => <option key={d} value={d}>Jour {d}</option>)}
             </select>
-            {savingsDayFilter && (
+            {savingsDayFilter && savingsReady && (
               <button
                 onClick={() => handlePrintSavingsDay(savingsDayFilter)}
                 title={`Imprimer le ${savingsDayFilter}`}
@@ -2427,9 +2588,9 @@ export const Treasury: React.FC = () => {
         {filteredSavingsTotals && (
           <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
             {[
-              { label: 'Total Sacs Farine', value: `${fmt(filteredSavingsTotals.total_flour_sacks)} sacs`, color: 'hsl(var(--text-secondary))' },
-              { label: 'Total Revenu', value: `${fmt(filteredSavingsTotals.total_revenue)} FC`, color: 'hsl(var(--color-success))' },
-              { label: 'Total Épargne', value: `${fmt(filteredSavingsTotals.total_savings)} FC`, color: 'hsl(var(--accent-color))' },
+              { label: 'Total Sacs Farine', value: savingsTotalsReady ? `${fmt(filteredSavingsTotals.total_flour_sacks)} sacs` : progressLabel(savingsQ), color: 'hsl(var(--text-secondary))' },
+              { label: 'Total Revenu', value: savingsTotalsReady ? `${fmt(filteredSavingsTotals.total_revenue)} FC` : progressLabel(savingsQ), color: 'hsl(var(--color-success))' },
+              { label: 'Total Épargne', value: savingsTotalsReady ? `${fmt(filteredSavingsTotals.total_savings)} FC` : progressLabel(savingsQ), color: 'hsl(var(--accent-color))' },
             ].map(kpi => (
               <div key={kpi.label} style={{ flex: '1 1 160px', background: 'hsl(var(--bg-tertiary))', borderRadius: 8, padding: '10px 14px', border: '1px solid hsl(var(--border-color))' }}>
                 <div style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', marginBottom: 4 }}>{kpi.label}</div>
@@ -2475,6 +2636,12 @@ export const Treasury: React.FC = () => {
         </form>
 
         {/* Table mensuelle */}
+        {savingsQ.error && (
+          <div role="alert" style={{ textAlign: 'center', padding: 8, color: 'hsl(var(--color-danger))', fontSize: '0.8rem' }}>
+            {savingsQ.error}{' '}
+            <button onClick={reloadSavingsEntries} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>Réessayer</button>
+          </div>
+        )}
         {savingsLoading ? (
           <div style={{ textAlign: 'center', padding: 24, color: 'hsl(var(--text-secondary))' }}>Chargement…</div>
         ) : filteredSavingsEntries.length === 0 ? (
@@ -2505,6 +2672,7 @@ export const Treasury: React.FC = () => {
                     <td style={{ textAlign: 'right', padding: '8px 10px' }}>
                       <button
                         onClick={() => handlePrintSavingsDay(s.date.split('-')[2])}
+                        disabled={!savingsReady}
                         title={`Imprimer le ${s.date.split('-')[2]}`}
                         style={{ padding: '3px 5px', borderRadius: 4, border: '1px solid hsl(var(--border-color))', background: 'none', color: 'hsl(var(--text-secondary))', cursor: 'pointer' }}
                       >
@@ -2516,11 +2684,11 @@ export const Treasury: React.FC = () => {
               </tbody>
               <tfoot>
                 <tr style={{ background: 'hsl(var(--bg-tertiary))', borderTop: '2px solid hsl(var(--border-color))', fontWeight: 700 }}>
-                  <td colSpan={user?.can_access_all_nodes ? 2 : 1} style={{ padding: '8px 10px', color: 'hsl(var(--text-secondary))' }}>{filteredSavingsEntries.length} entrée(s)</td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px' }}>{filteredSavingsTotals ? fmt(filteredSavingsTotals.total_flour_sacks) : '—'}</td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>{filteredSavingsTotals ? `${fmt(filteredSavingsTotals.total_revenue)} FC` : '—'}</td>
+                  <td colSpan={user?.can_access_all_nodes ? 2 : 1} style={{ padding: '8px 10px', color: 'hsl(var(--text-secondary))' }}>{savingsDayFilter ? filteredSavingsEntries.length : (savingsQ.total ?? filteredSavingsEntries.length)} entrée(s)</td>
+                  <td style={{ textAlign: 'right', padding: '8px 10px' }}>{filteredSavingsTotals && savingsTotalsReady ? fmt(filteredSavingsTotals.total_flour_sacks) : '…'}</td>
+                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--color-success))' }}>{filteredSavingsTotals && savingsTotalsReady ? `${fmt(filteredSavingsTotals.total_revenue)} FC` : '…'}</td>
                   <td style={{ textAlign: 'right', padding: '8px 10px' }}></td>
-                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--accent-color))' }}>{filteredSavingsTotals ? `${fmt(filteredSavingsTotals.total_savings)} FC` : '—'}</td>
+                  <td style={{ textAlign: 'right', padding: '8px 10px', color: 'hsl(var(--accent-color))' }}>{filteredSavingsTotals && savingsTotalsReady ? `${fmt(filteredSavingsTotals.total_savings)} FC` : '…'}</td>
                   <td />
                 </tr>
               </tfoot>
@@ -2554,6 +2722,9 @@ export const Treasury: React.FC = () => {
           >▶</button>
         </div>
 
+        {expenseHistoryQ.error && (
+          <div role="alert" style={{ textAlign: 'center', padding: '8px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem' }}>{expenseHistoryQ.error}</div>
+        )}
         {expenseHistoryLoading ? (
           <div style={{ textAlign: 'center', padding: '24px', color: 'hsl(var(--text-secondary))', fontSize: '0.82rem' }}>Chargement...</div>
         ) : expenseHistoryEntries.length === 0 ? (
@@ -2569,8 +2740,10 @@ export const Treasury: React.FC = () => {
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', fontWeight: 800, padding: '8px 10px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
-                <span>Total du mois ({expenseHistoryEntries.length} dépense{expenseHistoryEntries.length > 1 ? 's' : ''})</span>
-                <span style={{ color: 'hsl(var(--color-danger))' }}>−{monthTotal.toLocaleString('fr-FR')} FC</span>
+                <span>Total du mois ({expenseHistoryQ.total ?? expenseHistoryEntries.length} dépense{(expenseHistoryQ.total ?? expenseHistoryEntries.length) > 1 ? 's' : ''})</span>
+                <span style={{ color: expenseHistoryQ.isComplete ? 'hsl(var(--color-danger))' : 'hsl(var(--text-muted))', fontWeight: expenseHistoryQ.isComplete ? 800 : 600 }}>
+                  {expenseHistoryQ.isComplete ? `−${monthTotal.toLocaleString('fr-FR')} FC` : progressLabel(expenseHistoryQ)}
+                </span>
               </div>
               {days.map(day => {
                 const dayEntries = byDay[day];
@@ -2579,7 +2752,7 @@ export const Treasury: React.FC = () => {
                   <div key={day}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', fontWeight: 800, color: 'hsl(var(--accent-color))', marginBottom: '6px', borderBottom: '1px solid hsl(var(--border-color))', paddingBottom: '4px' }}>
                       <span>{new Date(day).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</span>
-                      <span>−{dayTotal.toLocaleString('fr-FR')} FC</span>
+                      <span>{expenseHistoryQ.isComplete ? `−${dayTotal.toLocaleString('fr-FR')} FC` : '…'}</span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {dayEntries.map(e => (

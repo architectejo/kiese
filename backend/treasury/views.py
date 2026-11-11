@@ -196,7 +196,7 @@ class LocalExpenseViewSet(viewsets.ModelViewSet):
     serializer_class = LocalExpenseSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'category', 'date']
-    ordering         = ['-date']
+    ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
     permission_classes = [IsGerant]
 
     def get_queryset(self):
@@ -245,7 +245,7 @@ class FacturierReportViewSet(viewsets.ModelViewSet):
     serializer_class = FacturierReportSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'team', 'date', 'is_validated']
-    ordering         = ['-date']
+    ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
@@ -356,7 +356,7 @@ class CashClosureViewSet(viewsets.ModelViewSet):
     serializer_class = CashClosureSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date', 'is_validated']
-    ordering         = ['-date']
+    ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
@@ -592,7 +592,7 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CashbookEntrySerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date', 'is_tampered']
-    ordering         = ['-date', '-created_at']
+    ordering         = ['-date', '-created_at', '-pk']  # BUG-172/176
     # BUG-026 : le Livre de Caisse Direction (cahierDesCharges.md §5.1.3)
     # est un document de direction consolidé sur l'ensemble des boulangeries
     # — il ne doit pas être lisible par un GERANT/FACTURIER/LIVREUR, qui
@@ -664,7 +664,7 @@ class DisbursementVoucherViewSet(viewsets.ModelViewSet):
     serializer_class = DisbursementVoucherSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['date']
-    ordering         = ['-date', '-created_at']
+    ordering         = ['-date', '-created_at', '-pk']  # BUG-172/176
     permission_classes = [IsHeadquarters]
 
     def perform_create(self, serializer):
@@ -755,7 +755,7 @@ class DirectionCashCountViewSet(
     serializer_class = DirectionCashCountSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields  = ['date']
-    ordering          = ['-date']
+    ordering          = ['-date', '-pk']  # BUG-172/176
     permission_classes = [IsHeadquarters]
 
     def perform_create(self, serializer):
@@ -824,7 +824,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     serializer_class = JournalEntrySerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date', 'imput']
-    ordering         = ['date', 'created_at']
+    ordering         = ['date', 'created_at', 'pk']  # BUG-172/176
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -1092,7 +1092,7 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
     serializer_class = DailySavingsSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date']
-    ordering         = ['-date']
+    ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):

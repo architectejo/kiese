@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import {
   FiGrid, FiPlus, FiAlertTriangle, FiArrowRight, FiCheckCircle,
@@ -21,6 +21,53 @@ const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
+
+const isTodayUtc = (iso?: string): boolean =>
+  !!iso && iso.startsWith(new Date().toISOString().split('T')[0]);
+
+// BUG-164 : au lieu de lire TOUTES les sorties puis de garder les 20 premières, on demande
+// 20 lignes au serveur (tri -created_at). Le KPI « Pains non valorisés » (sorties du jour)
+// reste exact : si la dernière ligne lue est encore d'aujourd'hui, on lit la page suivante
+// (les sorties du jour forment un préfixe de la liste triée), jamais de total partiel.
+async function fetchDisposalsPage(scoped: Record<string, string>): Promise<{ shown: BreadDisposal[]; todayQty: number }> {
+  let page = 1;
+  const first = await productionApi.disposals.page({ ...scoped, page: '1', page_size: '20' });
+  const shown = (first.data.results ?? []).slice(0, 20);
+  let all: BreadDisposal[] = first.data.results ?? [];
+  let next = first.data.next;
+  while (next && isTodayUtc(all[all.length - 1]?.created_at)) {
+    page += 1;
+    const r = await productionApi.disposals.page({ ...scoped, page: String(page), page_size: '20' });
+    all = all.concat(r.data.results ?? []);
+    next = r.data.next;
+  }
+  const todayQty = all.filter(d => isTodayUtc(d.created_at)).reduce((a, d) => a + (d.quantity || 0), 0);
+  return { shown, todayQty };
+}
+
+// BUG-164 : l'API des transferts n'a pas de filtre « boulangerie impliquée » (from_node OU
+// to_node) ; on s'appuie sur le filtre `transfer_status` existant : les transferts actifs
+// (en attente, à confirmer, en litige — peu nombreux) sont lus en entier, et pour l'historique
+// on ne demande que les 3 derniers CONFIRMED (par boulangerie : from_node puis to_node).
+async function fetchTransfersScoped(node: string | undefined): Promise<BreadTransfer[]> {
+  const [pend, resp, disp] = await Promise.all([
+    productionApi.transfers.list({ transfer_status: 'PENDING' }),
+    productionApi.transfers.list({ transfer_status: 'RESPONDED' }),
+    productionApi.transfers.list({ transfer_status: 'DISPUTED' }),
+  ]);
+  const confirmedParams: Array<Record<string, string>> = node
+    ? [{ from_node: node }, { to_node: node }]
+    : [{}];
+  const confirmedPages = await Promise.all(confirmedParams.map(extra =>
+    productionApi.transfers.page({ transfer_status: 'CONFIRMED', ...extra, page: '1', page_size: '3' })));
+  const seen = new Set<string>();
+  const confirmed = confirmedPages
+    .flatMap(r => r.data.results ?? [])
+    .filter(t => (seen.has(t.id) ? false : (seen.add(t.id), true)))
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
+    .slice(0, 3);
+  return [...pend.data, ...resp.data, ...disp.data, ...confirmed];
+}
 
 const DISPOSAL_LABELS: Record<string, string> = {
   SOLD_DISCOUNT: 'Pains Soldés',
@@ -58,6 +105,8 @@ export const Production: React.FC = () => {
   const [sessions, setSessions]       = useState<ProductionSession[]>([]);
   const [transfers, setTransfers]     = useState<BreadTransfer[]>([]);
   const [disposals, setDisposals]     = useState<BreadDisposal[]>([]);
+  const [todayDispoQty, setTodayDispoQty] = useState(0);
+  const loadSeqRef = useRef(0);
   const [nodes, setNodes]             = useState<BakeryNode[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [sacValueFc, setSacValueFc]   = useState(200000);
@@ -121,6 +170,8 @@ export const Production: React.FC = () => {
   const [tLines, setTLines]       = useState<Record<number, number>>({});
   const [tNotes, setTNotes]       = useState('');
   const [tError, setTError]       = useState<string | null>(null);
+  const [tSending, setTSending]   = useState(false);
+  const [tSuccess, setTSuccess]   = useState<string | null>(null);
   // respondQtys: transferId → { breadPriceId → qty_sent } (B fills when responding)
   const [respondQtys, setRespondQtys] = useState<Record<string, Record<number, number>>>({});
   // confirmQtys: transferId → { breadPriceId → qty_received } (A fills when confirming receipt)
@@ -135,25 +186,38 @@ export const Production: React.FC = () => {
   const [dNotes, setDNotes]           = useState('');
   const [dError, setDError]           = useState<string | null>(null);
 
-  const loadData = useCallback(async (nodeFilter?: string) => {
+  // BUG-174 : boulangerie consultée, relue par `loadData()` appelé sans argument après une action
+  // (sinon la direction lit les 3 derniers confirmés de tout le groupe : bloc vide).
+  const viewNodeRef = useRef(viewNode);
+  viewNodeRef.current = viewNode;
+
+  const loadData = useCallback(async (nodeFilterArg?: string) => {
+    const nodeFilter = nodeFilterArg || viewNodeRef.current || undefined;
     setIsLoading(true);
+    // Un changement de boulangerie / un « Actualiser » rapide invalide les réponses en vol.
+    loadSeqRef.current += 1;
+    const seq = loadSeqRef.current;
     try {
       const scopedParams = nodeFilter ? { node: nodeFilter } : undefined;
-      const [stockRes, sessionRes, transferRes, disposalRes, nodeRes, bpRes, configRes, breadStockRes] = await Promise.all([
+      const scopedStrings: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
+      const [stockRes, sessionRes, transferList, disposalRes, nodeRes, bpRes, configRes, breadStockRes] = await Promise.all([
         productionApi.stocks.list(scopedParams),
-        productionApi.sessions.list(scopedParams),
-        productionApi.transfers.list(),
-        productionApi.disposals.list(scopedParams),
+        // BUG-164 : 15 fournées demandées directement au serveur (tri -date).
+        productionApi.sessions.page({ ...scopedStrings, page: '1', page_size: '15' }),
+        fetchTransfersScoped(nodeFilter || user?.node || undefined),
+        fetchDisposalsPage(scopedStrings),
         coreApi.nodes.list(),
         coreApi.breadPrices.list(),
         coreApi.config.get(),
         productionApi.breadStocks.list(scopedParams),
       ]);
+      if (seq !== loadSeqRef.current) return;
       setStocks(Array.isArray(stockRes.data) ? stockRes.data : []);
       setBreadStocks(Array.isArray(breadStockRes.data) ? breadStockRes.data : []);
-      setSessions(Array.isArray(sessionRes.data) ? sessionRes.data.slice(0, 15) : []);
-      setTransfers(Array.isArray(transferRes.data) ? transferRes.data : []);
-      setDisposals(Array.isArray(disposalRes.data) ? disposalRes.data.slice(0, 20) : []);
+      setSessions((sessionRes.data.results ?? []).slice(0, 15));
+      setTransfers(transferList);
+      setDisposals(disposalRes.shown);
+      setTodayDispoQty(disposalRes.todayQty);
       const nodeList = Array.isArray(nodeRes.data) ? nodeRes.data : [];
       setNodes(nodeList);
       const activePrices = Array.isArray(bpRes.data) ? bpRes.data.filter(b => b.is_active) : [];
@@ -165,7 +229,7 @@ export const Production: React.FC = () => {
       setSacValueFc(nodeSacVal > 0 ? nodeSacVal : (configRes.data.sac_value_fc ?? 200000));
       const initRespond: Record<string, Record<number, number>> = {};
       const initConfirm: Record<string, Record<number, number>> = {};
-      (Array.isArray(transferRes.data) ? transferRes.data : []).forEach((t: BreadTransfer) => {
+      transferList.forEach((t: BreadTransfer) => {
         if (t.transfer_status === 'PENDING') {
           // B pre-fills respond form with originally requested quantities
           initRespond[t.id] = {};
@@ -180,9 +244,10 @@ export const Production: React.FC = () => {
       setRespondQtys(initRespond);
       setConfirmQtys(initConfirm);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       console.error('Failed to load production data', err);
     } finally {
-      setIsLoading(false);
+      if (seq === loadSeqRef.current) setIsLoading(false);
     }
   }, [user]);
 
@@ -336,20 +401,28 @@ export const Production: React.FC = () => {
 
   const handleCreateTransfer = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (tSending) return;
     setTError(null);
+    setTSuccess(null);
     if (!user?.node) { setTError('Compte non assigné à une boulangerie.'); return; }
     if (!tFromNode) { setTError('Sélectionnez la boulangerie à qui vous faites la demande.'); return; }
     const lines = Object.entries(tLines)
       .filter(([, qty]) => qty > 0)
       .map(([bp_id, qty]) => ({ bread_price: Number(bp_id), quantity_sent: qty }));
     if (lines.length === 0) { setTError('Indiquez au moins une quantité de pain demandée.'); return; }
+    setTSending(true);
     try {
       // from_node = the supplier (tFromNode), to_node = user's own node (set server-side)
       await productionApi.transfers.create({ from_node: tFromNode, notes: tNotes, lines });
+      const total = lines.reduce((sum, l) => sum + l.quantity_sent, 0);
+      const target = nodes.find(n => n.id === tFromNode);
+      setTSuccess(`Demande envoyée à ${target ? `${target.code} — ${target.name}` : 'la boulangerie sollicitée'} : ${total} pain${total > 1 ? 's' : ''} demandé${total > 1 ? 's' : ''} — en attente de réponse.`);
       setTFromNode(''); setTLines({}); setTNotes('');
       await loadData();
     } catch (err: unknown) {
       setTError(getErrorDetail(err, 'Erreur.'));
+    } finally {
+      setTSending(false);
     }
   };
 
@@ -421,7 +494,6 @@ export const Production: React.FC = () => {
   const respondedToMe    = transfers.filter(t => t.transfer_status === 'RESPONDED' && (!effectiveNode || t.to_node === effectiveNode));
   const disputedTrans    = transfers.filter(t => t.transfer_status === 'DISPUTED' && (!effectiveNode || t.from_node === effectiveNode || t.to_node === effectiveNode));
   const actionCount      = pendingRequests.length + respondedToMe.length;
-  const todayDispoQty  = disposals.filter(d => d.created_at?.startsWith(new Date().toISOString().split('T')[0])).reduce((a, d) => a + (d.quantity || 0), 0);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '0.85rem' }}>
@@ -936,7 +1008,7 @@ export const Production: React.FC = () => {
             <form onSubmit={handleCreateTransfer} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Demander à *</label>
-                <select value={tFromNode} onChange={e => setTFromNode(e.target.value)} className="form-input" style={{ fontSize: '0.73rem', height: '30px' }}>
+                <select value={tFromNode} onChange={e => { setTFromNode(e.target.value); setTSuccess(null); }} className="form-input" style={{ fontSize: '0.73rem', height: '30px' }}>
                   <option value="">— Boulangerie source —</option>
                   {nodes.filter(n => n.id !== (effectiveNode || user?.node)).map(n => <option key={n.id} value={n.id}>{n.code} — {n.name}</option>)}
                 </select>
@@ -951,7 +1023,7 @@ export const Production: React.FC = () => {
                         type="number" min={0}
                         value={tLines[bp.id] || ''}
                         placeholder="0"
-                        onChange={e => setTLines(prev => ({ ...prev, [bp.id]: Math.max(0, Number(e.target.value)) }))}
+                        onChange={e => { setTSuccess(null); setTLines(prev => ({ ...prev, [bp.id]: Math.max(0, Number(e.target.value)) })); }}
                         className="form-input"
                         style={{ fontSize: '0.73rem', height: '26px', padding: '0 6px', textAlign: 'right' }}
                       />
@@ -961,11 +1033,17 @@ export const Production: React.FC = () => {
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Notes</label>
-                <input type="text" value={tNotes} onChange={e => setTNotes(e.target.value)} placeholder="Motif, urgence..." className="form-input" style={{ fontSize: '0.72rem', height: '28px', padding: '0 6px' }} />
+                <input type="text" value={tNotes} onChange={e => { setTNotes(e.target.value); setTSuccess(null); }} placeholder="Motif, urgence..." className="form-input" style={{ fontSize: '0.72rem', height: '28px', padding: '0 6px' }} />
               </div>
               {tError && <div style={{ fontSize: '0.65rem', color: 'hsl(var(--color-danger))', backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '5px 8px', borderRadius: 'var(--radius-sm)' }}>{tError}</div>}
-              <button type="submit" className="btn btn-primary" style={{ padding: '6px', fontSize: '0.73rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                <FiArrowRight /> Envoyer la demande
+              {tSuccess && (
+                <div role="status" style={{ fontSize: '0.68rem', fontWeight: 600, color: 'hsl(var(--color-success))', backgroundColor: 'hsl(var(--color-success) / 0.1)', border: '1px solid hsl(var(--color-success) / 0.4)', padding: '6px 8px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                  <span>✓ {tSuccess}</span>
+                  <button type="button" onClick={() => setTSuccess(null)} aria-label="Fermer le message" style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '0 2px' }}>×</button>
+                </div>
+              )}
+              <button type="submit" disabled={tSending} className="btn btn-primary" style={{ padding: '6px', fontSize: '0.73rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', opacity: tSending ? 0.7 : 1 }}>
+                <FiArrowRight /> {tSending ? 'Envoi en cours…' : 'Envoyer la demande'}
               </button>
             </form>
           </div>

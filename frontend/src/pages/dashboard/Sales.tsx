@@ -84,6 +84,14 @@ export const Sales: React.FC = () => {
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [bpMap, setBpMap] = useState<Record<string, BreadPrice>>({});
   const [isLoading, setIsLoading] = useState(true);
+  // BUG-164 : la file du jour est lue page par page (page 1 affichée aussitôt, suite en
+  // arrière-plan). Compteurs et total de la file ne sont définitifs que lorsque
+  // `queueComplete` est vrai : sinon « calcul en cours… X/Y ».
+  const [queueComplete, setQueueComplete] = useState(false);
+  const [queueProgress, setQueueProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null });
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const queueLoadSeqRef = useRef(0);
+  const queueTotalRef = useRef<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Erreur de livraison (ex. BUG-047 : vacation déjà rapportée) — rattachée à la facture concernée
@@ -156,19 +164,25 @@ export const Sales: React.FC = () => {
   const [adjustLoading, setAdjustLoading] = useState(false);
   const [adjustError, setAdjustError] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (isRetry = false): Promise<void> => {
+    queueLoadSeqRef.current += 1;
+    const seq = queueLoadSeqRef.current;
     try {
       setIsLoading(true);
+      setQueueComplete(false);
+      setQueueError(null);
+      setQueueProgress({ loaded: 0, total: null });
       await salesApi.cleanupExpired().catch(() => {});
       // Charge les factures du JOUR (PENDING + DELIVERED), pas seulement PENDING :
       // une commande livrée doit rester comptée dans les stats de la page tant
       // qu'elle n'est pas annulée — seul un statut CANCELLED doit l'en exclure.
       const todayStr = new Date().toISOString().split('T')[0];
       const [invoicesRes, bpRes, configRes] = await Promise.all([
-        salesApi.list({ invoice_date: todayStr }),
+        salesApi.listPage({ invoice_date: todayStr, page: '1', page_size: '100' }),
         coreApi.breadPrices.list(),
         coreApi.config.get(),
       ]);
+      if (seq !== queueLoadSeqRef.current) return;
       setAllowBackdatedSales(!!configRes.data.allow_backdated_sales);
       const bps = bpRes.data.filter(b => b.is_active);
       const map: Record<string, BreadPrice> = {};
@@ -176,18 +190,56 @@ export const Sales: React.FC = () => {
       setBreadPrices(bps);
       setBpMap(map);
       const TWELVE_H = 12 * 60 * 60 * 1000;
-      const validInvoices = invoicesRes.data.filter(inv =>
+      const keepInvoice = (inv: Invoice) =>
         inv.status !== 'CANCELLED' &&
-        (inv.status !== 'PENDING' || (Date.now() - new Date(inv.created_at).getTime()) < TWELVE_H)
-      );
-      setQueue(validInvoices.map(inv => mapInvoice(inv, map)));
+        (inv.status !== 'PENDING' || (Date.now() - new Date(inv.created_at).getTime()) < TWELVE_H);
+      setQueue(invoicesRes.data.results.filter(keepInvoice).map(inv => mapInvoice(inv, map)));
       const initQty: Record<number, number> = {};
       bps.forEach(b => { initQty[b.id] = 0; });
       setQuantities(initQty);
-    } catch (err) {
-      console.error('Failed to load sales data', err);
-    } finally {
+      // BUG-172 : ids lus côté serveur, pour contrôler `lus === count` en fin de lecture.
+      const serverIds = new Set<string>(invoicesRes.data.results.map(inv => String(inv.id)));
+      let loaded = invoicesRes.data.results.length;
+      queueTotalRef.current = invoicesRes.data.count;
+      setQueueProgress({ loaded, total: invoicesRes.data.count });
       setIsLoading(false);
+      // Pages suivantes en arrière-plan (annulées si une nouvelle lecture démarre).
+      let next = invoicesRes.data.next;
+      let page = 1;
+      try {
+        while (next) {
+          page += 1;
+          const more = await salesApi.listPage({ invoice_date: todayStr, page: String(page), page_size: '100' });
+          if (seq !== queueLoadSeqRef.current) return;
+          loaded += more.data.results.length;
+          more.data.results.forEach(inv => serverIds.add(String(inv.id)));
+          const fresh = more.data.results.filter(keepInvoice).map(inv => mapInvoice(inv, map));
+          setQueue(prev => {
+            const known = new Set(prev.map(q => q._apiId));
+            return prev.concat(fresh.filter(q => !known.has(q._apiId)));
+          });
+          queueTotalRef.current = more.data.count;
+          setQueueProgress({ loaded, total: more.data.count });
+          next = more.data.next;
+        }
+        // BUG-172 : ligne sautée/doublée (insertion concurrente, tri instable) => un seul
+        // rechargement automatique, puis erreur ; la file n'est jamais déclarée complète.
+        if (serverIds.size !== queueTotalRef.current) {
+          if (!isRetry) { void loadData(true); return; }
+          setQueueError('Données incomplètes, réessayez.');
+          return;
+        }
+        setQueueComplete(true);
+      } catch (err) {
+        if (seq !== queueLoadSeqRef.current) return;
+        setQueueError(getErrorDetail(err, 'Impossible de charger la suite des factures du jour.'));
+      }
+    } catch (err) {
+      if (seq !== queueLoadSeqRef.current) return;
+      console.error('Failed to load sales data', err);
+      setQueueError(getErrorDetail(err, 'Impossible de charger les factures du jour.'));
+    } finally {
+      if (seq === queueLoadSeqRef.current) setIsLoading(false);
     }
   }, []);
 
@@ -498,6 +550,7 @@ export const Sales: React.FC = () => {
     }
   };
 
+  const queueProgressLabel = `calcul en cours… ${queueProgress.loaded}/${queueProgress.total ?? '…'}`;
   const pendingCount = queue.filter(o => o.status === 'En attente').length;
   const livrésCount = queue.filter(o => o.status === 'Livré').length;
   const totalFacture = queue.reduce((a, o) => a + o.totalValue, 0);
@@ -764,9 +817,9 @@ export const Sales: React.FC = () => {
       {/* Stats */}
       <div className="kpi-grid" style={{ gap: '12px' }}>
         {[
-          { key: null as 'livrees' | 'total' | null, label: 'EN ATTENTE DE LIVRAISON', value: `${pendingCount}`, icon: <FiClock />, color: 'var(--color-warning)' },
-          { key: 'livrees' as 'livrees' | 'total' | null, label: 'LIVRÉES AUJOURD\'HUI', value: `${livrésCount}`, icon: <FiCheckCircle />, color: 'var(--color-success)' },
-          { key: 'total' as 'livrees' | 'total' | null, label: 'TOTAL FACTURÉ', value: `${totalFacture.toLocaleString('fr-FR')} FC`, icon: <FiTruck />, color: 'var(--color-info)' },
+          { key: null as 'livrees' | 'total' | null, label: 'EN ATTENTE DE LIVRAISON', value: queueComplete ? `${pendingCount}` : queueProgressLabel, icon: <FiClock />, color: 'var(--color-warning)' },
+          { key: 'livrees' as 'livrees' | 'total' | null, label: 'LIVRÉES AUJOURD\'HUI', value: queueComplete ? `${livrésCount}` : queueProgressLabel, icon: <FiCheckCircle />, color: 'var(--color-success)' },
+          { key: 'total' as 'livrees' | 'total' | null, label: 'TOTAL FACTURÉ', value: queueComplete ? `${totalFacture.toLocaleString('fr-FR')} FC` : queueProgressLabel, icon: <FiTruck />, color: 'var(--color-info)' },
         ].map((s, i) => (
           <div
             key={i}
@@ -1121,6 +1174,17 @@ export const Sales: React.FC = () => {
           </div>
 
           {isLoading && <div style={{ textAlign: 'center', padding: '16px', color: 'hsl(var(--text-secondary))', fontSize: '0.8rem' }}>Chargement...</div>}
+          {queueError && (
+            <div role="alert" style={{ textAlign: 'center', padding: '8px', color: 'hsl(var(--color-danger))', fontSize: '0.75rem' }}>
+              {queueError}{' '}
+              <button onClick={() => { void loadData(); }} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.65rem' }}>Réessayer</button>
+            </div>
+          )}
+          {!isLoading && !queueComplete && !queueError && (
+            <div role="status" style={{ textAlign: 'center', padding: '4px', color: 'hsl(var(--text-muted))', fontSize: '0.68rem' }}>
+              {queueProgress.loaded} / {queueProgress.total ?? '…'} factures chargées…
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {queue.slice(0, 3).map(item => renderQueueCard(item))}
@@ -1415,7 +1479,7 @@ export const Sales: React.FC = () => {
         isOpen={queueModalOpen}
         onClose={() => setQueueModalOpen(false)}
         title="File des Livraisons — Liste Complète"
-        subtitle={`${queue.length} facture(s) du jour.`}
+        subtitle={queueComplete ? `${queue.length} facture(s) du jour.` : `Chargement en cours (${queueProgress.loaded}/${queueProgress.total ?? '…'}) — liste partielle.`}
         maxWidth="620px"
       >
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1429,8 +1493,8 @@ export const Sales: React.FC = () => {
         onClose={() => setStatModal(null)}
         title={statModal === 'livrees' ? "Factures Livrées Aujourd'hui" : statModal === 'total' ? 'Total Facturé Aujourd\'hui' : undefined}
         subtitle={
-          statModal === 'livrees' ? `${livrésCount} facture(s) distribuée(s) avec succès.`
-          : statModal === 'total' ? 'Cumul des factures En attente et Livrées de la journée.'
+          statModal === 'livrees' ? (queueComplete ? `${livrésCount} facture(s) distribuée(s) avec succès.` : `Chargement en cours (${queueProgress.loaded}/${queueProgress.total ?? '…'}) — liste partielle.`)
+          : statModal === 'total' ? (queueComplete ? 'Cumul des factures En attente et Livrées de la journée.' : `Chargement en cours (${queueProgress.loaded}/${queueProgress.total ?? '…'}) — liste partielle.`)
           : undefined
         }
         maxWidth="620px"
@@ -1496,7 +1560,7 @@ export const Sales: React.FC = () => {
                       <tfoot>
                         <tr style={{ fontSize: '0.78rem', borderTop: '2px solid hsl(var(--border-color))' }}>
                           <td colSpan={4} style={{ fontWeight: 800, textAlign: 'right', padding: '8px 0' }}>Total :</td>
-                          <td style={{ textAlign: 'right', fontWeight: 800, color: 'hsl(var(--color-info))', padding: '8px 0' }}>{totalFacture.toLocaleString('fr-FR')} FC</td>
+                          <td style={{ textAlign: 'right', fontWeight: 800, color: 'hsl(var(--color-info))', padding: '8px 0' }}>{queueComplete ? `${totalFacture.toLocaleString('fr-FR')} FC` : queueProgressLabel}</td>
                         </tr>
                       </tfoot>
                     )}

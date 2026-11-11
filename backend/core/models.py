@@ -6,6 +6,7 @@ UUIDv4 primary keys and node_origin tracking to prevent ID collisions
 in the future distributed/offline architecture.
 """
 
+import datetime
 import uuid
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
@@ -142,6 +143,16 @@ class Node(models.Model):
         null=True, blank=True,
         verbose_name=_("Équipe B — heure de fin"),
         help_text=_("Ex: 20:00.")
+    )
+    handover_time = models.TimeField(
+        default=datetime.time(12, 0),
+        db_default=datetime.time(12, 0),
+        verbose_name=_("Heure de relève des équipes"),
+        help_text=_(
+            "BUG-161 : heure (locale) à laquelle l'équipe de service change, "
+            "chaque jour. Une journée de travail court de cette heure au jour J "
+            "à la même heure au jour J+1."
+        )
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

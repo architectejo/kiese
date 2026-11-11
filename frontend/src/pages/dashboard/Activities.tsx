@@ -1,16 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { apiClient } from '@/api/client';
-import { FiList, FiRefreshCw, FiCalendar, FiUser } from 'react-icons/fi';
+import React from 'react';
+import { coreApi } from '@/api/services';
+import { useProgressiveList } from '@/hooks/useProgressiveList';
+import { FiList, FiRefreshCw, FiCalendar, FiUser, FiChevronDown } from 'react-icons/fi';
 
-interface ActivityLogItem {
-  id: string;
-  user_name: string;
-  user_display: string;
-  action: string;
-  description: string;
-  node_origin: string;
-  created_at: string;
-}
+// BUG-163 (remarque.md l.422) : le journal croît sans fin. Page 1 affichée dès
+// réception, puis « Voir plus » = page suivante du serveur à chaque clic (pas de
+// chargement complet automatique).
+const ACTIVITIES_PAGE_SIZE = '50';
 
 const formatLogDate = (dateStr: string) => {
   if (!dateStr) return '';
@@ -22,25 +18,14 @@ const formatLogDate = (dateStr: string) => {
 };
 
 export const Activities: React.FC = () => {
-  const [logs, setLogs] = useState<ActivityLogItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchLogs = async () => {
-    setLoading(true);
-    try {
-      const response = await apiClient.get('/api/core/activities/');
-      const data = Array.isArray(response.data) ? response.data : (response.data.results || []);
-      setLogs(data);
-    } catch (error) {
-      console.error("Failed to fetch activity logs", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchLogs();
-  }, []);
+  const {
+    items: logs, isLoading: loading, isLoadingMore, loaded, total, hasMore, error, loadMore, reload,
+  } = useProgressiveList({
+    resetKey: 'activities',
+    mode: 'manual',
+    fetchPage: (page) => coreApi.activities.page({ page: String(page), page_size: ACTIVITIES_PAGE_SIZE }),
+  });
+  const fetchLogs = reload;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
@@ -50,7 +35,7 @@ export const Activities: React.FC = () => {
         borderLeft: '4px solid hsl(var(--accent-color))',
         padding: '32px'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <h1 style={{ fontSize: '2.2rem', fontWeight: 800, marginBottom: '8px', letterSpacing: '-0.02em' }}>
               Console Consolidée d'Administration
@@ -77,15 +62,22 @@ export const Activities: React.FC = () => {
           Historique Complet des Événements
         </h2>
 
+        {error && (
+          <div role="alert" style={{ color: 'hsl(var(--color-danger))', fontWeight: 700, fontSize: '0.85rem', marginBottom: '12px' }}>
+            {error}
+          </div>
+        )}
+
         {loading ? (
           <div style={{ textAlign: 'center', color: 'hsl(var(--text-muted))', padding: '48px', fontSize: '1.1rem', fontWeight: 600 }}>
             Chargement des journaux de caisse en cours...
           </div>
-        ) : logs.length === 0 ? (
+        ) : logs.length === 0 && !error ? (
           <div style={{ textAlign: 'center', color: 'hsl(var(--text-muted))', padding: '48px' }}>
             Aucun journal d'activité disponible pour le moment.
           </div>
         ) : (
+          <>
           <div style={{ overflowX: 'auto' }}>
             <table className="premium-table">
               <thead>
@@ -130,6 +122,23 @@ export const Activities: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', marginTop: '20px' }}>
+            <span role="status" style={{ fontSize: '0.85rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>
+              {loaded.toLocaleString('fr-FR')} affichée(s) / {(total ?? loaded).toLocaleString('fr-FR')} au total
+            </span>
+            {hasMore && (
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="btn btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', minHeight: '44px', fontWeight: 700 }}
+              >
+                <FiChevronDown />
+                <span>{isLoadingMore ? 'Chargement…' : 'Voir plus'}</span>
+              </button>
+            )}
+          </div>
+          </>
         )}
       </div>
     </div>
