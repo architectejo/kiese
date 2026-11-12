@@ -26,7 +26,13 @@ export const formatQty = (n: number | null | undefined): string => {
   return n.toLocaleString('fr-FR');
 };
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+// BUG-177 : définitions affichées en info-bulle (title) ET en légende sous le tableau (tactile).
+export const REGULARISATION_HELP =
+  'Régularisation : pains ajoutés ou retirés par les factures de régularisation (code RG) et par les corrections de commande (ajustements), à leur prix plein.';
+export const NON_SERVI_HELP =
+  'Non Servi : montant des commandes non servies du jour (code NS) ; retranché du total du jour, aucun pain n\'a été remis.';
+
+const todayIso =() => new Date().toISOString().slice(0, 10);
 
 type RepartitionMode = 'QUANTITE' | 'VALEUR';
 
@@ -302,8 +308,8 @@ export const ClotureJournaliere: React.FC = () => {
                     <th style={{ textAlign: 'right' }}>Reste Hier (B)</th>
                     <th style={{ textAlign: 'right' }}>Appro Effectué</th>
                     <th style={{ textAlign: 'right' }}>Appro Reçu</th>
-                    <th style={{ textAlign: 'right' }}>Non Servi</th>
-                    <th style={{ textAlign: 'right' }}>Régularisation</th>
+                    <th style={{ textAlign: 'right' }} title={NON_SERVI_HELP}>Non Servi</th>
+                    <th style={{ textAlign: 'right' }} title={REGULARISATION_HELP}>Régularisation</th>
                     <th style={{ textAlign: 'right' }}>Vente Cash/Soldée</th>
                     <th style={{ textAlign: 'right' }}>Perte (Soldée)</th>
                     <th style={{ textAlign: 'right' }}>Facture Mvm Interne</th>
@@ -338,8 +344,13 @@ export const ClotureJournaliere: React.FC = () => {
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_recu.fc)}</div>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        {formatQty(cat.non_servi.quantity)}
-                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.non_servi.fc)}</div>
+                        {formatFC(cat.non_servi.fc)}
+                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatQty(cat.non_servi.quantity)} pain(s)</div>
+                        {parseFloat(cat.non_servi.fc_signe) !== 0 && (
+                          <div style={{ fontSize: '0.58rem', color: 'hsl(var(--color-danger))' }} title="Retranché du total du jour">
+                            retranché : {formatFC(cat.non_servi.fc_signe)}
+                          </div>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         {formatQty(cat.regularisation.quantity)}
@@ -370,6 +381,10 @@ export const ClotureJournaliere: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <ul style={{ fontSize: '0.66rem', color: 'hsl(var(--text-secondary))', marginTop: '10px', paddingLeft: '16px', lineHeight: 1.5 }}>
+              <li><strong>Régularisation</strong> : {REGULARISATION_HELP.replace(/^Régularisation : /, '')}</li>
+              <li><strong>Non Servi</strong> : {NON_SERVI_HELP.replace(/^Non Servi : /, '')}</li>
+            </ul>
             <p style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginTop: '8px' }}>
               Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel
               (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir

@@ -50,6 +50,21 @@ export interface BakeryNode {
   team_a_end_time: string | null;
   team_b_start_time: string | null;
   team_b_end_time: string | null;
+  // BUG-161 (B1/B2) : heure de relève ("HH:MM:SS") et mode rotation de 24 h.
+  handover_time: string;
+  team_rotation_enabled: boolean;
+}
+
+// BUG-161 (B2) : équipe de service du jour — `GET/POST /api/production/team-assignment/`.
+export type ServiceTeam = 'A' | 'B';
+
+export interface TeamAssignment {
+  work_date: string;
+  handover_time: string;
+  team: ServiceTeam | null;
+  suggested: ServiceTeam;
+  assigned_by: string | null;
+  server_now: string;
 }
 
 // BUG-163 : lignes du Journal d'Activités, notifications et comptes (ex-types
@@ -334,7 +349,10 @@ export interface DailyClosureCategory {
   reste_du_hier: Record<string, number | null>;
   appro_effectue: DailyClosureQuantityFc;
   appro_recu: DailyClosureQuantityFc;
-  non_servi: DailyClosureQuantityFc;
+  // BUG-177 : `fc` = montant positif affiché ; `fc_signe` = contribution négative
+  // aux totaux (ex. "-3000.00"), retranchée de Facture Mvm Interne / Total du Jour.
+  non_servi: DailyClosureQuantityFc & { fc_signe: string };
+  // BUG-177 : factures RG (+) et ajustements de commande BUG-097 (±), prix pleins.
   regularisation: DailyClosureQuantityFc;
   vente_cash_soldee: DailyClosureQuantityFc & { perte_fc: string };
   facture_mvm_interne: DailyClosureFcOnly;
@@ -1268,6 +1286,14 @@ export const salesApi = {
 // ── Production API ───────────────────────────────────────────────────────────
 
 export const productionApi = {
+  // BUG-161 (B2) : le serveur calcule la journée de travail ; le frontend n'envoie AUCUNE date.
+  // `node` : seulement pour un rôle Siège (ignoré côté serveur pour un non-HQ).
+  teamAssignment: {
+    get: (params?: { node?: string }) =>
+      apiClient.get<TeamAssignment>('/api/production/team-assignment/', { params }),
+    set: (team: ServiceTeam, node?: string) =>
+      apiClient.post<TeamAssignment>('/api/production/team-assignment/', node ? { team, node } : { team }),
+  },
   sessions: {
     list: (params?: Record<string, string>) =>
       getList<ProductionSession>('/api/production/sessions/', params),

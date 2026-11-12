@@ -52,6 +52,8 @@ interface OpeningStockConfirmationModalProps {
    *  (`openingConfirmationStore`) sans que ce composant connaisse son
    *  existence. */
   onManualClose?: () => void;
+  /** BUG-188 : masquée mais montée (saisie conservée) pendant la désignation d'équipe. */
+  suspended?: boolean;
 }
 
 type DraftLines = Record<number, string>;
@@ -105,7 +107,7 @@ function resolveDefaultTeam(
 }
 
 export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationModalProps> = ({
-  routeKey, forceOpenForTeam = null, onManualClose,
+  routeKey, forceOpenForTeam = null, onManualClose, suspended = false,
 }) => {
   const { user } = useAuthStore();
   // `UserProfile.team` est `'A' | 'B' | ''` (facturiers/livreurs) — on ne
@@ -257,6 +259,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
   return (
     <Modal
       isOpen={isOpen}
+      suspended={suspended}
       onClose={handleDismiss}
       title="Stock de départ du jour"
       subtitle={

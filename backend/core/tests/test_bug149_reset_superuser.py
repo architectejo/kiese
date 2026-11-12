@@ -21,7 +21,7 @@ from core.models import (
 from core.testing import make_bread_price
 from clients.models import Client
 from sales.models import Invoice, InvoiceLine
-from production.models import ProductionSession
+from production.models import ProductionSession, DailyTeamAssignment
 from treasury.models import LocalExpense
 from commissions.models import CommissionPeriod, ClientCommission
 from sync.models import DebtMovement, NodeAuthToken
@@ -137,6 +137,11 @@ class ResetDataScenarioTests(TestCase):
             declared_by=self.gerant,
         )
 
+        # BUG-161 (B2) : désignation de l'équipe de service
+        DailyTeamAssignment.objects.create(
+            node=self.node, work_date=date(2026, 11, 1), team='A', assigned_by=self.gerant,
+        )
+
         # treasury.LocalExpense
         self.expense = LocalExpense.objects.create(
             node=self.node, node_origin=self.node.code, gerant=self.gerant,
@@ -232,6 +237,7 @@ class ResetDataScenarioTests(TestCase):
         self.assertFalse(Invoice.objects.exists())
         self.assertFalse(InvoiceLine.objects.exists())
         self.assertFalse(ProductionSession.objects.exists())
+        self.assertFalse(DailyTeamAssignment.objects.exists())
         self.assertFalse(LocalExpense.objects.exists())
         self.assertFalse(CommissionPeriod.objects.exists())
         self.assertFalse(ClientCommission.objects.exists())

@@ -664,6 +664,8 @@ export const Clients: React.FC = () => {
     // réelles (`delivered_at`/`invoice_date`), y compris rétroactives (BUG-083) — à
     // transmettre au reçu plutôt que l'horloge du navigateur au moment de l'impression.
     let deliveredInvoice: Invoice | null = null;
+    // BUG-184 : équipe portée par la facture (équipe de service désignée si rotation active).
+    let invoiceTeam = '';
 
     // BUG-083 : date rétroactive optionnelle (réglage ADMIN/DIRECTION). Vide ou date du jour
     // → comportement inchangé (aucun champ envoyé, le serveur date normalement).
@@ -704,6 +706,7 @@ export const Clients: React.FC = () => {
           lines: saleLines.map(bp => ({ bread_price: bp.id, quantity: saleQtys[bp.id] })),
         });
         receiptId = res.data.receipt_number || receiptId;
+        invoiceTeam = res.data.team || '';
         // Immediately confirm delivery (no PENDING queue for client sales)
         try {
           const deliverRes = await salesApi.deliver(res.data.id, retroactiveDate || undefined);
@@ -726,7 +729,9 @@ export const Clients: React.FC = () => {
       receiptNumber: receiptId,
       boulangerie: user?.node_display || user?.node || 'ETS. KIESE',
       agentName: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
-      team: user?.team || '—',
+      // BUG-184 : équipe de la facture ; repli sur l'équipe de l'utilisateur uniquement
+      // pour cette facture qu'il vient de créer (anciennes factures sans équipe).
+      team: deliveredInvoice?.team || invoiceTeam || user?.team || '—',
       clientName: saleClient.name,
       clientCode: saleClient.id,
       // BUG-107 : prix unitaire réduit (Vente Soldée) affiché ligne par ligne sur le reçu,
@@ -772,7 +777,8 @@ export const Clients: React.FC = () => {
         receiptNumber: inv.receipt_number,
         boulangerie: user?.node_display || user?.node || 'ETS. KIESE',
         agentName: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'GÉRANT' : 'GÉRANT',
-        team: user?.team || '—',
+        // BUG-184 : équipe de la facture (repli : facture tout juste créée par l'utilisateur).
+        team: inv.team || user?.team || '—',
         clientName: repaymentClient.name,
         clientCode: repaymentClient.id,
         lines: [],
@@ -2198,7 +2204,7 @@ export const Clients: React.FC = () => {
                                       </span>
                                     )}
                                     {inv.special_code && (
-                                      <span className="badge badge-info" style={{ fontSize: '0.48rem' }}>{inv.special_code}</span>
+                                      <span className="badge badge-info" style={{ fontSize: '0.48rem' }}>{inv.special_code === 'NS' ? 'NS — Non servie' : inv.special_code}</span>
                                     )}
                                     {/* BUG-109 : trace d'ajustement — badge + référence vers l'originale */}
                                     {inv.is_adjustment && (

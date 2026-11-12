@@ -69,3 +69,13 @@ export function getErrorDetail(err: unknown, fallback: string): string {
   }
   return fallback;
 }
+
+/**
+ * BUG-161 (B2/F2) : vrai si l'API a refusé la facturation parce que l'équipe de service
+ * du jour n'est pas désignée (403 `{"detail": "...", "code": "TEAM_NOT_ASSIGNED"}`).
+ */
+export function isTeamNotAssignedError(err: unknown): boolean {
+  if (!axios.isAxiosError(err) || err.response?.status !== 403) return false;
+  const data = err.response.data as { code?: unknown } | undefined;
+  return data?.code === 'TEAM_NOT_ASSIGNED';
+}

@@ -56,3 +56,25 @@ Aucun nouveau `any` ; HTTP via `services.ts`.
 
 ### Décisions
 - BUG-164 (volets Production/Sales) : conforme sous réserve de BUG-173 et BUG-174 (Mineurs, OUVERT) ; statut de la ligne du tableau non modifié (multi-pages). Contrôle manuel navigateur recommandé (scénarios du ticket).
+
+## Vérification BUG-177 (rapport de Clôture Journalière) et BUG-161 B1/B2 (rotation d'équipes, volet production)
+
+Méthode : scénario riche reconstruit par le testeur et recalculé à la main, relecture de code, `npx tsc --noEmit` (0 erreur), tests ciblés un à un. Aucun fichier applicatif modifié ; aucune commande sur `backend/db.sqlite3` (migrations rejouées sur base de test via `MigrationExecutor`).
+
+### A. BUG-177, rapport de Clôture Journalière
+- Fichier : `backend/production/tests/test_verif_bug177_rapport_testeur_production.py`. Le scénario combine ventes normales, soldées, NS PENDING + NS annulée, RG, ajustement négatif, appro reçu/effectué, dispositions, restes, carryover BUG-142 et reste négatif BUG-158. Tous les totaux concordent avec la formule du classeur (L21 = somme signée des rubriques, NS retranchée ; L132 = FACTURE/JR + L21) : mvm interne 9 850 / 5 200 FC, total du jour 37 050 FC, écart/facture 3 900 FC, pains facturés 77, NS 1 800 / 1 000 FC (`fc_signe` négatif), régularisation -600 / +2 500 FC.
+- Non-régression verte : `test_daily_closure_report` (5), `test_daily_stock_snapshot` (13), `test_daily_opening_confirmation` (35), `test_bug142_fournee_carryover_accumulation` (13), `test_bug177_closure_ns_rg` (6), `test_bug158_auto_closure_negative_stock` (11).
+- Défauts : **BUG-185** (RG cochée « soldée » comptée deux fois : 4 500 FC au lieu de 3 000 FC), **BUG-186** (répartition % par quantité = 95,96 % avec un stock de départ confirmé : le dénominateur inclut le carryover). Tests `@expectedFailure`.
+- Frontend : colonne Non Servi, légende, info-bulles, export Excel (colonne finale index 28, aucun décalage), impression cohérents ; aucun nouveau `any`. Réserve : `todayIso()` en UTC (relève au chantier F3). Contrôle navigateur non exécuté.
+
+### B. BUG-161 B1/B2 et F1/F2 (volet production)
+- Backend : `test_bug161_b2_team_assignment` (18), `core test_bug161_workday` (23), `core test_bug149_reset_superuser` (11) verts ; 13 tests ajoutés (`backend/production/tests/test_verif_bug161_testeur_production.py`) : bornes de relève (11:59:59 / 12:00:00, minuit, relève 00:00 = date calendaire, relève 23:30, fin d'année), suggestion après jours sautés, POST à minuit pile / à la relève, payloads invalides, journalisation, application des migrations core 0017/0018 + production 0023 sur lignes existantes (rien de perdu, défauts 12:00 / rotation désactivée).
+- Permissions et isolation par nœud : couverts par les tests du développeur (LIVREUR 403, anonyme 401, non-HQ cantonné à son nœud, HQ avec `node`), relus et jugés suffisants.
+- Défauts : **BUG-187** (corps JSON non objet -> 500, `@expectedFailure`), **BUG-188** (frontend : boîte forcée BUG-156 démontée à la relève, saisie perdue).
+- Frontend (relecture) : modale non fermable sans équipe, un seul sondage, re-sondage après relève, indicateur « (changer) », priorité sur les autres boîtes, `Nodes.tsx` (heure de relève + case rotation, A/B conservés avec note) conformes. Écriture réservée à la Direction garantie côté API seulement (pas de garde React dédiée).
+- Caractérisation : déplacer l'heure de relève en cours de journée change la journée de travail (retour à la veille) ; à documenter.
+
+### Décisions
+- BUG-177 (volet rapport) : conforme, ligne du registre inchangée (autres volets vérifiés par d'autres testeurs) ; BUG-185 et BUG-186 ouverts, Mineurs.
+- BUG-161 : ligne laissée ouverte ; B1/B2/F1/F2 conformes sous réserve de BUG-187 et BUG-188.
+- Pas de `VÉRIFIÉ` prononcé : la suite complète et les contrôles navigateur restent à la charge du coordinateur.

@@ -74,7 +74,7 @@ from production.models import (
     ProductionSession, ProductionSessionLine, BreadStock, ConsumableStock,
     ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine,
     BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation,
-    DailyOpeningConfirmationLine,
+    DailyOpeningConfirmationLine, DailyTeamAssignment,
 )
 from treasury.models import (
     LocalExpense, FacturierReport, CashClosure, CashbookEntry, JournalEntry,
@@ -118,6 +118,7 @@ _DELETION_ORDER = [
     ('bread_stocks', BreadStock),
     ('daily_opening_confirmation_lines', DailyOpeningConfirmationLine),
     ('daily_opening_confirmations', DailyOpeningConfirmation),
+    ('daily_team_assignments', DailyTeamAssignment),
     ('daily_bread_stock_snapshots', DailyBreadStockSnapshot),
     ('invoice_lines', InvoiceLine),
     ('invoices', Invoice),

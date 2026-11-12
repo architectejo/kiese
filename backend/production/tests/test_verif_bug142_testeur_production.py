@@ -181,29 +181,12 @@ class Bug142CarryoverEndToEndTests(TestCase):
         mvm_attendu = _q2(reste_du_hier_fc + reste_du_jour_fc)
         self.assertEqual(Decimal(row300['facture_mvm_interne']['fc']), mvm_attendu)
 
-        # --- Point d'attention trouvé en relisant le code (signalé, pas un
-        # blocage de BUG-142) : `total_breads_produced` (champ de session,
-        # TOUTES les lignes) sert de dénominateur à la répartition en %,
-        # alors que le numérateur (`produit.quantity`) est désormais filtré
-        # DECLARED seul. Dès qu'une ligne CARRYOVER existe, la somme des %
-        # ne vaut plus 100 — documenté ici comme caractéristique connue de
-        # ce rapport (pas de ce ticket), pas comme une régression de
-        # BUG-142 lui-même (qui ne touche pas `repartition_pct_*`).
+        # BUG-186 (corrigé) : la répartition par quantité porte sur la production
+        # DÉCLARÉE seule (le carryover n'y entre plus) : elle somme à 100 %.
         self.assertEqual(data['totals']['total_breads_produced'], 115)
         pct_qty = {r['bread_price']: Decimal(r['pct']) for r in data['totals']['repartition_pct_par_quantite']}
-        self.assertEqual(
-            pct_qty[self.bp300.pk],
-            (Decimal(100) * Decimal('100') / Decimal(115)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
-        )
-        self.assertNotEqual(
-            pct_qty[self.bp300.pk], Decimal('100.00'),
-            "Caractéristique connue (pas un échec BUG-142) : le dénominateur "
-            "`total_breads_produced` inclut le carryover (115) alors que le "
-            "numérateur `produit.quantity` ne compte que le déclaré (100) — "
-            "la répartition par quantité ne totalise plus 100% dès qu'un "
-            "carryover existe ce jour-là. À signaler séparément si le client "
-            "s'en sert pour une décision chiffrée.",
-        )
+        self.assertEqual(sum(pct_qty.values()), Decimal('100.00'))
+        self.assertEqual(pct_qty[self.bp300.pk], Decimal('100.00'))
 
 
 class Bug142NoDoubleCountingReverseOrderTests(TestCase):

@@ -154,6 +154,16 @@ class Node(models.Model):
             "à la même heure au jour J+1."
         )
     )
+    team_rotation_enabled = models.BooleanField(
+        default=False,
+        db_default=False,
+        verbose_name=_("Rotation d'équipes active"),
+        help_text=_(
+            "BUG-161 : si activé, la facturation est bloquée tant que l'équipe "
+            "de service de la journée de travail n'est pas désignée. Désactivé "
+            "par défaut (comportement historique)."
+        )
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

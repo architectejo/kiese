@@ -20,6 +20,9 @@ export interface BakeryNode {
   team_a_end_time: string | null;
   team_b_start_time: string | null;
   team_b_end_time: string | null;
+  // BUG-161 : heure de relève ("HH:MM:SS") et mode rotation de 24 h.
+  handover_time?: string;
+  team_rotation_enabled?: boolean;
 }
 
 // <input type="time"> attend/renvoie "HH:MM" ; l'API lit/écrit "HH:MM:SS" (ou null).
@@ -66,7 +69,9 @@ export const Nodes: React.FC = () => {
     team_a_start_time: '',
     team_a_end_time: '',
     team_b_start_time: '',
-    team_b_end_time: ''
+    team_b_end_time: '',
+    handover_time: '12:00',
+    team_rotation_enabled: false,
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -99,7 +104,9 @@ export const Nodes: React.FC = () => {
         team_a_start_time: toTimeInputValue(node.team_a_start_time),
         team_a_end_time: toTimeInputValue(node.team_a_end_time),
         team_b_start_time: toTimeInputValue(node.team_b_start_time),
-        team_b_end_time: toTimeInputValue(node.team_b_end_time)
+        team_b_end_time: toTimeInputValue(node.team_b_end_time),
+        handover_time: toTimeInputValue(node.handover_time) || '12:00',
+        team_rotation_enabled: !!node.team_rotation_enabled,
       });
     } else {
       setEditingNode(null);
@@ -112,7 +119,9 @@ export const Nodes: React.FC = () => {
         team_a_start_time: '',
         team_a_end_time: '',
         team_b_start_time: '',
-        team_b_end_time: ''
+        team_b_end_time: '',
+        handover_time: '12:00',
+        team_rotation_enabled: false,
       });
     }
     setFormErrors({});
@@ -139,6 +148,7 @@ export const Nodes: React.FC = () => {
       team_a_end_time: fromTimeInputValue(formData.team_a_end_time),
       team_b_start_time: fromTimeInputValue(formData.team_b_start_time),
       team_b_end_time: fromTimeInputValue(formData.team_b_end_time),
+      handover_time: fromTimeInputValue(formData.handover_time) ?? '12:00:00',
     };
     setIsSavingNode(true);
     try {
@@ -391,6 +401,40 @@ export const Nodes: React.FC = () => {
                 </span>
               </div>
 
+              <div style={{ border: '1px solid hsl(var(--border-color))', borderRadius: 'var(--radius-sm)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div>
+                  <label htmlFor="node-handover-time" style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px' }}>
+                    Heure de relève des équipes
+                  </label>
+                  <input
+                    id="node-handover-time"
+                    type="time"
+                    required
+                    value={formData.handover_time}
+                    onChange={(e) => { setFormData({ ...formData, handover_time: e.target.value }); setFormErrors(p => ({ ...p, handover_time: '' })); }}
+                    className="form-input"
+                    style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px', maxWidth: '160px', borderColor: formErrors.handover_time ? 'hsl(var(--color-danger))' : '' }}
+                  />
+                  {formErrors.handover_time && <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', marginTop: '3px', display: 'block' }}>{formErrors.handover_time}</span>}
+                  <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
+                    Heure à laquelle une équipe remplace l'autre (défaut 12:00). La journée de travail va de cette heure à la même heure le lendemain.
+                  </span>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.team_rotation_enabled}
+                    onChange={(e) => setFormData({ ...formData, team_rotation_enabled: e.target.checked })}
+                    style={{ width: '20px', height: '20px', marginTop: '1px', flexShrink: 0 }}
+                  />
+                  <span>Rotation d'équipes de 24 h (désignation quotidienne de l'équipe de service)</span>
+                </label>
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-warning))', lineHeight: 1.4 }}>
+                  Lorsque cette option est activée, la facturation de cette boulangerie est bloquée tant que le gérant ou le facturier n'a pas désigné l'équipe de service du jour (une boîte lui est présentée à l'ouverture).
+                </span>
+                {formErrors.team_rotation_enabled && <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))' }}>{formErrors.team_rotation_enabled}</span>}
+              </div>
+
               <div>
                 <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '6px' }}>
                   Créneaux Horaires des Équipes
@@ -442,7 +486,7 @@ export const Nodes: React.FC = () => {
                   </div>
                 </div>
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                  Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
+                  Ces horaires seront remplacés par l'heure de relève ci-dessus ; ils servent encore, pour l'instant, à la confirmation du stock de départ. Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
                 </span>
               </div>
 

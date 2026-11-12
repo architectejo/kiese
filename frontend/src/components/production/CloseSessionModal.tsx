@@ -21,6 +21,8 @@ import { ShiftEndPendingState } from '@/store/shiftEndStore';
 
 export interface CloseSessionModalProps {
   isOpen: boolean;
+  /** BUG-188 : masquée mais montée (saisie conservée) pendant la désignation d'équipe. */
+  suspended?: boolean;
   session: ProductionSession | null;
   onClose: () => void;
   /** Appelé avec la session mise à jour (is_closed=true, closure_summary) après succès. */
@@ -52,7 +54,7 @@ interface UnifiedCategoryRow {
 }
 
 export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
-  isOpen, session, onClose, onClosed, forced = null, onForcedClose,
+  isOpen, session, onClose, onClosed, forced = null, onForcedClose, suspended = false,
 }) => {
   const [quantities, setQuantities] = useState<Record<number, number>>({});
   const [loadingExisting, setLoadingExisting] = useState(false);
@@ -174,6 +176,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
   return (
     <Modal
       isOpen={isOpen}
+      suspended={suspended}
       onClose={() => { if (!submitting && !isForced) onClose(); }}
       title={isForced ? `Clôture du créneau — Équipe ${forced!.team}` : 'Clôturer la Fournée'}
       subtitle={

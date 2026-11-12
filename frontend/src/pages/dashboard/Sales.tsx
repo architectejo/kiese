@@ -5,7 +5,8 @@ import {
   FiAlertCircle, FiSearch, FiX, FiPrinter, FiChevronRight, FiCreditCard
 } from 'react-icons/fi';
 import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdjustPayload } from '@/api/services';
-import { getErrorDetail } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
+import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
 import { ThermalReceipt, ReceiptData, ReceiptLine } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
@@ -32,6 +33,8 @@ interface QueueItem {
   totalLoss: number;
   isRepayment: boolean;
   specialCode: string;
+  /** BUG-177 : facture « Non Servi » (NS) — reste PENDING indéfiniment, jamais livrable. */
+  isNonServi: boolean;
   status: 'En attente' | 'Livré';
   invoiceDate: string;
   timeAdded: string;
@@ -67,6 +70,7 @@ const mapInvoice = (inv: Invoice, bpMap: Record<number, BreadPrice>): QueueItem 
   totalLoss: parseFloat(inv.total_loss || '0') || 0,
   isRepayment: inv.is_debt_repayment === true,
   specialCode: inv.special_code || '',
+  isNonServi: inv.special_code === 'NS' && inv.is_debt_repayment !== true,
   status: inv.status === 'DELIVERED' || inv.status === 'CANCELLED' ? 'Livré' : 'En attente',
   invoiceDate: inv.invoice_date || inv.created_at?.split('T')[0] || '',
   timeAdded: new Date(inv.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
@@ -78,7 +82,11 @@ const mapInvoice = (inv: Invoice, bpMap: Record<number, BreadPrice>): QueueItem 
 });
 
 // ── Main component ─────────────────────────────────────────────────────────────
+const TEAM_NOT_ASSIGNED_MESSAGE =
+  "Désignez l'équipe de service du jour avant de facturer. La boîte de désignation vient de s'ouvrir.";
+
 export const Sales: React.FC = () => {
+  const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
   const { user } = useAuthStore();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
@@ -129,6 +137,8 @@ export const Sales: React.FC = () => {
   const [commissionExempt, setCommissionExempt] = useState(false);
   const [specialCode, setSpecialCode] = useState<'' | 'NV' | 'RG' | 'NS'>('');
   const [showSpecialCode, setShowSpecialCode] = useState(false);
+  // BUG-177 : choix du client non servi (CREDIT = garde la dette, CASH = payé comptant).
+  const [nsPaymentType, setNsPaymentType] = useState<'CASH' | 'CREDIT'>('CREDIT');
 
   // "Voir plus" — full delivery queue modal
   const [queueModalOpen, setQueueModalOpen] = useState(false);
@@ -190,9 +200,10 @@ export const Sales: React.FC = () => {
       setBreadPrices(bps);
       setBpMap(map);
       const TWELVE_H = 12 * 60 * 60 * 1000;
+      // BUG-177 : une facture NS reste PENDING indéfiniment (jamais purgée côté serveur).
       const keepInvoice = (inv: Invoice) =>
         inv.status !== 'CANCELLED' &&
-        (inv.status !== 'PENDING' || (Date.now() - new Date(inv.created_at).getTime()) < TWELVE_H);
+        (inv.status !== 'PENDING' || inv.special_code === 'NS' || (Date.now() - new Date(inv.created_at).getTime()) < TWELVE_H);
       setQueue(invoicesRes.data.results.filter(keepInvoice).map(inv => mapInvoice(inv, map)));
       const initQty: Record<number, number> = {};
       bps.forEach(b => { initQty[b.id] = 0; });
@@ -297,7 +308,13 @@ export const Sales: React.FC = () => {
   // demi supérieur pour un nombre positif, équivalent à ROUND_HALF_UP ici.
   const effectiveUnitPrice = (bp: BreadPrice) => (venteSoldee ? Math.round(bp.unit_price * 0.75) : bp.unit_price);
   const orderTotal = breadPrices.reduce((sum, b) => sum + (quantities[b.id] || 0) * effectiveUnitPrice(b), 0);
-  const paymentType: 'CASH' | 'CREDIT' = versement >= orderTotal && orderTotal > 0 ? 'CASH' : 'CREDIT';
+  const isNonServiForm = specialCode === 'NS';
+  const isRegularisationForm = specialCode === 'RG';
+  // BUG-177 : pour NS, le type de paiement exprime le choix du client (garde la dette ou non) ;
+  // sinon il est déduit du versement comme avant.
+  const paymentType: 'CASH' | 'CREDIT' = isNonServiForm
+    ? nsPaymentType
+    : (versement >= orderTotal && orderTotal > 0 ? 'CASH' : 'CREDIT');
 
   const resetForm = () => {
     setSelectedClient(null);
@@ -307,6 +324,7 @@ export const Sales: React.FC = () => {
     setCommissionExempt(false);
     setIsOccasional(false);
     setSpecialCode('');
+    setNsPaymentType('CREDIT');
     setShowSpecialCode(false);
     setInvoiceDate('');
     setQuantities(prev => { const q: Record<number, number> = {}; Object.keys(prev).forEach(k => { q[Number(k)] = 0; }); return q; });
@@ -334,7 +352,9 @@ export const Sales: React.FC = () => {
         receiptNumber: inv.receipt_number,
         boulangerie: inv.node_display || inv.node || '—',
         agentName: user?.first_name ? `${user.first_name} ${user.last_name}` : 'Facturier',
-        team: user?.team || 'A',
+        // BUG-184 : équipe portée par la facture (équipe de service si rotation active) ;
+        // repli sur l'équipe de l'utilisateur : facture qu'il vient de créer.
+        team: inv.team || user?.team || 'A',
         clientCode: inv.client_code || selectedClient.code,
         clientName: inv.client_display || selectedClient.full_name,
         lines: [],
@@ -360,7 +380,14 @@ export const Sales: React.FC = () => {
       setRepaymentDate('');
       clearClient();
     } catch (err: unknown) {
-      setRepaymentError(getErrorDetail(err, 'Erreur lors de l\'enregistrement.'));
+      if (isTeamNotAssignedError(err)) {
+        // BUG-161 : équipe de service non désignée — aucun reçu, aucune facture locale ;
+        // la boîte de désignation du tableau de bord se rouvre.
+        setRepaymentError(TEAM_NOT_ASSIGNED_MESSAGE);
+        requestTeamAssignment();
+      } else {
+        setRepaymentError(getErrorDetail(err, 'Erreur lors de l\'enregistrement.'));
+      }
     } finally {
       setRepaymentLoading(false);
     }
@@ -442,7 +469,8 @@ export const Sales: React.FC = () => {
       const res = await salesApi.create({
         client: isOccasional ? null : selectedClient?.id,
         payment_type: paymentType,
-        payment_amount: versement.toString(),
+        // BUG-177 : aucun versement pour NS (rien n'est remis) ni RG (aucune dette créée).
+        payment_amount: (isNonServiForm || isRegularisationForm ? 0 : versement).toString(),
         ...(venteSoldee ? { commission_rate: '0.00', is_soldee: true } : {}),
         // BUG-052 : exonération de commission dédiée, indépendante de « Vente Soldée » —
         // forcée côté serveur (comm_rate=0) même si combinée avec is_soldee (§ ci-dessus).
@@ -461,6 +489,12 @@ export const Sales: React.FC = () => {
       }
       resetForm();
     } catch (err: unknown) {
+      if (isTeamNotAssignedError(err)) {
+        // BUG-161 : aucune facture créée, aucun reçu ; on rouvre la désignation d'équipe.
+        setFormError(TEAM_NOT_ASSIGNED_MESSAGE);
+        requestTeamAssignment();
+        return;
+      }
       const detail = axios.isAxiosError(err) ? err.response?.data : undefined;
       const msg = typeof detail === 'string' ? detail
         : (detail as { detail?: string; client?: string[]; lines?: string[] } | undefined)?.detail
@@ -475,7 +509,10 @@ export const Sales: React.FC = () => {
   };
 
   const cancelInvoice = async (item: QueueItem) => {
-    if (!window.confirm(`Annuler la commande ${item.id} de ${item.clientName} ?\nLe stock de pains sera restitué et la balance client ajustée.`)) return;
+    const consequence = item.isNonServi
+      ? 'Aucun stock n\'est concerné ; la dette éventuelle du client sera annulée.'
+      : 'Le stock de pains sera restitué et la balance client ajustée.';
+    if (!window.confirm(`Annuler la commande ${item.id} de ${item.clientName} ?\n${consequence}`)) return;
     try {
       await salesApi.cancel(item._apiId);
       setQueue(prev => prev.filter(q => q._apiId !== item._apiId));
@@ -503,7 +540,9 @@ export const Sales: React.FC = () => {
         receiptNumber: inv.receipt_number,
         boulangerie: inv.node_display || inv.node || '—',
         agentName: user?.first_name ? `${user.first_name} ${user.last_name}` : 'Facturier',
-        team: user?.team || 'A',
+        // BUG-184 : la livraison peut concerner une facture d'un autre utilisateur ou plus
+        // ancienne : jamais de repli sur l'équipe de l'utilisateur connecté.
+        team: inv.team || '—',
         clientCode: item.clientCode || '—',
         clientName: inv.client_display || item.clientName,
         lines: receiptLines,
@@ -551,13 +590,14 @@ export const Sales: React.FC = () => {
   };
 
   const queueProgressLabel = `calcul en cours… ${queueProgress.loaded}/${queueProgress.total ?? '…'}`;
-  const pendingCount = queue.filter(o => o.status === 'En attente').length;
-  const livrésCount = queue.filter(o => o.status === 'Livré').length;
-  const totalFacture = queue.reduce((a, o) => a + o.totalValue, 0);
+  const pendingCount = queue.filter(o => o.status === 'En attente' && !o.isNonServi).length;
+  const livrésCount = queue.filter(o => o.status === 'Livré').length;  const totalFacture = queue.reduce((a, o) => a + o.totalValue, 0);
 
   // ── Renders a single delivery-queue card (reused by main view & "Voir plus" modal) ──
   const renderQueueCard = (item: QueueItem, detailed: boolean = false) => {
-    const isPending = item.status === 'En attente';
+    // BUG-177 : une NS n'est jamais « à livrer » ; elle est affichée comme enregistrée.
+    const isNonServi = item.isNonServi;
+    const isPending = item.status === 'En attente' && !isNonServi;
     const avatarColor = `hsl(${(item.clientName.charCodeAt(0) * 37 + (item.clientCode.charCodeAt(3) || 0) * 13) % 360}, 58%, 38%)`;
     return (
       <div key={item.id} style={{
@@ -607,8 +647,8 @@ export const Sales: React.FC = () => {
               {detailed ? `${item.invoiceDate ? new Date(item.invoiceDate).toLocaleDateString('fr-FR') : '—'} ${item.timeAdded}` : item.timeAdded}
             </span>
           </div>
-          <span className={`badge ${isPending ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.58rem' }}>
-            {item.status.toUpperCase()}
+          <span className={`badge ${isNonServi ? 'badge-secondary' : isPending ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.58rem' }}>
+            {isNonServi ? 'NON SERVIE — ENREGISTRÉE' : item.status.toUpperCase()}
           </span>
         </div>
 
@@ -754,7 +794,24 @@ export const Sales: React.FC = () => {
             </div>
           );
         })()}
-        {!isPending && (
+        {isNonServi && (
+          <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--text-secondary))', fontSize: '0.7rem', fontWeight: 700 }}>
+              <FiCheckCircle />
+              <span>Non servie — enregistrée (aucun pain remis, rien à livrer)</span>
+            </div>
+            <button
+              onClick={() => cancelInvoice(item)}
+              className="btn btn-secondary"
+              style={{ padding: '3px 10px', fontSize: '0.62rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'hsl(var(--color-danger))', borderColor: 'hsl(var(--color-danger) / 0.4)' }}
+              title="Annuler cet enregistrement de non servi"
+            >
+              <FiX />
+              <span>Annuler</span>
+            </button>
+          </div>
+        )}
+        {!isPending && !isNonServi && (
           <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--color-success))', fontSize: '0.7rem', fontWeight: 700 }}>
               <FiCheckCircle />
@@ -1116,8 +1173,35 @@ export const Sales: React.FC = () => {
               )}
             </div>
 
+            {/* BUG-177 : Non Servi — le type de paiement exprime le choix du client, sans versement */}
+            {isNonServiForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--color-warning))', textTransform: 'uppercase' }}>
+                  Client non servi — dette
+                </label>
+                <select
+                  value={nsPaymentType}
+                  onChange={e => setNsPaymentType(e.target.value as 'CASH' | 'CREDIT')}
+                  className="form-input"
+                  style={{ height: '34px', fontSize: '0.78rem' }}
+                  aria-label="Choix du client non servi"
+                >
+                  <option value="CREDIT">Le client garde la dette</option>
+                  <option value="CASH">Payé comptant</option>
+                </select>
+                <span style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))' }}>
+                  Aucun pain n'est retiré du stock ; la dette n'est enregistrée que si le client la garde.
+                </span>
+              </div>
+            )}
+            {isRegularisationForm && (
+              <div style={{ fontSize: '0.64rem', color: 'hsl(var(--text-muted))', padding: '0 2px' }}>
+                Régularisation : aucune dette n'est créée (aucun versement à saisir).
+              </div>
+            )}
+
             {/* Versement + auto payment type */}
-            <div>
+            {!isNonServiForm && !isRegularisationForm && <div>
               <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--color-success))', marginBottom: '2px', textTransform: 'uppercase' }}>
                 Versement du Jour (FC)
               </label>
@@ -1142,7 +1226,7 @@ export const Sales: React.FC = () => {
                     : `Nouvelle BP ≈ ${(parseFloat(selectedClient.current_debt) + orderTotal - versement).toLocaleString('fr-FR')} FC`}
                 </div>
               )}
-            </div>
+            </div>}
 
             {formError && (
               <div style={{ backgroundColor: 'hsl(var(--color-danger) / 0.1)', border: '1px solid hsl(var(--color-danger) / 0.3)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontSize: '0.7rem', color: 'hsl(var(--color-danger))', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
@@ -1153,7 +1237,7 @@ export const Sales: React.FC = () => {
 
             <button type="submit" disabled={isSubmitting} className="btn btn-primary" style={{ padding: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: isSubmitting ? 0.7 : 1 }}>
               <FiCheckCircle />
-              <span>{isSubmitting ? 'Enregistrement...' : 'Facturer & Mettre en Attente'}</span>
+              <span>{isSubmitting ? 'Enregistrement...' : isNonServiForm ? 'Enregistrer le non servi' : 'Facturer & Mettre en Attente'}</span>
             </button>
           </form>
         </div>

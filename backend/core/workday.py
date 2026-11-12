@@ -65,3 +65,40 @@ def next_handover(node, instant=None):
     if candidate <= local:
         candidate = _at(local.date() + timedelta(days=1), node.handover_time)
     return candidate
+
+
+def current_team(node, instant=None):
+    """
+    BUG-161 (B2) : équipe de service désignée pour la journée de travail de
+    `node` à `instant` (défaut : maintenant), ou `None` si aucune désignation.
+    Lecture seule. Import local de `production.models` pour éviter un import
+    circulaire (production dépend de core).
+    """
+    from production.models import DailyTeamAssignment
+
+    return (
+        DailyTeamAssignment.objects
+        .filter(node=node, work_date=business_date(node, instant))
+        .values_list('team', flat=True)
+        .first()
+    )
+
+
+def suggested_team(node, instant=None):
+    """
+    Pré-sélection (simple suggestion modifiable, pas une règle) : l'autre
+    équipe que celle désignée à la journée de travail précédente, ou 'A' s'il
+    n'y a pas d'historique.
+    """
+    from production.models import DailyTeamAssignment
+
+    previous = (
+        DailyTeamAssignment.objects
+        .filter(node=node, work_date__lt=business_date(node, instant))
+        .order_by('-work_date')
+        .values_list('team', flat=True)
+        .first()
+    )
+    if previous == 'A':
+        return 'B'
+    return 'A'

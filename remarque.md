@@ -415,10 +415,14 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
 
-[] Sur la page "Clôture Journalière" le tableau de "Décomposition par Catégorie de Pain", la colone de "Régularisation" et celle de "Non Servi" répresente quoi ? et pourquoi elle reste toujours à zéro ?
+[c] Sur la page "Clôture Journalière" le tableau de "Décomposition par Catégorie de Pain", la colone de "Régularisation" et celle de "Non Servi" répresente quoi ? et pourquoi elle reste toujours à zéro ? — Réponse (2026-11-11) : « Régularisation » = pains ajoutés/retirés par les factures d'AJUSTEMENT du jour (correction d'une commande déjà enregistrée, BUG-097, réservée au gérant et plus haut) ; « Non Servi » = pains des factures portant le code spécial NS (adaptes.md : boulangerie fermée ce jour-là, donc en pratique une facture SANS ligne de pain). Les deux colonnes restent à zéro tant qu'aucune facture d'ajustement / NS n'a été saisie (base repartie de zéro) ; « Non Servi » reste de plus à zéro même après saisie d'une facture NS sans ligne, car la colonne additionne des quantités de pains. Décision client (2026-11-11) : « Non Servi » = SOMME DES MONTANTS des factures non servies. Cause réelle trouvée de la colonne toujours à zéro : le rapport ne lit que les factures LIVRÉES, or une facture NS n'est jamais livrée (et si elle reste « en attente » elle est supprimée après 12 h). Traité sous BUG-177 (ticket ouvert, démarre après l'étape B2 de la rotation, mêmes fichiers).
 
-[] Comme dans "Gestion Clientèle" les données des autres pages vont doivent aussi se charger progrésivement
+[c] Comme dans "Gestion Clientèle" les données des autres pages vont doivent aussi se charger progrésivement — traité sous BUG-163/164 (+171 à 176) : hook partagé de chargement progressif, appliqué à Activités, Notifications, Utilisateurs, Tableau de bord, Trésorerie, Commissions, Blockchain, Production, Ventes ; aucun total/solde/impression partiel présenté comme final ; tri serveur déterministe. Poussé le 2026-11-11 ; contrôle manuel navigateur recommandé.
 
-[] Au niveau du "Journal d'Activités" on doit avoir le bouton "Voir plus" pour remonter plus loin dans les activités
+[c] Au niveau du "Journal d'Activités" on doit avoir le bouton "Voir plus" pour remonter plus loin dans les activités — traité sous BUG-163 : bouton « Voir plus » (50 entrées par page, compteur X/Y). VÉRIFIÉ par relecture de code le 2026-11-11.
 
-[] Au niveau de "Production & Stocks" lors de l'envoi du formulaire "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)" l'utilisateur doit voir que la demande a été envoyer.
+[c] Au niveau de "Production & Stocks" lors de l'envoi du formulaire "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)" l'utilisateur doit voir que la demande a été envoyer. — traité sous BUG-170 : message de succès persistant + bouton « Envoi en cours… » anti double envoi. VÉRIFIÉ par relecture de code le 2026-11-11.
+
+[] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.
+
+[] Dans le tableau de "Décomposition par Catégorie de Pain" enleve le "?" des colones "Non Servi" et "Régularisation"

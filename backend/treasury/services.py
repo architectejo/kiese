@@ -102,10 +102,16 @@ def regenerate_facturier_reports(node, target_date):
     from sales.models import Invoice, InvoiceLine
     from production.models import ProductionSession, ProductionSessionLine
 
+    # BUG-178 : une régularisation (RG) n'est pas une vente (ni paiement, ni
+    # dette, CM 0 — BUG-177) et un non-servi (NS) n'est jamais livré : ni
+    # l'un ni l'autre ne doit compter dans le cash, le crédit, la valeur
+    # vendue ni le détail par catégorie du rapport facturier.
     invoices = Invoice.objects.filter(
         node=node,
         delivered_at__date=target_date,
         status=Invoice.Status.DELIVERED,
+    ).exclude(
+        special_code__in=[Invoice.SpecialCode.RG, Invoice.SpecialCode.NS],
     ).select_related('facturier')
 
     if not invoices.exists():

@@ -22,6 +22,8 @@ export interface AutoClosedNoticeModalProps {
   /** Nombre total d'annonces en attente, celle-ci comprise. */
   pendingCount: number;
   onConfirm: (notice: AutoClosedNotice) => void;
+  /** BUG-188 : masquée pendant la désignation d'équipe (priorité), sans être démontée. */
+  suspended?: boolean;
 }
 
 const formatNoticeDate = (isoDay: string): string => {
@@ -36,7 +38,7 @@ const formatNoticeDate = (isoDay: string): string => {
 const CONFIRM_ARM_DELAY_MS = 700;
 
 export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
-  notice, pendingCount, onConfirm,
+  notice, pendingCount, onConfirm, suspended = false,
 }) => {
   const [armed, setArmed] = useState(false);
 
@@ -49,6 +51,7 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
   return (
   <Modal
     isOpen={true}
+    suspended={suspended}
     onClose={() => { /* non fermable sans confirmation explicite (Échap inclus) */ }}
     title={`Clôture automatique — Équipe ${notice.team}`}
     subtitle={`Constatée le ${formatNoticeDate(notice.date)}`}

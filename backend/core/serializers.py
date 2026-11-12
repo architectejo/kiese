@@ -19,7 +19,7 @@ class NodeSerializer(serializers.ModelSerializer):
             'last_sync', 'display_name',
             'team_a_start_time', 'team_a_end_time',
             'team_b_start_time', 'team_b_end_time',
-            'handover_time',
+            'handover_time', 'team_rotation_enabled',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']

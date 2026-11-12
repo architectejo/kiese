@@ -152,11 +152,40 @@ class Invoice(SyncableModel):
             total += line.loss
         return total
 
-    def compute_debt_after(self):
+    @property
+    def debt_delta(self):
+        """Variation de la BP (dette client) portée par cette facture.
+
+        Source unique pour `create`, `cancel`, `cleanup_expired` et
+        `compute_debt_after` (BUG-177) :
+        - vente soldée : 0 (manquant passé en perte) ;
+        - NS (non servi) : jamais de pains remis ; le client « peut décider
+          de garder une dette » -> CREDIT : `order_total - payment_amount`,
+          CASH : 0 ;
+        - RG (régularisation) : 0 (comme le classeur : CM 0, ni paiement ni
+          dette) ;
+        - sinon : `order_total - payment_amount`.
+
+        BUG-181 : une facture d'AJUSTEMENT (BUG-097) suit la nature de la
+        facture d'origine (son propre `special_code` est vide) : ajustement
+        d'une NS CASH ou d'une RG -> 0 ; NS CREDIT -> `order_total - paiement`
+        (valeurs signées de l'ajustement).
+        """
+        code = self.special_code
+        if self.is_adjustment and self.adjusts_id:
+            code = self.adjusts.special_code
         if self.is_soldee:
-            self.debt_after = self.debt_before
-        else:
-            self.debt_after = self.debt_before + self.order_total - self.payment_amount
+            return Decimal('0.00')
+        if code == self.SpecialCode.NS:
+            if self.payment_type == self.PaymentType.CREDIT:
+                return self.order_total - self.payment_amount
+            return Decimal('0.00')
+        if code == self.SpecialCode.RG:
+            return Decimal('0.00')
+        return self.order_total - self.payment_amount
+
+    def compute_debt_after(self):
+        self.debt_after = self.debt_before + self.debt_delta
         return self.debt_after
 
     def deliver(self, livreur, delivered_at=None):

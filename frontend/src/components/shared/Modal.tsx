@@ -26,6 +26,11 @@ export interface ModalProps {
    *  bring their own fully custom header/body/footer layout (e.g. tabs,
    *  dynamic icons) — those manage their own internal padding. */
   contentPadding?: string;
+  /** BUG-188 : la boîte reste MONTÉE (l'état local de ses enfants est conservé)
+   *  mais masquée (`display: none`) et neutralisée : pas de verrou de défilement,
+   *  pas de piège de focus, pas de gestion d'Échap. Sert à céder la place à une
+   *  boîte plus prioritaire (désignation d'équipe) sans perdre une saisie en cours. */
+  suspended?: boolean;
 }
 
 /**
@@ -51,6 +56,7 @@ export const Modal: React.FC<ModalProps> = ({
   closeOnBackdropClick = true,
   showCloseButton = true,
   contentPadding,
+  suspended = false,
 }) => {
   const cardRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -64,8 +70,10 @@ export const Modal: React.FC<ModalProps> = ({
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
+  const active = isOpen && !suspended;
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (!active) return;
     openModalCount += 1;
     document.body.classList.add('modal-open');
     previouslyFocused.current = document.activeElement as HTMLElement | null;
@@ -104,13 +112,14 @@ export const Modal: React.FC<ModalProps> = ({
       previouslyFocused.current?.focus?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [active]);
 
   if (!isOpen) return null;
 
   return createPortal(
     <div
       className="modal-backdrop"
+      aria-hidden={suspended || undefined}
       onClick={closeOnBackdropClick ? onClose : undefined}
       style={{
         position: 'fixed',
@@ -118,7 +127,7 @@ export const Modal: React.FC<ModalProps> = ({
         backgroundColor: 'rgba(0, 0, 0, 0.6)',
         backdropFilter: 'blur(8px)',
         zIndex: 1000, // mirrors --z-modal-backdrop in styles/index.css
-        display: 'flex',
+        display: suspended ? 'none' : 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}

@@ -14,7 +14,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from core.models import Config, Node, BreadPrice
 from core.permissions import IsGerant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
-from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, _adjust_bread_stock
+from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, DailyTeamAssignment, _adjust_bread_stock
 from .serializers import (
     ProductionSessionSerializer, BreadStockSerializer, ConsumableTypeSerializer, ConsumableStockSerializer,
     ConsumableMovementSerializer, ConsumableCountSerializer, BreadTransferSerializer, BreadDisposalSerializer,
@@ -1551,8 +1551,10 @@ def _build_daily_closure_report(node, report_date):
     # FACTURE/JR : ventes normales (ni soldées, ni ajustements, ni « non
     # servi », ni facture de mouvement interne codée par un code boulangerie
     # — ces trois dernières ont chacune leur propre rubrique ci-dessous).
+    # BUG-177 : les `RG` sortent aussi de FACTURE/JR (colonne « Régularisation »,
+    # pas de double comptage).
     normal_invoices = base_invoices.filter(is_adjustment=False, is_soldee=False) \
-        .exclude(special_code=Invoice.SpecialCode.NS) \
+        .exclude(special_code__in=[Invoice.SpecialCode.NS, Invoice.SpecialCode.RG]) \
         .exclude(special_code__in=node_codes)
     normal_by_bp = {
         row['bread_price_id']: row for row in
@@ -1573,7 +1575,11 @@ def _build_daily_closure_report(node, report_date):
     }
 
     # VENTE CASH/VENTE SOLDE (CLAUDE.md §5.1 : prix à 75 %, CM = 0).
-    soldee_invoices = base_invoices.filter(is_adjustment=False, is_soldee=True)
+    # BUG-185 : une RG (ou NS) n'est JAMAIS une vente, quelles que soient ses
+    # cases (`is_soldee`, `commission_exempt`) : exclue d'ici, comptée une
+    # seule fois en « Régularisation » (prix pleins).
+    soldee_invoices = base_invoices.filter(is_adjustment=False, is_soldee=True) \
+        .exclude(special_code__in=[Invoice.SpecialCode.NS, Invoice.SpecialCode.RG])
     soldee_by_bp = {
         row['bread_price_id']: row for row in
         InvoiceLine.objects.filter(invoice__in=soldee_invoices)
@@ -1594,11 +1600,28 @@ def _build_daily_closure_report(node, report_date):
             entry = regularisation_by_bp.setdefault(line.bread_price_id, {'qty': 0, 'fc': Decimal('0.00')})
             entry['qty'] += sign * line.quantity
             entry['fc'] += sign * line.line_total
+    # BUG-177 : + factures `RG` (quantités POSITIVES, rattrapage d'un non-servi
+    # antérieur, K6!L13), livrées comme les ventes, valorisées aux prix pleins.
+    rg_invoices = base_invoices.filter(is_adjustment=False, special_code=Invoice.SpecialCode.RG)
+    # BUG-185 : une RG est TOUJOURS valorisée à prix plein, même si la case
+    # « soldée » est cochée (les lignes sont alors figées à 75 % : on relit
+    # alors le prix du catalogue).
+    for line in InvoiceLine.objects.filter(invoice__in=rg_invoices).select_related('invoice', 'bread_price'):
+        entry = regularisation_by_bp.setdefault(line.bread_price_id, {'qty': 0, 'fc': Decimal('0.00')})
+        entry['qty'] += line.quantity or 0
+        entry['fc'] += (
+            Decimal(line.quantity) * Decimal(line.bread_price.unit_price)
+            if line.invoice.is_soldee else Decimal(line.line_total)
+        )
 
-    # NON SERVI/S : facture au code spécial NS — par construction sans ligne
-    # réelle en général, mais agrégée comme les autres par sécurité (aucune
-    # hypothèse imposée sur son contenu).
-    ns_invoices = base_invoices.filter(special_code=Invoice.SpecialCode.NS)
+    # NON SERVI/S (BUG-177) : factures `NS` du jour, PENDING et DELIVERED
+    # (jamais CANCELLED) — une NS reste PENDING par définition. Montant =
+    # Σ order_total (lignes aux prix pleins), quantités en information ;
+    # contribution NÉGATIVE au total (K6!L12 -> L21), voir `mvm_interne_fc`.
+    ns_invoices = Invoice.objects.filter(
+        node=node, invoice_date=report_date, special_code=Invoice.SpecialCode.NS,
+        is_debt_repayment=False, is_adjustment=False,
+    ).exclude(status=Invoice.Status.CANCELLED)
     ns_by_bp = {
         row['bread_price_id']: row for row in
         InvoiceLine.objects.filter(invoice__in=ns_invoices)
@@ -1739,7 +1762,7 @@ def _build_daily_closure_report(node, report_date):
         mvm_interne_fc = _m(
             reste_du_jour_fc + reste_du_hier_fc
             + appro_effectue_fc + appro_recu_fc
-            + non_servi_fc + reg_fc
+            - non_servi_fc + reg_fc  # BUG-177 : NS retranchée (signe du classeur)
             + soldee_fc  # VENTE CASH + VENTE SOLDE : un seul bucket existant (is_soldee)
             + _m(non_vendu_entry['fc']) + _m(declasses_entry['fc'])
             # EXCEDENT PAINS + MANQUANT PAINS : non modélisés par catégorie (0)
@@ -1759,7 +1782,12 @@ def _build_daily_closure_report(node, report_date):
             'reste_du_hier': reste_du_hier_by_team,
             'appro_effectue': {'quantity': appro_effectue_qty, 'fc': str(appro_effectue_fc)},
             'appro_recu':     {'quantity': appro_recu_qty, 'fc': str(appro_recu_fc)},
-            'non_servi': {'quantity': ns.get('qty') or 0, 'fc': str(non_servi_fc)},
+            # `fc` = montant POSITIF affiché ; `fc_signe` = contribution
+            # réelle aux totaux (négative, K6!L12).
+            'non_servi': {
+                'quantity': ns.get('qty') or 0, 'fc': str(non_servi_fc),
+                'fc_signe': str(-non_servi_fc) if non_servi_fc else '0.00',
+            },
             'regularisation': {'quantity': reg['qty'], 'fc': str(reg_fc)},
             'vente_cash_soldee': {
                 'quantity': soldee.get('qty') or 0, 'fc': str(soldee_fc),
@@ -1775,6 +1803,7 @@ def _build_daily_closure_report(node, report_date):
         total_commission_fc += commission_fc
         total_mvm_interne_fc += mvm_interne_fc
         total_produced_value_fc += produced_value_fc
+        # BUG-177 : NS exclue (pas une commande servie) ; RG incluse via `reg`.
         total_breads_billed += (normal.get('qty') or 0) + (soldee.get('qty') or 0) + reg['qty']
 
     # TOTAL DU JOUR (Q-006, réponse client) : facturation normale aux
@@ -1791,7 +1820,8 @@ def _build_daily_closure_report(node, report_date):
     # construction — ce n'est jamais une commande, CLAUDE.md §5.2).
     ecart_facture_agg = Invoice.objects.filter(
         node=node, invoice_date=report_date, status=Invoice.Status.DELIVERED,
-    ).aggregate(commande=Sum('order_total'), paye=Sum('payment_amount'))
+    ).exclude(special_code=Invoice.SpecialCode.NS).aggregate(  # BUG-177 : NS n'est pas une commande
+        commande=Sum('order_total'), paye=Sum('payment_amount'))
     ecart_facture_fc = _m(ecart_facture_agg['commande']) - _m(ecart_facture_agg['paye'])
     moyenne_produit_par_sac_fc = (
         (net_produit_fc / sacs_produits).quantize(_MONEY_Q, rounding=ROUND_HALF_UP)
@@ -1810,12 +1840,17 @@ def _build_daily_closure_report(node, report_date):
     # revient au frontend (futur sélecteur côté gérant), jamais tranché ici.
     repartition_pct_par_quantite = []
     repartition_pct_par_valeur = []
+    # BUG-186 : convention = répartition de la production DÉCLARÉE (lignes
+    # DECLARED, colonne « produit »). Le dénominateur est la somme de ces
+    # mêmes quantités (et non `total_breads_produced`, qui inclut les lignes
+    # CARRYOVER du stock de départ, BUG-142) : la répartition somme à 100 %.
+    declared_qty_total = sum(row['produit']['quantity'] or 0 for row in categories_payload)
     for row in categories_payload:
         qty = row['produit']['quantity']
         pct_qty = (
-            (Decimal(qty) * Decimal('100') / Decimal(total_breads_produced))
+            (Decimal(qty) * Decimal('100') / Decimal(declared_qty_total))
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            if qty and total_breads_produced else Decimal('0.00')
+            if qty and declared_qty_total else Decimal('0.00')
         )
         repartition_pct_par_quantite.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_qty)})
 
@@ -2349,3 +2384,134 @@ class DailyOpeningConfirmationView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class TeamAssignmentView(APIView):
+    """
+    BUG-161 (B2) : désignation MANUELLE de l'équipe de service de la journée
+    de travail courante (de relève à relève, `core.workday`).
+
+    `GET /api/production/team-assignment/?node=<code ou pk>` renvoie
+    `{work_date, handover_time, team|null, suggested, assigned_by, server_now}`
+    (`node` obligatoire pour un HQ ; ignoré pour un non-HQ, comme les autres
+    vues de ce module).
+
+    `POST` `{"node": …, "team": "A"|"B"}` : upsert pour la journée de travail
+    COURANTE uniquement (le serveur la calcule ; toute `work_date`/`date`
+    explicite différente est refusée en 400). Changer l'équipe d'une journée
+    déjà désignée est permis (correction), journalisé avec l'ancienne valeur.
+    Permissions : `IsFacturier` (FACTURIER, GERANT et supérieurs).
+    """
+    permission_classes = [IsFacturier]
+
+    @staticmethod
+    def _payload(node, now, assignment):
+        from core.workday import business_date, suggested_team
+
+        return {
+            'work_date': business_date(node, now).isoformat(),
+            'handover_time': node.handover_time.strftime('%H:%M'),
+            'team': assignment.team if assignment else None,
+            'suggested': suggested_team(node, now),
+            'assigned_by': (
+                (assignment.assigned_by.get_full_name() or assignment.assigned_by.username)
+                if assignment and assignment.assigned_by else None
+            ),
+            'server_now': now.isoformat(),
+        }
+
+    def get(self, request):
+        from core.workday import business_date
+
+        node, err = _opening_confirmation_resolve_node(request, request.query_params.get('node'))
+        if err is not None:
+            return err
+        now = timezone.now()
+        assignment = (
+            DailyTeamAssignment.objects.select_related('assigned_by')
+            .filter(node=node, work_date=business_date(node, now)).first()
+        )
+        return Response(self._payload(node, now, assignment))
+
+    def post(self, request):
+        from core.workday import business_date
+
+        # BUG-187 : le corps doit être un objet JSON ; `node`/`team` de bon type.
+        data = request.data
+        if not hasattr(data, 'get'):
+            return Response(
+                {'detail': "Corps de requête invalide : un objet JSON est attendu."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        node_param = data.get('node')
+        if node_param is not None and (
+            isinstance(node_param, bool) or not isinstance(node_param, (str, int))
+        ):
+            return Response(
+                {'detail': "Le champ `node` doit être un code ou un identifiant de boulangerie."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        team = data.get('team')
+        if team is not None and not isinstance(team, str):
+            return Response(
+                {'detail': "L'équipe doit être « A » ou « B »."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        node, err = _opening_confirmation_resolve_node(request, node_param)
+        if err is not None:
+            return err
+        if team not in ProductionSession.Team.values:
+            return Response(
+                {'detail': "L'équipe doit être « A » ou « B »."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        now = timezone.now()
+        work_date = business_date(node, now)
+        for key in ('work_date', 'date'):
+            requested = request.data.get(key)
+            if requested not in (None, '') and str(requested) != work_date.isoformat():
+                return Response(
+                    {'detail': (
+                        "La désignation ne peut porter que sur la journée de travail "
+                        f"courante ({work_date.isoformat()}), jamais une date passée ou future."
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        with transaction.atomic():
+            existing = (
+                DailyTeamAssignment.objects.select_for_update()
+                .filter(node=node, work_date=work_date).first()
+            )
+            if existing is None:
+                try:
+                    with transaction.atomic():
+                        assignment = DailyTeamAssignment.objects.create(
+                            node=node, work_date=work_date, team=team, assigned_by=request.user,
+                        )
+                    old_team = None
+                except IntegrityError:
+                    # Désignation concurrente : on retombe sur la mise à jour.
+                    existing = DailyTeamAssignment.objects.select_for_update().get(
+                        node=node, work_date=work_date,
+                    )
+            if existing is not None:
+                old_team = existing.team
+                existing.team = team
+                existing.assigned_by = request.user
+                existing.save(update_fields=['team', 'assigned_by', 'assigned_at'])
+                assignment = existing
+
+            if old_team is None:
+                log_activity(
+                    request.user, "Désignation équipe de service",
+                    f"{node.code} — journée du {work_date.isoformat()} : équipe {team} désignée.",
+                    node_origin=node.code,
+                )
+            elif old_team != team:
+                log_activity(
+                    request.user, "Changement équipe de service",
+                    f"{node.code} — journée du {work_date.isoformat()} : équipe {old_team} remplacée par {team}.",
+                    node_origin=node.code,
+                )
+        return Response(self._payload(node, now, assignment))

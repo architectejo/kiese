@@ -254,6 +254,36 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         except Node.DoesNotExist as e:
             return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        # BUG-161 (B2) : rotation d'équipes — si activée pour ce nœud, la
+        # facturation (vente ET remboursement) est bloquée tant que l'équipe
+        # de service de la journée de travail n'est pas désignée ; la facture
+        # porte alors l'équipe désignée (pas `request.user.team`).
+        # BUG-183 : une vente rétroactive (`invoice_date` passée) porte l'équipe
+        # désignée pour SA journée de travail ; sans désignation, repli sur
+        # `request.user.team` (jamais de blocage pour une vente passée).
+        invoice_team = request.user.team
+        if node.team_rotation_enabled:
+            requested_date_raw = data.get('invoice_date')
+            if requested_date_raw and requested_date_raw != timezone.localdate():
+                from production.models import DailyTeamAssignment
+                past_team = (
+                    DailyTeamAssignment.objects
+                    .filter(node=node, work_date=requested_date_raw)
+                    .values_list('team', flat=True).first()
+                )
+                if past_team:
+                    invoice_team = past_team
+            else:
+                from core.workday import current_team
+                service_team = current_team(node)
+                if service_team is None:
+                    return Response(
+                        {'detail': "Désignez l'équipe de service du jour avant de facturer.",
+                         'code': 'TEAM_NOT_ASSIGNED'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                invoice_team = service_team
+
         client = None
         client_id = data.get('client')
         if client_id:
@@ -291,6 +321,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         payment_amount = data['payment_amount']
 
+        # BUG-177 : NS (non servi) et RG (régularisation) — écritures de
+        # classeur (K6!L12:L13), pas des ventes ordinaires.
+        is_ns = special_code == Invoice.SpecialCode.NS and not is_debt_repayment
+        is_rg = special_code == Invoice.SpecialCode.RG and not is_debt_repayment
+        if is_rg or (is_ns and data['payment_type'] != Invoice.PaymentType.CREDIT):
+            # RG : ni paiement ni dette. NS au comptant : rien n'a été remis,
+            # aucune dette (seul NS à crédit conserve `order_total - paiement`).
+            payment_amount = Decimal('0.00')
+
         if is_debt_repayment:
             # Pure repayment — no bread lines, no stock deduction, commission = 0
             if client is None:
@@ -298,7 +337,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             debt_before = client.current_debt
             invoice = Invoice.objects.create(
                 node=node, client=client,
-                facturier=request.user, team=request.user.team,
+                facturier=request.user, team=invoice_team,
                 payment_type='CASH',
                 payment_amount=payment_amount,
                 debt_before=debt_before,
@@ -366,8 +405,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             _effective_unit_price(bp_map[int(ld['bread_price'])]) * ld['quantity'] for ld in lines_data
         )
 
-        # Credit block applies only when a client is selected
-        if client is not None:
+        # Credit block applies only when a client is selected — jamais pour
+        # une NS (BUG-177 : écriture de régularisation d'une commande déjà
+        # prise, pas une nouvelle vente à crédit) ni pour une RG (BUG-180 :
+        # sans paiement ni dette, elle compense un NS antérieur).
+        if client is not None and not is_ns and not is_rg:
             effective_limit = _effective_credit_limit(client, node, config)
             if client.current_debt >= effective_limit and payment_amount < order_total_est:
                 degraded_note = (
@@ -391,10 +433,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             # basé sur la dette brute). Le même plafond effectif (réduit en mode
             # dégradé, SYNC.md §6 H2) s'applique ici aussi.
             today_ = date.today()
+            # BUG-180 : les RG livrées n'entrent pas dans le déficit du mois.
             period_agg = Invoice.objects.filter(
                 client=client, status=Invoice.Status.DELIVERED,
                 invoice_date__year=today_.year, invoice_date__month=today_.month,
-            ).aggregate(com=Sum('order_total'), paye=Sum('payment_amount'))
+            ).exclude(special_code=Invoice.SpecialCode.RG).aggregate(com=Sum('order_total'), paye=Sum('payment_amount'))
             period_com  = period_agg['com'] or Decimal('0')
             period_paye = period_agg['paye'] or Decimal('0')
             period_cm   = period_com * client.commission_rate
@@ -423,7 +466,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         # payload pour ces deux cas, même si le frontend oublie de l'envoyer.
         # BUG-052 : idem pour une facture normale explicitement exonérée de
         # commission (`commission_exempt`) — même durcissement côté serveur.
-        if is_soldee or commission_exempt or client is None:
+        if is_soldee or commission_exempt or client is None or is_ns or is_rg:
             comm_rate = Decimal('0.00')
         else:
             comm_rate = data.get('commission_rate', config.default_commission_rate)
@@ -431,7 +474,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         invoice = Invoice.objects.create(
             node=node, client=client,
-            facturier=request.user, team=request.user.team,
+            facturier=request.user, team=invoice_team,
             payment_type=data['payment_type'],
             payment_amount=payment_amount,
             debt_before=debt_before,
@@ -453,13 +496,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.compute_debt_after()
         invoice.save(update_fields=['order_total', 'debt_after'])
 
-        # Deduct bread stock on sale creation
-        for line in invoice.lines.select_related('bread_price').all():
-            _adjust_bread_stock(node, line.bread_price, sent=line.quantity)
+        # Deduct bread stock on sale creation (BUG-177 : jamais pour une NS —
+        # les pains n'ont pas quitté la boulangerie).
+        if not is_ns:
+            for line in invoice.lines.select_related('bread_price').all():
+                _adjust_bread_stock(node, line.bread_price, sent=line.quantity)
 
-        # Apply debt only when a named client is involved (soldée = manquant passé en perte)
+        # Apply debt only when a named client is involved (soldée = manquant
+        # passé en perte ; NS/RG : voir `Invoice.debt_delta`)
         if client is not None:
-            net_delta = 0 if is_soldee else (invoice.order_total - invoice.payment_amount)
+            net_delta = invoice.debt_delta
             Client.objects.filter(pk=client.pk).update(current_debt=F('current_debt') + net_delta)
             if net_delta != 0:
                 _record_debt_movement_after_commit(
@@ -493,6 +539,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         on l'enveloppe également pour que toute la séquence réussisse ou échoue
         ensemble, comme `create()` ci-dessus."""
         invoice = self.get_object()
+        if invoice.special_code == Invoice.SpecialCode.NS:
+            return Response(
+                {'detail': "Une facture « Non Servi » ne peut pas être livrée : aucun pain n'a été remis."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         if invoice.status != Invoice.Status.PENDING:
             return Response(
                 {'detail': f"Facture déjà au statut « {invoice.get_status_display()} »."},
@@ -548,7 +599,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         if invoice.status == Invoice.Status.PENDING:
             if invoice.client_id:
                 # Reverse only the debt that was actually applied at creation
-                net_delta = 0 if invoice.is_soldee else (invoice.order_total - invoice.payment_amount)
+                net_delta = invoice.debt_delta
                 Client.objects.filter(pk=invoice.client_id).update(
                     current_debt=F('current_debt') - net_delta
                 )
@@ -558,9 +609,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                         node_origin=invoice.node.code, invoice=invoice,
                         note=f"Annulation {invoice.receipt_number}",
                     )
-            # Restore bread stock per category
-            for line in invoice.lines.select_related('bread_price').all():
-                _adjust_bread_stock(invoice.node, line.bread_price, sent=-line.quantity)
+            # Restore bread stock per category (BUG-177 : une NS n'a jamais
+            # déstocké, rien à restituer)
+            if invoice.special_code != Invoice.SpecialCode.NS:
+                for line in invoice.lines.select_related('bread_price').all():
+                    _adjust_bread_stock(invoice.node, line.bread_price, sent=-line.quantity)
         invoice.status = Invoice.Status.CANCELLED
         invoice.save(update_fields=['status'])
         log_activity(
@@ -682,6 +735,20 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
 
         client = original.client
+        # BUG-181 : nature de l'originale. NS : jamais de stock (rien n'a été
+        # déstocké) ; NS CASH et RG : aucun paiement ni dette (comme à la
+        # création). RG livrée : elle a déstocké, l'ajustement de pains
+        # modifie donc le stock normalement.
+        orig_is_ns = original.special_code == Invoice.SpecialCode.NS
+        orig_is_rg = original.special_code == Invoice.SpecialCode.RG
+        if orig_is_rg or (orig_is_ns and original.payment_type != Invoice.PaymentType.CREDIT):
+            payment_magnitude = Decimal('0.00')
+        # BUG-182 : équipe de service désignée si rotation active (jamais de
+        # blocage ici), sinon équipe de l'utilisateur.
+        adjust_team = request.user.team
+        if original.node.team_rotation_enabled:
+            from core.workday import current_team
+            adjust_team = current_team(original.node) or adjust_team
         # BUG-052 : une facture d'ajustement reprend l'exonération de
         # commission de la facture d'origine, au même titre que `is_soldee`.
         comm_rate = (
@@ -695,7 +762,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
             adjustment = Invoice.objects.create(
                 node=original.node, client=client,
-                facturier=request.user, team=request.user.team,
+                facturier=request.user, team=adjust_team,
                 payment_type=original.payment_type,
                 payment_amount=0,  # posé ensuite avec le signe, une fois les lignes créées
                 debt_before=debt_before,
@@ -727,11 +794,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             # Stock : retour physique par défaut (décision coordinateur point 2).
             # `adjustment_sign=-1` restitue le stock (sent négatif) ;
             # `adjustment_sign=+1` le décrémente comme une vente additionnelle.
-            for line in adjustment.lines.select_related('bread_price').all():
-                _adjust_bread_stock(original.node, line.bread_price, sent=adjustment_sign * line.quantity)
+            if not orig_is_ns:
+                for line in adjustment.lines.select_related('bread_price').all():
+                    _adjust_bread_stock(original.node, line.bread_price, sent=adjustment_sign * line.quantity)
 
             if client is not None:
-                net_delta = 0 if adjustment.is_soldee else (adjustment.order_total - adjustment.payment_amount)
+                net_delta = adjustment.debt_delta
                 Client.objects.filter(pk=client.pk).update(current_debt=F('current_debt') + net_delta)
                 if net_delta != 0:
                     _record_debt_movement_after_commit(
@@ -774,12 +842,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         expired = list(
             self.get_queryset()
                 .filter(status=Invoice.Status.PENDING, created_at__lt=cutoff)
+                # BUG-177 : une NS reste PENDING par définition (jamais livrée)
+                # — ne jamais la purger.
+                .exclude(special_code=Invoice.SpecialCode.NS)
                 .select_related('client', 'node')
                 .prefetch_related('lines__bread_price')
         )
         for inv in expired:
             if inv.client_id:
-                net_delta = 0 if inv.is_soldee else (inv.order_total - inv.payment_amount)
+                net_delta = inv.debt_delta
                 Client.objects.filter(pk=inv.client_id).update(
                     current_debt=F('current_debt') - net_delta
                 )
@@ -800,7 +871,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def pending_deliveries(self, request):
         """Livreur screen: all PENDING invoices for today."""
-        qs = self.get_queryset().filter(status=Invoice.Status.PENDING, invoice_date=date.today())
+        qs = self.get_queryset().filter(
+            status=Invoice.Status.PENDING, invoice_date=date.today(),
+        ).exclude(special_code=Invoice.SpecialCode.NS)  # BUG-177 : NS jamais livrable
         return Response(InvoiceSerializer(qs, many=True).data)
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])

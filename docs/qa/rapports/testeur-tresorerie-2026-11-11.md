@@ -17,3 +17,6 @@ Résultat : conforme, sauf deux défauts ouverts, BUG-175 et BUG-176 (voir BUG-1
 - BUG-176 (Majeur, backend) : tri `-date` non unique ; risque de ligne sautée entre deux pages.
 
 Limites : aucune exécution navigateur ; contrôle manuel recommandé.
+
+## Vérification BUG-178 (RG/NS exclues du rapport facturier) — VÉRIFIÉ
+Détail dans la fiche BUG-178 du registre (bloc « Vérification trésorerie »). Tests : `backend/treasury/tests/test_bug178_verification_2026_11_11.py` (9 verts + 1 expectedFailure BUG-179) ; non-régressions BUG-033/091/100 vertes. Ticket ouvert : BUG-179 (verrou de vacation sur RG, Mineur). Risque noté : rapports historiques d'équipes RG-seules jamais recalculés (réparation de données au déploiement).

@@ -5,6 +5,7 @@ from .views import (
     ProductionSessionViewSet, BreadStockViewSet, ConsumableTypeViewSet, ConsumableStockViewSet,
     ConsumableMovementViewSet, ConsumableCountViewSet, BreadTransferViewSet, BreadDisposalViewSet,
     DailyClosureReportView, DailyOpeningConfirmationView, BreadStockByDateView,
+    TeamAssignmentView,
 )
 
 router = DefaultRouter()
@@ -29,6 +30,8 @@ urlpatterns = [
     # qu'il ne soit jamais capturé par la route détail `bread-stocks/<pk>/`
     # du routeur (DRF router matcherait sinon `by-date` comme une PK invalide
     # avant d'atteindre cette vue si elle était déclarée après `include`).
+    # BUG-161 (B2) : désignation de l'équipe de service du jour.
+    path('team-assignment/', TeamAssignmentView.as_view(), name='team-assignment'),
     path('bread-stocks/by-date/', BreadStockByDateView.as_view(), name='bread-stock-by-date'),
     path('', include(router.urls)),
 ]

@@ -10,7 +10,7 @@ import type {
   DailyClosureReport,
   DailyClosureRepartitionRow,
 } from '@/api/services';
-import { formatFC, formatQty } from '@/pages/dashboard/ClotureJournaliere';
+import { formatFC, formatQty, REGULARISATION_HELP, NON_SERVI_HELP } from '@/pages/dashboard/ClotureJournaliere';
 
 type RepartitionMode = 'QUANTITE' | 'VALEUR';
 
@@ -116,6 +116,7 @@ export function exportClotureToExcel(
     'Vente Cash/Soldée (qté)', 'Vente Cash/Soldée (FC)', 'Perte (Soldée) (FC)',
     'Facture Mvm Interne (FC)', 'Non Vendu NV (qté)', 'Non Vendu NV (FC)',
     'Déclassés (qté)', 'Déclassés (FC)', 'Sorties Gratuites (qté)', 'Sorties Gratuites (FC)',
+    'Non Servi retranché du total (FC)',
   ];
   const decompRows: (string | number | null)[][] = [
     [`Décomposition par Catégorie de Pain — ${nodeLabel} — ${label}`],
@@ -139,13 +140,16 @@ export function exportClotureToExcel(
       cat.non_vendu_nv.quantity, toNum(cat.non_vendu_nv.fc),
       cat.declasses.quantity, toNum(cat.declasses.fc),
       cat.sorties_gratuites.quantity, toNum(cat.sorties_gratuites.fc),
+      toNum(cat.non_servi.fc_signe),
     ]);
   });
+  const dataEnd = decompRows.length;
+  decompRows.push([], [REGULARISATION_HELP], [NON_SERVI_HELP]);
   const wsDecomp = XLSX.utils.aoa_to_sheet(decompRows);
   wsDecomp['!cols'] = header.map((_, i) => ({ wch: i === 0 ? 16 : 14 }));
-  const fcCols = [2, 4, 5, 11, 13, 15, 17, 19, 20, 21, 23, 25, 27]; // colonnes « (FC) », 0-indexées
+  const fcCols = [2, 4, 5, 11, 13, 15, 17, 19, 20, 21, 23, 25, 27, 28]; // colonnes « (FC) », 0-indexées
   const qtyCols = [1, 3, 6, 7, 8, 9, 10, 12, 14, 16, 18, 22, 24, 26];
-  for (let r = 3; r < decompRows.length; r++) {
+  for (let r = 3; r < dataEnd; r++) {
     fcCols.forEach(c => setFmt(wsDecomp, `${XLSX.utils.encode_col(c)}${r + 1}`, FC_FMT));
     qtyCols.forEach(c => setFmt(wsDecomp, `${XLSX.utils.encode_col(c)}${r + 1}`, QTY_FMT));
   }
@@ -201,7 +205,7 @@ export function printClotureReport(
       <td style="text-align:right">${formatQty(cat.reste_du_hier.B)}</td>
       <td style="text-align:right">${formatQty(cat.appro_effectue.quantity)}<br/><small>${formatFC(cat.appro_effectue.fc)}</small></td>
       <td style="text-align:right">${formatQty(cat.appro_recu.quantity)}<br/><small>${formatFC(cat.appro_recu.fc)}</small></td>
-      <td style="text-align:right">${formatQty(cat.non_servi.quantity)}<br/><small>${formatFC(cat.non_servi.fc)}</small></td>
+      <td style="text-align:right">${formatFC(cat.non_servi.fc)}<br/><small>${formatQty(cat.non_servi.quantity)} pain(s)<br/>retranché : ${formatFC(cat.non_servi.fc_signe)}</small></td>
       <td style="text-align:right">${formatQty(cat.regularisation.quantity)}<br/><small>${formatFC(cat.regularisation.fc)}</small></td>
       <td style="text-align:right">${formatQty(cat.vente_cash_soldee.quantity)}<br/><small>${formatFC(cat.vente_cash_soldee.fc)}</small></td>
       <td style="text-align:right">${formatFC(cat.vente_cash_soldee.perte_fc)}</td>
@@ -246,6 +250,8 @@ export function printClotureReport(
         <thead><tr>${decompHeader}</tr></thead>
         <tbody>${decompRows || `<tr><td colspan="18" style="text-align:center">Aucune donnée.</td></tr>`}</tbody>
       </table>
+
+      <p style="font-size:10px;margin-top:8px">${REGULARISATION_HELP}<br/>${NON_SERVI_HELP}</p>
 
       <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); };</script>
     </body></html>`;

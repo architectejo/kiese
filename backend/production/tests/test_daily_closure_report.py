@@ -219,7 +219,8 @@ class DailyClosureReportTests(TestCase):
         self.assertEqual(row500['regularisation'], {'quantity': 0, 'fc': '0.00'})
 
         # --- Non servi : aucune facture NS dans ce scénario → zéro partout.
-        self.assertEqual(row300['non_servi'], {'quantity': 0, 'fc': '0.00'})
+        # BUG-177 : champ additif `fc_signe` (contribution négative aux totaux).
+        self.assertEqual(row300['non_servi'], {'quantity': 0, 'fc': '0.00', 'fc_signe': '0.00'})
 
         # --- Dispositions (hors REMAINING, qui alimente le snapshot ci-dessus).
         # `unit_price_sold=0` dans `_dispose()` (fabrique du test) → valeur en

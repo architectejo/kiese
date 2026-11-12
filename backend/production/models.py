@@ -438,6 +438,46 @@ class DailyOpeningConfirmation(models.Model):
         return f"{self.node.code} | Éq.{self.team} | {self.date} : confirmé"
 
 
+class DailyTeamAssignment(models.Model):
+    """
+    BUG-161 (B2) : équipe de service (A ou B) désignée MANUELLEMENT pour une
+    journée de travail « de relève à relève » (`core.workday.business_date`).
+    Décision client : pas d'alternance automatique ; tant qu'aucune équipe
+    n'est désignée pour la journée courante, la facturation est bloquée (si
+    `Node.team_rotation_enabled`). Une ligne par (boulangerie, journée) ;
+    changer l'équipe d'une journée déjà désignée met la ligne à jour
+    (correction journalisée par la vue).
+
+    Même convention que `DailyOpeningConfirmation`/`DailyBreadStockSnapshot` :
+    modèle local non synchronisable (pas de SyncableModel), supprimé par la
+    réinitialisation superuser (`core/reset.py`).
+    """
+
+    node = models.ForeignKey(
+        Node, on_delete=models.PROTECT, related_name='daily_team_assignments',
+        verbose_name=_("Boulangerie"),
+    )
+    work_date = models.DateField(verbose_name=_("Journée de travail"))
+    team = models.CharField(
+        max_length=1, choices=ProductionSession.Team.choices,
+        verbose_name=_("Équipe de service"),
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name='daily_team_assignments', verbose_name=_("Désignée par"),
+    )
+    assigned_at = models.DateTimeField(auto_now=True, verbose_name=_("Désignée le"))
+
+    class Meta:
+        verbose_name = _("Désignation de l'équipe de service")
+        verbose_name_plural = _("Désignations de l'équipe de service")
+        unique_together = [['node', 'work_date']]
+        ordering = ['-work_date', 'node__code']
+
+    def __str__(self):
+        return f"{self.node.code} | {self.work_date} : équipe {self.team}"
+
+
 class DailyOpeningConfirmationLine(models.Model):
     """Quantité confirmée (RESTE DU HIER officiel) pour une catégorie de pain donnée."""
 

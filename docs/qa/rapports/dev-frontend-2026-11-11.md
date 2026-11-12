@@ -31,3 +31,28 @@
 - BUG-175 : `Treasury.tsx` : `extraReports` vidé au rechargement et au changement de boulangerie/jour, filtré par nœud.
 - Fichiers : `frontend/src/hooks/useProgressiveList.ts`, `frontend/src/components/layout/DashboardLayout.tsx`, `frontend/src/pages/dashboard/{Sales,Production,Treasury}.tsx`. Aucun fichier backend. Étapes manuelles : fiches du registre.
 - Contrôles : `npx tsc --noEmit` et `npm run build` verts (sorties lues en fin de session).
+
+## BUG-161 (F1/F2 partiel) — rotation d'équipes de 24 h, volet frontend
+- Statut : fiche BUG-161 inchangée ; sous-section « F1/F2 partiel — CORRIGÉ » ajoutée au registre (B3 à B6 et F3 restent à faire).
+- Fichiers : `frontend/src/api/services.ts`, `frontend/src/api/errors.ts`, `frontend/src/pages/dashboard/Nodes.tsx`, `frontend/src/pages/dashboard/Sales.tsx`, `frontend/src/components/layout/DashboardLayout.tsx`, nouveaux `frontend/src/components/production/TeamAssignmentModal.tsx` et `frontend/src/store/teamAssignmentStore.ts`. Aucun fichier backend.
+- Points clés : heure de relève + interrupteur de rotation dans Boulangeries ; boîte de désignation non fermable montée une fois dans le layout, sondée dans le cycle de 10 s existant ; indicateur « Équipe de service : X (changer) » dans la barre latérale ; 403 `TEAM_NOT_ASSIGNED` géré dans `Sales.tsx`. Priorité : désignation avant les autres boîtes forcées. Étapes manuelles : fiche du registre.
+- Contrôles : `npx tsc --noEmit` et `npm run build` (résultats en fin de session, voir rapport de retour).
+
+## BUG-177 (volet frontend) — colonnes Non Servi / Régularisation, facturation NS/RG
+- Fichiers : `frontend/src/api/services.ts`, `frontend/src/pages/dashboard/ClotureJournaliere.tsx`, `frontend/src/utils/clotureReportExport.ts`, `frontend/src/pages/dashboard/Sales.tsx`, `frontend/src/pages/dashboard/Clients.tsx`. Aucun backend.
+- Clôture : Non Servi en montant FC (qté en dessous, « retranché : −X FC »), info-bulles `title` + légende visible, export Excel (colonne finale `fc_signe`) et impression cohérents.
+- Facturation : choix « garde la dette » / « payé comptant » pour NS, versement masqué pour NS/RG, NS non livrable dans la file (badge « NON SERVIE — ENREGISTRÉE »), fiche client « NS — Non servie ». Validation « au moins une catégorie » conservée (backend l'exige).
+- Étapes manuelles : fiche BUG-177 du registre. Ticket passé à CORRIGÉ.
+
+## BUG-184 — Reçu : équipe de la facture (CORRIGÉ)
+- Cause : `ReceiptData.team` lu depuis `user.team` dans `Sales.tsx` (livraison, remboursement) et `Clients.tsx` (vente, remboursement).
+- Correction : `inv.team` partout ; repli sur l'équipe de l'utilisateur uniquement pour une facture tout juste créée (remboursements, vente de la fiche client) ; aucun repli à la livraison (`inv.team || '—'`). `Dashboard.tsx` (ré-impression) utilisait déjà `inv.team`. Aucune page n'envoie `team` à la création : le serveur décide.
+- Fichiers : `frontend/src/pages/dashboard/Sales.tsx`, `frontend/src/pages/dashboard/Clients.tsx`. `npx tsc --noEmit` verte ; `npm run build` laissé au coordinateur.
+- Étapes manuelles : fiche BUG-184 du registre (rotation active, B désignée, facturier A : le reçu affiche B).
+
+## BUG-188 — La désignation d'équipe ne démonte plus les boîtes forcées (CORRIGÉ)
+- Cause : `!teamAssignmentRequired` dans `DashboardLayout.tsx` démontait `CloseSessionModal` (BUG-156), `OpeningStockConfirmationModal` et `AutoClosedNoticeModal` : saisie locale perdue.
+- Correction (piste a) : prop `suspended` de `Modal.tsx` (reste monté, `display: none`, `aria-hidden`, hors `openModalCount`, focus et Échap) relayée par les trois composants ; le layout les garde montées avec `suspended={teamAssignmentRequired}`. Désignation prioritaire et non fermable inchangée, mode correction et BUG-154 intacts, un seul `setInterval`, annonces BUG-157 inchangées.
+- Sondage tardif : numérotation des requêtes `fetchTeamAssignment` (`teamReqSeqRef` / `teamAssignedSeqRef`) ; réponse plus ancienne que la dernière désignation réussie ignorée.
+- Fichiers : `Modal.tsx`, `DashboardLayout.tsx`, `CloseSessionModal.tsx`, `OpeningStockConfirmationModal.tsx`, `AutoClosedNoticeModal.tsx`. `npx tsc --noEmit` : voir résultat ci-dessous ; build laissé au coordinateur.
+- Étapes manuelles : fiche BUG-188 du registre.
