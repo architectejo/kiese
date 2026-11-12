@@ -113,10 +113,9 @@ test('BUG-270 : role DIRECTION (simule) voit « Regler » et « Ajustement manue
   console.log('banniere set_manuel (reel, 403) =', msg);
   expect(msg).toContain("Vous n'avez pas la permission");
   await page.screenshot({ path: `${CAP}/commissions-vague3-banniere-403-${test.info().project.name}.png` });
-  // Constat : la fiche reste ouverte au-dessus de la banniere (BUG-279) : on la ferme pour poursuivre.
-  await expect(page.getByRole('dialog').getByText(/NET À PAYER/)).toBeVisible();
-  await page.getByRole('dialog').getByRole('button').first().click();
+  // BUG-280 corrige : la fiche est fermee, la banniere est visible et cliquable (aucun dialogue au-dessus).
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.modal-backdrop')).toHaveCount(0);
   await page.screenshot({ path: `${CAP}/commissions-vague3-banniere-403-visible-${test.info().project.name}.png` });
   await banniere.getByRole('button', { name: /fermer/i }).click();
   await expect(banniere).toHaveCount(0);

@@ -190,10 +190,13 @@ export const Sales: React.FC = () => {
       // une commande livrée doit rester comptée dans les stats de la page tant
       // qu'elle n'est pas annulée — seul un statut CANCELLED doit l'en exclure.
       const todayStr = workDate;
-      const [invoicesRes, bpRes, configRes] = await Promise.all([
+      // BUG-283 : les PENDING non expirées du nœud (créées avant minuit) viennent de
+      // `pending_deliveries`, indépendamment de la date du jour ; filtrage nœud/rôle côté serveur.
+      const [invoicesRes, bpRes, configRes, pendingRes] = await Promise.all([
         salesApi.listPage({ invoice_date: todayStr, page: '1', page_size: '100' }),
         coreApi.breadPrices.list(),
         coreApi.config.get(),
+        salesApi.pendingDeliveries().catch(() => ({ data: [] as Invoice[] })),
       ]);
       if (seq !== queueLoadSeqRef.current) return;
       setAllowBackdatedSales(!!configRes.data.allow_backdated_sales);
@@ -207,7 +210,9 @@ export const Sales: React.FC = () => {
       const keepInvoice = (inv: Invoice) =>
         inv.status !== 'CANCELLED' &&
         (inv.status !== 'PENDING' || inv.special_code === 'NS' || (Date.now() - new Date(inv.created_at).getTime()) < TWELVE_H);
-      setQueue(invoicesRes.data.results.filter(keepInvoice).map(inv => mapInvoice(inv, map)));
+      const dayIds = new Set(invoicesRes.data.results.map(inv => String(inv.id)));
+      const olderPending = pendingRes.data.filter(inv => !dayIds.has(String(inv.id)) && keepInvoice(inv));
+      setQueue(invoicesRes.data.results.concat(olderPending).filter(keepInvoice).map(inv => mapInvoice(inv, map)));
       const initQty: Record<number, number> = {};
       bps.forEach(b => { initQty[b.id] = 0; });
       setQuantities(initQty);
