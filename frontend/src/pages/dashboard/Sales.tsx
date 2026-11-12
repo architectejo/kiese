@@ -88,7 +88,7 @@ const TEAM_NOT_ASSIGNED_MESSAGE =
 export const Sales: React.FC = () => {
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
   const { user } = useAuthStore();
-  // BUG-161 (F3) : journée de travail fournie par le serveur (repli : date locale, jamais UTC).
+  // BUG-161 (F3) : jour calendaire fourni par le serveur (repli : date locale, jamais UTC).
   // Un changement de journée (relève) relance le chargement de la file du jour (`loadData`).
   const workDate = useWorkDate();
   const [queue, setQueue] = useState<QueueItem[]>([]);

@@ -22,7 +22,7 @@ interface ReconciliationPanelProps {
  */
 export const ReconciliationPanel: React.FC<ReconciliationPanelProps> = ({ effectiveNode, canPickNode, nodes }) => {
   const [recNode, setRecNode]       = useState(effectiveNode);
-  // BUG-161 (F3) : bornes par défaut = 1er du mois et jour de la journée de travail du serveur
+  // BUG-161 (F3) : bornes par défaut = 1er du mois et jour calendaire du serveur
   // (plus de date UTC du navigateur) ; une date choisie par l'utilisateur prime.
   const workDate = useWorkDate();
   const [dateFromPicked, setDateFrom] = useState<string | null>(null);

@@ -18,10 +18,10 @@ from core.models import Node, Config
 from core.permissions import IsGerant, IsHeadquarters
 from core.utils import log_activity, create_notification, validate_requested_date
 from core.workday import work_date_for
-from .hashing import compute_cashbook_entry_hash, verify_cashbook_chain, GENESIS_HASH
+from .hashing import compute_cashbook_entry_hash, verify_cashbook_chain, check_cashbook_head, GENESIS_HASH
 from .models import (
     LocalExpense, FacturierReport, CashClosure, CashbookEntry, JournalEntry,
-    DailySavings, DisbursementVoucher, DirectionCashCount,
+    DailySavings, DisbursementVoucher, DirectionCashCount, CashbookHead,
 )
 from .serializers import (
     LocalExpenseSerializer, FacturierReportSerializer,
@@ -186,6 +186,14 @@ def append_cashbook_entry(validate_balance=None, **entry_kwargs) -> CashbookEntr
                 )
                 entry.block_hash = compute_cashbook_entry_hash(entry)
                 entry.save()
+                # BUG-240 : ancre de tête de chaîne, dans la même transaction.
+                head = CashbookHead.objects.select_for_update().first()
+                if head is None:
+                    head = CashbookHead(entry_count=CashbookEntry.objects.count() - 1)
+                head.entry_count += 1
+                head.last_hash = entry.block_hash
+                head.last_node_code = entry.node.code if entry.node_id else ''
+                head.save()
                 return entry
         except IntegrityError as exc:
             # Un autre thread/process a inséré une écriture avec le même
@@ -715,11 +723,19 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
                     message=f"L'écriture {entry.piece_number} du {entry.date} a été altérée. Bloc {i+1} corrompu.",
                     severity='DANGER', node_origin=entry.node.code
                 )
+        # BUG-240 : ancre de tête de chaîne (suppression de la dernière écriture).
+        head_problem = check_cashbook_head(entries, CashbookHead.objects.first())
+        if head_problem:
+            create_notification(
+                title="Alerte Blockchain — Livre de Caisse amputé",
+                message=head_problem, severity='DANGER', node_origin='CLOUD',
+            )
         return Response({
             'total_entries': len(entries),
             'tampered_count': len(tampered),
             'tampered_ids': tampered,
-            'chain_valid': len(tampered) == 0,
+            'chain_valid': len(tampered) == 0 and not head_problem,
+            'head_problem': head_problem or '',
         })
 
     @action(detail=False, methods=['get'])
@@ -766,6 +782,10 @@ class DisbursementVoucherViewSet(viewsets.ModelViewSet):
 
         voucher = serializer.save(created_by=self.request.user, node_origin='CLOUD')
         voucher.compute_physical_cash()
+        # BUG-239 : un bordereau à 0 FC ne doit pas créer d'écriture nulle.
+        if voucher.physical_cash_total <= 0:
+            voucher.delete()
+            raise ValidationError({'detail': "Le bordereau doit comporter au moins un billet (montant supérieur à 0 FC)."})
         voucher.piece_number = f"BV-{voucher.date.strftime('%Y%m%d')}-{str(voucher.id)[:6].upper()}"
         voucher.save(update_fields=['physical_cash_total', 'piece_number'])
 
@@ -1289,11 +1309,17 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
             total_revenue=Sum('daily_revenue'),
             total_savings=Sum('savings_amount'),
         )
-        by_node = list(
-            qs.values('node__code', 'node__name')
+        # BUG-241 : montants en chaînes décimales (jamais de flottants JSON).
+        by_node = [
+            {
+                **row,
+                'total_savings': str(row['total_savings'] or 0),
+                'total_revenue': str(row['total_revenue'] or 0),
+            }
+            for row in qs.values('node__code', 'node__name')
             .annotate(total_savings=Sum('savings_amount'), total_revenue=Sum('daily_revenue'))
             .order_by('node__code')
-        )
+        ]
         return Response({
             'month': month,
             'year':  year,

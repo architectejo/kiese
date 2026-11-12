@@ -23,8 +23,8 @@ const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
 // BUG-161 (F3) : plus de date UTC. Un horodatage `created_at` (UTC) est converti en date LOCALE
-// avant comparaison à la date du jour ; en rotation de 24 h c'est une approximation de la
-// journée de travail (les sorties n'ont pas de `work_date` côté API).
+// avant comparaison à la date du jour ; en rotation de 24 h c'est exact : le jour
+// calendaire fait foi (les sorties n'ont pas de `work_date` côté API).
 const isOnDay = (iso: string | undefined, day: string): boolean =>
   !!iso && localIsoDate(new Date(iso)) === day;
 
@@ -44,8 +44,27 @@ async function fetchDisposalsPage(scoped: Record<string, string>, day: string): 
     all = all.concat(r.data.results ?? []);
     next = r.data.next;
   }
-  const todayQty = all.filter(d => isOnDay(d.created_at, day)).reduce((a, d) => a + (d.quantity || 0), 0);
+  // BUG-245 : le stock restant (REMAINING) n'est ni une perte ni un pain « non valorisé ».
+  const todayQty = all
+    .filter(d => d.disposal_type !== 'REMAINING' && isOnDay(d.created_at, day))
+    .reduce((a, d) => a + (d.quantity || 0), 0);
   return { shown, todayQty };
+}
+
+// BUG-244 : KPI « Fournées » / « Valeur FC produite » = totaux complets (toutes les pages),
+// jamais la somme des 15 fournées affichées. `null` tant que non chargé / en cas d'échec.
+async function fetchSessionTotals(scoped: Record<string, string>): Promise<{ count: number; totalFc: number }> {
+  let page = 1;
+  let count = 0;
+  let totalFc = 0;
+  for (;;) {
+    const r = await productionApi.sessions.page({ ...scoped, page: String(page), page_size: '500' });
+    count = r.data.count ?? 0;
+    totalFc += (r.data.results ?? []).reduce((a, s) => a + (Number(s.total_fc_produced) || 0), 0);
+    if (!r.data.next) break;
+    page += 1;
+  }
+  return { count, totalFc };
 }
 
 // BUG-164 : l'API des transferts n'a pas de filtre « boulangerie impliquée » (from_node OU
@@ -109,6 +128,7 @@ export const Production: React.FC = () => {
   const [transfers, setTransfers]     = useState<BreadTransfer[]>([]);
   const [disposals, setDisposals]     = useState<BreadDisposal[]>([]);
   const [todayDispoQty, setTodayDispoQty] = useState(0);
+  const [sessionTotals, setSessionTotals] = useState<{ count: number; totalFc: number } | null>(null);
   const loadSeqRef = useRef(0);
   const [nodes, setNodes]             = useState<BakeryNode[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
@@ -224,7 +244,7 @@ export const Production: React.FC = () => {
     try {
       const scopedParams = nodeFilter ? { node: nodeFilter } : undefined;
       const scopedStrings: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
-      const [stockRes, sessionRes, transferList, disposalRes, nodeRes, bpRes, configRes, breadStockRes] = await Promise.all([
+      const [stockRes, sessionRes, transferList, disposalRes, nodeRes, bpRes, configRes, breadStockRes, totalsRes] = await Promise.all([
         productionApi.stocks.list(scopedParams),
         // BUG-164 : 15 fournées demandées directement au serveur (tri -date).
         productionApi.sessions.page({ ...scopedStrings, page: '1', page_size: '15' }),
@@ -234,8 +254,10 @@ export const Production: React.FC = () => {
         coreApi.breadPrices.list(),
         coreApi.config.get(),
         productionApi.breadStocks.list(scopedParams),
+        fetchSessionTotals(scopedStrings).catch(() => null),
       ]);
       if (seq !== loadSeqRef.current) return;
+      setSessionTotals(totalsRes);
       setStocks(Array.isArray(stockRes.data) ? stockRes.data : []);
       setBreadStocks(Array.isArray(breadStockRes.data) ? breadStockRes.data : []);
       setSessions((sessionRes.data.results ?? []).slice(0, 15));
@@ -248,7 +270,7 @@ export const Production: React.FC = () => {
       setBreadPrices(activePrices);
       // Per-node sac_value_fc takes priority; fall back to global Config if absent or zero.
       const activeNodeId = nodeFilter || user?.node || null;
-      const activeNode = activeNodeId ? nodeList.find(n => n.id === activeNodeId) : null;
+      const activeNode = activeNodeId ? nodeList.find(n => String(n.id) === String(activeNodeId)) : null;
       const nodeSacVal = activeNode?.sac_value_fc ? parseFloat(activeNode.sac_value_fc) : 0;
       setSacValueFc(nodeSacVal > 0 ? nodeSacVal : (configRes.data.sac_value_fc ?? 200000));
       const initRespond: Record<string, Record<number, number>> = {};
@@ -285,7 +307,7 @@ export const Production: React.FC = () => {
           const nodeList = Array.isArray(res.data) ? res.data : [];
           setNodes(nodeList);
           if (nodeList.length > 0) {
-            setViewNode(nodeList[0].id); // triggers the viewNode effect below → loadData(firstNode)
+            setViewNode(String(nodeList[0].id)); // triggers the viewNode effect below → loadData(firstNode)
           } else {
             setIsLoading(false);
           }
@@ -393,7 +415,7 @@ export const Production: React.FC = () => {
         .map(([ct, qty]) => ({ consumable_type: ct, quantity: parseFloat(qty.replace(',', '.')) }));
       await productionApi.sessions.create({
         flour_sacks_used: flourSacks.toString(),
-        // Rotation : le serveur décide de la journée de travail et de l'équipe désignée
+        // Rotation : le serveur décide du jour calendaire et de l'équipe désignée
         // (ni `date` ni `team`, BUG-195) ; sinon date locale et équipe choisie.
         ...(inRotation ? {} : { date: getWorkDate(), team: selTeam }),
         lines,
@@ -453,7 +475,7 @@ export const Production: React.FC = () => {
       // from_node = the supplier (tFromNode), to_node = user's own node (set server-side)
       await productionApi.transfers.create({ from_node: tFromNode, notes: tNotes, lines });
       const total = lines.reduce((sum, l) => sum + l.quantity_sent, 0);
-      const target = nodes.find(n => n.id === tFromNode);
+      const target = nodes.find(n => String(n.id) === tFromNode);
       setTSuccess(`Demande envoyée à ${target ? `${target.code} — ${target.name}` : 'la boulangerie sollicitée'} : ${total} pain${total > 1 ? 's' : ''} demandé${total > 1 ? 's' : ''} — en attente de réponse.`);
       setTFromNode(''); setTLines({}); setTNotes('');
       await loadData();
@@ -523,16 +545,19 @@ export const Production: React.FC = () => {
   };
 
   const currentNodeLabel = user?.can_access_all_nodes
-    ? nodes.find(n => n.id === viewNode)?.code
+    ? nodes.find(n => String(n.id) === viewNode)?.code
     : undefined;
 
-  const effectiveNode  = viewNode || user?.node || '';
+  // BUG-243 : les identifiants de boulangerie sont comparés en chaîne (l'API peut renvoyer un
+  // entier, le <select> renvoie toujours une chaîne).
+  const effectiveNode  = String(viewNode || user?.node || '');
+  const isNode = (id: string | number | null | undefined) => String(id ?? '') === effectiveNode;
   const hasLowStock    = stocks.some(s => parseFloat(s.quantity) < 10);
   // B (from_node) sees PENDING requests — bread is being requested FROM them
-  const pendingRequests  = transfers.filter(t => t.transfer_status === 'PENDING' && (!effectiveNode || t.from_node === effectiveNode));
+  const pendingRequests  = transfers.filter(t => t.transfer_status === 'PENDING' && (!effectiveNode || isNode(t.from_node)));
   // A (to_node) sees RESPONDED transfers — B confirmed quantity, A must confirm receipt
-  const respondedToMe    = transfers.filter(t => t.transfer_status === 'RESPONDED' && (!effectiveNode || t.to_node === effectiveNode));
-  const disputedTrans    = transfers.filter(t => t.transfer_status === 'DISPUTED' && (!effectiveNode || t.from_node === effectiveNode || t.to_node === effectiveNode));
+  const respondedToMe    = transfers.filter(t => t.transfer_status === 'RESPONDED' && (!effectiveNode || isNode(t.to_node)));
+  const disputedTrans    = transfers.filter(t => t.transfer_status === 'DISPUTED' && (!effectiveNode || isNode(t.from_node) || isNode(t.to_node)));
   const actionCount      = pendingRequests.length + respondedToMe.length;
 
   return (
@@ -577,10 +602,10 @@ export const Production: React.FC = () => {
       {/* KPI bar */}
       <div className="kpi-grid" style={{ gap: '12px' }}>
         {[
-          { label: 'FOURNÉES ENREGISTRÉES', value: sessions.length, icon: '🔥', color: 'var(--accent-color)' },
+          { label: 'FOURNÉES ENREGISTRÉES', value: sessionTotals ? sessionTotals.count.toLocaleString('fr-FR') : '…', icon: '🔥', color: 'var(--accent-color)' },
           {
             label: 'VALEUR FC PRODUITE', icon: '💰', color: 'var(--color-success)',
-            value: sessions.reduce((a, s) => a + (s.total_fc_produced || 0), 0).toLocaleString('fr-FR') + ' FC',
+            value: sessionTotals ? sessionTotals.totalFc.toLocaleString('fr-FR') + ' FC' : '…',
           },
           { label: 'TRANSFERTS EN ATTENTE', value: actionCount, icon: '🚚', color: actionCount > 0 ? 'var(--color-warning)' : 'var(--text-muted)' },
           { label: 'PAINS NON VALORISÉS', value: todayDispoQty.toLocaleString('fr-FR'), icon: '📦', color: todayDispoQty > 0 ? 'var(--color-warning)' : 'var(--text-muted)' },
@@ -757,7 +782,7 @@ export const Production: React.FC = () => {
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Nbre sac farine consommer *</label>
-                  <input type="number" step="0.5" min={0.5} value={flourSacks} onChange={e => setFlourSacks(Number(e.target.value))} className="form-input" style={{ fontSize: '0.75rem', height: '30px', padding: '0 8px' }} />
+                  <input type="number" step="0.01" min={0.01} value={flourSacks} onChange={e => setFlourSacks(Number(e.target.value))} className="form-input" style={{ fontSize: '0.75rem', height: '30px', padding: '0 8px' }} />
                 </div>
               </div>
 
@@ -1066,7 +1091,7 @@ export const Production: React.FC = () => {
                 <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Demander à *</label>
                 <select value={tFromNode} onChange={e => { setTFromNode(e.target.value); setTSuccess(null); }} className="form-input" style={{ fontSize: '0.73rem', height: '30px' }}>
                   <option value="">— Boulangerie source —</option>
-                  {nodes.filter(n => n.id !== (effectiveNode || user?.node)).map(n => <option key={n.id} value={n.id}>{n.code} — {n.name}</option>)}
+                  {nodes.filter(n => String(n.id) !== effectiveNode).map(n => <option key={n.id} value={n.id}>{n.code} — {n.name}</option>)}
                 </select>
               </div>
               <div>
@@ -1286,10 +1311,10 @@ export const Production: React.FC = () => {
             ))}
 
             {/* Confirmed history */}
-            {transfers.filter(t => t.transfer_status === 'CONFIRMED' && (!effectiveNode || t.from_node === effectiveNode || t.to_node === effectiveNode)).slice(0, 3).length > 0 && (
+            {transfers.filter(t => t.transfer_status === 'CONFIRMED' && (!effectiveNode || isNode(t.from_node) || isNode(t.to_node))).slice(0, 3).length > 0 && (
               <div>
                 <h4 style={{ fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-muted))', marginBottom: '5px', textTransform: 'uppercase' }}>Transferts Récents Confirmés</h4>
-                {transfers.filter(t => t.transfer_status === 'CONFIRMED' && (!effectiveNode || t.from_node === effectiveNode || t.to_node === effectiveNode)).slice(0, 3).map(t => (
+                {transfers.filter(t => t.transfer_status === 'CONFIRMED' && (!effectiveNode || isNode(t.from_node) || isNode(t.to_node))).slice(0, 3).map(t => (
                   <div key={t.id} style={{ fontSize: '0.62rem', color: 'hsl(var(--text-secondary))', display: 'flex', justifyContent: 'space-between', padding: '3px 6px', backgroundColor: 'hsl(var(--color-success) / 0.04)', borderRadius: '3px', marginBottom: '2px' }}>
                     <span>
                       {t.from_node_display} → {t.to_node_display}

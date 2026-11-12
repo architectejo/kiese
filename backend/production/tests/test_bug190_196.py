@@ -197,17 +197,18 @@ class Bug193TransferWorkDayTests(_Base):
         self.assertEqual(rep.status_code, 200, rep.data)
         return {x['bread_price']: x for x in rep.data['categories']}[self.bp300.pk][key]['quantity']
 
-    def test_rotation_transfer_at_03_00_belongs_to_previous_work_day_both_sides(self):
+    def test_rotation_transfer_at_03_00_belongs_to_calendar_day_both_sides(self):
+        # BUG-247 (décision 2026-11-12) : un appro confirmé à 03:00 est du jour
+        # calendaire J1, même en rotation (plus de rattachement à la veille).
         self._rotation()
         other, a2 = self._confirmed_transfer(3)
         self._rotation(other)
         with _now(14, 0, d=J1):
-            self.assertEqual(self._qty(self.g, J, 'appro_recu', self.node.code), 15)
-            self.assertEqual(self._qty(self.g, J1, 'appro_recu', self.node.code), 0)
-        # côté émetteur (sa propre rotation) : la sortie suit aussi la journée de travail
+            self.assertEqual(self._qty(self.g, J1, 'appro_recu', self.node.code), 15)
+            self.assertEqual(self._qty(self.g, J, 'appro_recu', self.node.code), 0)
         with _now(14, 0, d=J1):
-            self.assertEqual(self._qty(a2, J, 'appro_effectue', other.code), 15)
-            self.assertEqual(self._qty(a2, J1, 'appro_effectue', other.code), 0)
+            self.assertEqual(self._qty(a2, J1, 'appro_effectue', other.code), 15)
+            self.assertEqual(self._qty(a2, J, 'appro_effectue', other.code), 0)
 
     def test_rotation_transfer_after_handover_belongs_to_current_work_day(self):
         self._rotation()

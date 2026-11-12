@@ -189,7 +189,8 @@ export const App: React.FC = () => {
         <Route 
           path="/treasury" 
           element={
-            <ProtectedRoute>
+            // BUG-242 : même garde que le menu et l'API (`IsGerant`) — pas de FACTURIER/LIVREUR.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'].includes(u.role)}>
               <Treasury />
             </ProtectedRoute>
           } 

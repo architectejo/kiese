@@ -101,9 +101,11 @@ class RotationEdges(Base):
         with _now(0, 10, D + timedelta(days=1)):
             DailyTeamAssignment.objects.get_or_create(node=self.node, work_date=D, defaults={'team': 'A'})
             r3 = self.sale()
-        self.assertEqual(Invoice.objects.get(pk=r1.data['id']).invoice_date, PREV)
-        self.assertEqual(Invoice.objects.get(pk=r2.data['id']).invoice_date, D)
-        self.assertEqual(Invoice.objects.get(pk=r3.data['id']).invoice_date, D)
+        # BUG-247 : la date est calendaire ; seule l'équipe change à la relève.
+        i1, i2, i3 = (Invoice.objects.get(pk=r.data['id']) for r in (r1, r2, r3))
+        self.assertEqual((i1.invoice_date, i1.team), (D, 'B'))
+        self.assertEqual((i2.invoice_date, i2.team), (D, 'A'))
+        self.assertEqual((i3.invoice_date, i3.team), (D + timedelta(days=1), 'A'))
 
     def test_deliver_with_explicit_past_delivered_at_stays_in_work_day(self):
         self.rot()
@@ -114,14 +116,14 @@ class RotationEdges(Base):
         with _now(3, 0):
             r = self.sale()
             inv = Invoice.objects.get(pk=r.data['id'])
-            self.assertEqual(inv.invoice_date, PREV)
+            self.assertEqual(inv.invoice_date, D)
             d = self.deliver(inv.pk, delivered_at=str(PREV - timedelta(days=1)))
         self.assertIn(d.status_code, (200, 400), d.data)
         if d.status_code == 200:
             inv.refresh_from_db()
             self.assertEqual(work_date_for(self.node, inv.delivered_at), PREV - timedelta(days=1))
 
-    def test_delivery_at_03_00_of_sale_made_at_03_00_is_in_prev_work_day(self):
+    def test_delivery_at_03_00_of_sale_made_at_03_00_is_in_calendar_day(self):
         self.rot()
         DailyTeamAssignment.objects.create(node=self.node, work_date=PREV, team='B')
         with _now(3, 0):
@@ -129,7 +131,7 @@ class RotationEdges(Base):
             d = self.deliver(r.data['id'])
         self.assertEqual(d.status_code, 200, d.data)
         inv = Invoice.objects.get(pk=r.data['id'])
-        self.assertEqual(work_date_for(self.node, inv.delivered_at), PREV)
+        self.assertEqual(work_date_for(self.node, inv.delivered_at), D)
 
     def test_summaries_default_to_work_date_of_user_node(self):
         self.rot()
@@ -195,7 +197,7 @@ class DebtConsistency(Base):
         stored = self.debt()
         self.assertEqual(recompute_client_debt(self.cl.pk).current_debt, stored)
         dates = sorted(Invoice.objects.values_list('invoice_date', flat=True))
-        self.assertEqual(dates, [PREV, D, D])
+        self.assertEqual(dates, [D, D, D])  # BUG-247 : jour calendaire
 
     def test_credit_block_unchanged_in_rotation(self):
         self.rot()

@@ -142,9 +142,10 @@ export const Users: React.FC = () => {
   const handleResetPassword = async () => {
     if (!passwordResetUser) return;
     try {
-      await coreApi.users.resetPassword(passwordResetUser.id);
+      const res = await coreApi.users.resetPassword(passwordResetUser.id);
       setIsPasswordModalOpen(false);
-      alert(`Mot de passe réinitialisé — nouveau mot de passe : ${passwordResetUser.username}`);
+      // BUG-248 : mot de passe temporaire aléatoire, affiché une seule fois.
+      alert(`Mot de passe réinitialisé. Mot de passe temporaire (à communiquer une seule fois) : ${res.data.temporary_password}`);
       setPasswordResetUser(null);
     } catch (error) {
       console.error('Error resetting password', error);
@@ -430,7 +431,7 @@ export const Users: React.FC = () => {
               <FiKey /> Réinitialiser le Mot de Passe
             </h3>
             <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.75rem', marginBottom: '18px' }}>
-              Le mot de passe de <strong>@{passwordResetUser.username}</strong> sera réinitialisé et redeviendra identique à son identifiant (<strong>{passwordResetUser.username}</strong>).
+              Le mot de passe de <strong>@{passwordResetUser.username}</strong> sera réinitialisé avec un mot de passe temporaire aléatoire, affiché une seule fois.
             </p>
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>

@@ -338,4 +338,6 @@ class Bug227Tests(TestCase):
         self.node.save(update_fields=['team_rotation_enabled'])
         with patch('django.utils.timezone.now', return_value=_at(2026, 11, 12, 5, 0)):
             g = self.api.get('/api/production/team-assignment/').json()
-        self.assertEqual(g['work_date'], '2026-11-11')
+        # BUG-247 : `work_date` calendaire ; la désignation reste rattachée à la période de relève.
+        self.assertEqual(g['work_date'], '2026-11-12')
+        self.assertEqual(g['shift_date'], '2026-11-11')

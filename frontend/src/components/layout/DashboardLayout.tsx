@@ -164,8 +164,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const { data } = await productionApi.sessions.shiftEndStatus();
       if (data.pending_validation) {
-        // Rotation (B5) : `work_date` = journée de travail à clôturer, `current_work_date` n'existe
-        // qu'en rotation. Hors rotation ces clés sont absentes : comportement inchangé.
+        // Rotation : `work_date` = date de la session concernée, `current_work_date` = jour
+        // calendaire (n'existe qu'en rotation). Hors rotation ces clés sont absentes : inchangé.
         setShiftEndPending({
           team: data.team, session: data.session, remaining: data.remaining,
           ...(data.current_work_date ? { workDate: data.work_date, rotation: true } : {}),
@@ -173,8 +173,11 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       } else if (data.auto_closed) {
         // BUG-157 : annonce ajoutée à la file ET persistée — le backend ne
         // renverra plus `auto_closed: true` pour cette fournée.
-        // Rotation : date de l'annonce = `work_date` de la journée clôturée (serveur), pas la date du poste.
-        if (shiftEndNodeKey) notifyAutoClosed(shiftEndNodeKey, data.team, data.current_work_date ? data.work_date : undefined);
+        // Rotation : date de l'annonce = `work_date` de la session clôturée (serveur), pas la date
+        // du poste. BUG-272 : `work_date` antérieure au jour calendaire courant = clôture au
+        // passage de minuit (même équipe, aucune relève) : annonce dédiée, sans validation forcée.
+        const midnight = !!data.current_work_date && !!data.work_date && data.work_date < data.current_work_date;
+        if (shiftEndNodeKey) notifyAutoClosed(shiftEndNodeKey, data.team, data.current_work_date ? data.work_date : undefined, midnight);
         if (allowImmediateRetry) {
           await fetchShiftEndStatus(false);
         }
@@ -206,8 +209,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   // BUG-161 (F2) : équipe de service du jour (rotation de 24 h). Actif seulement si la
   // boulangerie de l'utilisateur a `team_rotation_enabled`. Même garde de rôle que ci-dessus.
   // Interrogé dans le MÊME cycle de sondage que `fetchShiftEndStatus` (pas de second
-  // `setInterval`) : après l'heure de relève, le serveur renvoie la nouvelle `work_date`
-  // avec `team: null` et la boîte se rouvre d'elle-même.
+  // `setInterval`) : après l'heure de relève, le serveur renvoie `team: null` (nouvelle période,
+  // nouveau `shift_date`) et la boîte se rouvre d'elle-même. `work_date` reste calendaire (BUG-272).
   const [rotationEnabled, setRotationEnabled] = useState(false);
   const rotationEnabledRef = useRef(false);
   const [teamAssignment, setTeamAssignment] = useState<TeamAssignment | null>(null);
@@ -240,7 +243,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       if (seq <= teamAssignedSeqRef.current) return;
       if (!enabled) {
         setTeamAssignment(null);
-        // Plus de rotation : l'annonce de journée « rotation » du serveur n'est plus valable.
+        // Plus de rotation : l'indicateur « rotation » annoncé par le serveur n'est plus valable.
         if (useWorkDateStore.getState().rotation) useWorkDateStore.getState().clearWorkDate();
         return;
       }
@@ -273,7 +276,9 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   // de service, (3) stock de départ. La désignation attend donc la fin de l'étape (1) ; les boîtes
   // (1) ne sont plus suspendues par la désignation (leur saisie, y compris négative, est ainsi
   // préservée : BUG-188). Hors rotation, `teamAssignmentRequired` est toujours faux : inchangé.
-  const restStepActive = canSeeShiftEnd && rotationEnabled && (shiftEndPending !== null || autoClosedNotices.length > 0);
+  // BUG-272 : une annonce de clôture « à minuit » ne concerne pas la relève : elle ne retarde pas la désignation.
+  const restStepActive = canSeeShiftEnd && rotationEnabled
+    && (shiftEndPending !== null || autoClosedNotices.some(n => !n.midnight));
   const teamAssignmentBlocking = teamAssignmentRequired && !restStepActive;
   const teamAssignmentOpen = teamAssignmentBlocking || (canSeeShiftEnd && rotationEnabled && teamAssignment !== null && teamEditOpen);
 

@@ -56,7 +56,7 @@ const PALETTE = ['#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6', '#ef4444
 
 export const Dashboard: React.FC = () => {
   const { user } = useAuthStore();
-  const workDate = useWorkDate(); // BUG-161 (F3) : journée de travail du serveur
+  const workDate = useWorkDate(); // BUG-161 (F3) : jour calendaire du serveur
   const isHQ = !!user?.can_access_all_nodes;
   const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);

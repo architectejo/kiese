@@ -44,7 +44,7 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // BUG-161 (F3) : « jour courant » = journée de travail du serveur (repli : date locale).
+  // BUG-161 (F3) : « jour courant » = jour calendaire du serveur (repli : date locale).
   const workDate = useWorkDate();
   const isToday = selectedDate === workDate;
 

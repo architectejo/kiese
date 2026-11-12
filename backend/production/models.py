@@ -331,6 +331,20 @@ class DailyBreadStockSnapshot(models.Model):
         )
 
     @classmethod
+    def last_snapshot_upto(cls, node, bread_price, date):
+        """
+        BUG-247 : dernier instantané du nœud pour cette catégorie jusqu'à la
+        date `date` INCLUSE, toutes équipes confondues (reste de l'équipe
+        sortante d'une relève en milieu de journée calendaire), ou None.
+        """
+        return (
+            cls.objects
+            .filter(node=node, bread_price=bread_price, date__lte=date)
+            .order_by('-date', '-updated_at', '-pk')
+            .first()
+        )
+
+    @classmethod
     def reste_du_hier_chained(cls, node, bread_price, date):
         """Convention de `reste_du_hier` (négatif) sur le chaînage inter-équipes."""
         previous = cls.last_snapshot_before(node, bread_price, date)
@@ -472,7 +486,11 @@ class DailyOpeningConfirmation(models.Model):
 class DailyTeamAssignment(models.Model):
     """
     BUG-161 (B2) : équipe de service (A ou B) désignée MANUELLEMENT pour une
-    journée de travail « de relève à relève » (`core.workday.business_date`).
+    PÉRIODE DE SERVICE « de relève à relève » (`core.workday.business_date`).
+    BUG-247 (décision client 2026-11-12) : `work_date` n'est PAS la date de
+    travail (calendaire, minuit à minuit) mais la date LOCALE de la relève qui
+    ouvre la période ; une même date calendaire peut donc relever de deux
+    désignations (équipe sortante avant la relève, entrante après).
     Décision client : pas d'alternance automatique ; tant qu'aucune équipe
     n'est désignée pour la journée courante, la facturation est bloquée (si
     `Node.team_rotation_enabled`). Une ligne par (boulangerie, journée) ;

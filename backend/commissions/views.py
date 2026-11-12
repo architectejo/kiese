@@ -34,6 +34,18 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
             qs = qs.filter(node=user.node)
         return qs
 
+    def destroy(self, request, *args, **kwargs):
+        # BUG-263 : l'historique de paie d'une période clôturée (ou contenant
+        # des commissions payées) ne se supprime pas.
+        period = self.get_object()
+        if period.is_closed:
+            return Response({'detail': 'Une période clôturée ne peut pas être supprimée.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if ClientCommission.objects.filter(period=period, is_paid=True).exists():
+            return Response({'detail': 'Cette période contient des commissions payées : suppression impossible.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def history(self, request):
         """Last N commission periods for a node with aggregates (total CM, net, paid)."""
@@ -114,7 +126,9 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
             # gonfler `order_value`). Sans impact sur la BP/`current_debt` du
             # client, qui sont gérées ailleurs (sales/views.py), pas ici.
             commission_exempt=False,
-        ).select_related('client').prefetch_related('lines')
+            # BUG-261 : une régularisation (RG) ou une facture à taux 0 n'ouvre
+            # pas droit à CM : exclue de la base (sinon CM au taux du client).
+        ).exclude(special_code='RG').exclude(commission_rate=0).select_related('client').prefetch_related('lines')
 
         by_client = {}
         for inv in invoices:
@@ -141,12 +155,14 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
                 }
             )
             if not created:
+                # BUG-264 : une commission payée n'est jamais recalculée ; sinon
+                # seuls les champs dérivés des factures sont rafraîchis (les
+                # retenues saisies à la main sont conservées).
+                if commission.is_paid:
+                    continue
                 commission.total_breads     = agg['total_breads']
                 commission.order_value      = agg['order_value']
                 commission.commission_rate  = client.commission_rate
-                commission.deduction_debt   = client.current_debt
-                commission.deduction_social = cotisation
-                commission.deduction_prints = config.print_fee
             commission.compute(float(config.annual_bonus_rate))
             commission.save()
 
@@ -186,6 +202,9 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]
+        if self.action in ('mark_paid', 'set_manuel'):
+            # BUG-265 : réservés à ADMIN/DIRECTION (ne pas écraser IsDirection).
+            return [IsDirection()]
         return [IsHeadquarters()]
 
     def get_queryset(self):
@@ -194,6 +213,29 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(period__node=user.node)
         return qs
+
+    @staticmethod
+    def _locked_response(commission):
+        # BUG-263 : commission payée ou période clôturée = immuable.
+        if commission.is_paid:
+            return Response({'detail': 'Commission payée : modification impossible.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if commission.period.is_closed:
+            return Response({'detail': 'Période clôturée : modification impossible.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return None
+
+    def update(self, request, *args, **kwargs):
+        locked = self._locked_response(self.get_object())
+        if locked is not None:
+            return locked
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        locked = self._locked_response(self.get_object())
+        if locked is not None:
+            return locked
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         config = Config.get_instance()
@@ -235,6 +277,9 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
     def set_manuel(self, request, pk=None):
         """Override net_payable with a manual adjustment (DIRECTION only)."""
         commission = self.get_object()
+        locked = self._locked_response(commission)
+        if locked is not None:
+            return locked
         config = Config.get_instance()
         adj = request.data.get('manuel_adjustment')
         notes = request.data.get('manuel_notes', '')

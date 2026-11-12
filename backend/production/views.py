@@ -2,7 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Sum, DecimalField, ExpressionWrapper, F
+from django.db.models import Q, Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import viewsets, status, filters
@@ -17,7 +17,7 @@ from core.models import Config, Node, BreadPrice
 from core.permissions import IsGerant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
 from core.workday import (
-    work_date_for, work_time_info, current_team, team_for_work_date,
+    work_date_for, work_time_info, current_team, team_for_work_date, team_at_day_start,
     business_date, workday_bounds, delivered_on_work_date_filter,
 )
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, DailyTeamAssignment, _adjust_bread_stock
@@ -1099,76 +1099,98 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
     @staticmethod
     def _handover_shift_end_response(node, user, now, time_info):
         """
-        BUG-161 (B5) : fin de journée de travail = heure de RELÈVE. La session
-        à clôturer est celle d'une journée de travail PRÉCÉDENTE
-        (`date < business_date(now)`), de l'équipe désignée ce jour-là, non
-        close. Plusieurs journées passées ouvertes : traitées par ordre
-        chronologique, UNE par appel (la plus ancienne d'abord). Délai de
-        grâce et clôture forcée : mêmes règles et même fonction que hors
-        rotation (BUG-155/158/165). `work_date` = journée concernée par
-        l'action (la journée courante si rien à faire) ; `current_work_date`
-        = journée de travail courante.
+        BUG-161 / BUG-247 (décision client 2026-11-12) : en rotation, la fin
+        de service d'une équipe est l'heure de RELÈVE (`Node.handover_time`),
+        mais la date de travail reste le JOUR CALENDAIRE (minuit à minuit).
+        Deux cas, une session traitée par appel (la plus ancienne d'abord) :
+
+        1. Session ouverte d'une PÉRIODE DE SERVICE ÉCHUE (créée avant le début
+           de la période en cours, ou datée avant sa date de période) : clôture
+           à la relève — validation par l'équipe sortante pendant le délai de
+           grâce (`SHIFT_END_GRACE_MINUTES`), puis clôture forcée (mêmes
+           règles et même fonction que hors rotation, BUG-155/158/165). Le
+           reste de l'équipe sortante devient le départ de l'équipe entrante.
+        2. Session ouverte de la période EN COURS mais datée d'un jour
+           calendaire passé (l'équipe a travaillé à cheval sur minuit) :
+           clôture silencieuse au passage de minuit (stock physique courant),
+           pour que chaque jour calendaire ait son propre reste du jour ; la
+           prochaine fournée créera la session du nouveau jour.
+
+        `work_date` = date de la session concernée (la date calendaire
+        courante si rien à faire) ; `current_work_date` = date calendaire du
+        serveur.
         """
         from datetime import timedelta
+        from core.workday import shift_period_start
 
-        current_wd = business_date(node, now)
-        base = {'server_now': time_info['server_now'], 'current_work_date': current_wd.isoformat()}
+        local_now = timezone.localtime(now)
+        today = local_now.date()
+        period_start = shift_period_start(node, now)
+        current_period = business_date(node, now)
+        base = {'server_now': time_info['server_now'], 'current_work_date': today.isoformat()}
 
-        open_dates = (
+        open_sessions = list(
             ProductionSession.objects
-            .filter(node=node, is_closed=False, date__lt=current_wd)
-            .order_by('date').values_list('date', flat=True).distinct()
+            .filter(node=node, is_closed=False, date__lte=today)
+            .order_by('date', 'team')
         )
-        for work_date in list(open_dates):
-            designated = team_for_work_date(node, work_date)
-            candidates = ProductionSession.objects.filter(node=node, date=work_date, is_closed=False)
-
-            # BUG-190 : la désignation a pu être corrigée après une fournée
-            # (A -> B) : la session ouverte de la journée est clôturée quelle
-            # que soit son équipe (l'équipe désignée d'abord, sinon la
-            # première par équipe).
-            #
-            # Si le reste de cette journée est DÉJÀ enregistré (snapshot par
-            # une autre session de la même journée, clôturée avant), les
-            # sessions encore ouvertes sont de simples « restantes » : on les
-            # clôture sans second snapshot ni validation, pour ne jamais
-            # compter le reste deux fois.
-            if DailyBreadStockSnapshot.objects.filter(node=node, date=work_date).exists():
-                leftover = candidates.order_by('team').first()
-                if leftover is not None and _close_leftover_session(leftover, user):
-                    return Response({
-                        'pending_validation': False, 'auto_closed': True, 'team': leftover.team,
-                        **base, 'work_date': work_date.isoformat(),
-                    })
-                continue
-
-            session = (
-                (designated and candidates.filter(team=designated).first())
-                or candidates.order_by('team').first()
-            )
-            if session is None:
-                continue
-
-            handover_dt = workday_bounds(node, work_date)[1]  # relève de fin de cette journée
-            elapsed = now - handover_dt
+        # Pour une même date, l'équipe désignée pour la période de la session
+        # d'abord ; les autres sont des sessions « restantes » (BUG-190).
+        designated_by_pk = {s.pk: current_team(node, s.created_at) for s in open_sessions}
+        open_sessions.sort(key=lambda s: (s.date, 0 if s.team == designated_by_pk[s.pk] else 1, s.team))
+        for session in open_sessions:
+            stale = session.created_at < period_start or session.date < current_period
+            info = {**base, 'work_date': session.date.isoformat()}
             stocks = _current_bread_stocks(node)
-            info = {**base, 'work_date': work_date.isoformat()}
 
-            if elapsed >= timedelta(minutes=SHIFT_END_GRACE_MINUTES):
+            if stale:
+                designated = designated_by_pk[session.pk]
+                if (
+                    designated and session.team != designated
+                    and ProductionSession.objects.filter(
+                        node=node, date=session.date, team=designated,
+                    ).exists()
+                ):
+                    # BUG-190 : désignation corrigée après une fournée — la
+                    # session de l'autre équipe est « restante » : clôture
+                    # silencieuse, sans second reste (jamais compté deux fois).
+                    if _close_leftover_session(session, user):
+                        return Response({'pending_validation': False, 'auto_closed': True, 'team': session.team, **info})
+                    continue
+                # Relève qui a mis fin à la période de cette session (au plus
+                # tard : début de la période en cours).
+                handover_dt = min(period_start, workday_bounds(node, session.date)[1])
+                if now - handover_dt >= timedelta(minutes=SHIFT_END_GRACE_MINUTES):
+                    if not _force_close_session(session, stocks, node, user):
+                        continue
+                    return Response({'pending_validation': False, 'auto_closed': True, 'team': session.team, **info})
+                return Response({
+                    'team': session.team,
+                    'session': session.pk,
+                    'pending_validation': True,
+                    'remaining': _remaining_suggestions(stocks),
+                    'auto_closed': False,
+                    **info,
+                })
+
+            if session.date < today:
+                # Passage de minuit sans relève : clôture silencieuse du jour écoulé
+                # (reste du jour calendaire) ET ouverture de la session du jour
+                # courant pour la même équipe, afin que la relève de midi ait une
+                # session à valider (restes de l'équipe sortante = départ de
+                # l'entrante) et que les ventes de la matinée y soient rattachées.
                 if not _force_close_session(session, stocks, node, user):
                     continue
+                ProductionSession.objects.get_or_create(
+                    node=node, team=session.team, date=today,
+                    defaults={
+                        'declared_by': user, 'node_origin': node.code,
+                        'sac_value_fc_used': session.sac_value_fc_used,
+                    },
+                )
                 return Response({'pending_validation': False, 'auto_closed': True, 'team': session.team, **info})
 
-            return Response({
-                'team': session.team,
-                'session': session.pk,
-                'pending_validation': True,
-                'remaining': _remaining_suggestions(stocks),
-                'auto_closed': False,
-                **info,
-            })
-
-        return Response({'pending_validation': False, 'work_date': current_wd.isoformat(), **base})
+        return Response({'pending_validation': False, 'work_date': today.isoformat(), **base})
 
 
 class ConsumableTypeViewSet(viewsets.ModelViewSet):
@@ -1199,6 +1221,28 @@ class ConsumableStockViewSet(viewsets.ModelViewSet):
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['node', 'consumable_type']
     permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # BUG-251 : lecture pour tout authentifié (périmètre du nœud) ;
+        # écriture réservée au gérant et supérieurs. Les quantités ne
+        # bougent que par `ConsumableMovement` (champ `quantity` en lecture seule).
+        if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated()]
+        return [IsGerant()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not user.can_access_all_nodes:
+            serializer.save(node=user.node, node_origin=user.node.code)
+        else:
+            node = serializer.validated_data.get('node') or user.node
+            serializer.save(node=node, node_origin=node.code if node else 'CLOUD')
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if not user.can_access_all_nodes:
+            serializer.validated_data.pop('node', None)
+        serializer.save()
 
     def _ensure_stock_accounts(self):
         """
@@ -2262,7 +2306,7 @@ def _build_daily_closure_report(node, report_date=None):
     day_team = None
     if rotation:
         day_team = (
-            team_for_work_date(node, report_date)
+            team_at_day_start(node, report_date)
             or sessions_qs.order_by('team').values_list('team', flat=True).first()
             or DailyOpeningConfirmation.objects.filter(node=node, date=report_date)
             .order_by('team').values_list('team', flat=True).first()
@@ -2277,9 +2321,29 @@ def _build_daily_closure_report(node, report_date=None):
     # Absence de confirmation pour ce jour/équipe = comportement auto-dérivé
     # strictement inchangé (rétro-compatibilité totale).
     confirmed_reste_du_hier_by_team_bp = {}
+    handover_confirmations = []
+    # BUG-247 : reste de FIN DE JOURNÉE (rotation) = dernier reste déclaré de la
+    # date, une fois TOUTES les sessions de la date clôturées ; tant qu'une
+    # session est ouverte, le reste du jour n'est pas connu (0, comme avant).
+    day_is_complete = not (
+        rotation and ProductionSession.objects.filter(node=node, date=report_date, is_closed=False).exists()
+    )
     for confirmation in DailyOpeningConfirmation.objects.filter(
         node=node, date=report_date,
     ).prefetch_related('lines'):
+        # BUG-247 : en rotation, un seul rapport par jour calendaire ; seule la
+        # confirmation de l'équipe de début de journée est le « reste du hier »
+        # du rapport. Celle de l'équipe entrante à la relève (restes de
+        # l'équipe sortante) est un transfert interne, jamais additionné.
+        if rotation and day_team is not None and confirmation.team != day_team:
+            # L'ÉCART entre ce qu'elle a trouvé et le reste déclaré par l'équipe
+            # sortante (ajustement de stock tracé) est porté au départ de la
+            # journée plus bas, pour que l'identité du rapport tienne.
+            handover_confirmations.append((
+                confirmation.confirmed_at,
+                {line.bread_price_id: line.qty_confirmed for line in confirmation.lines.all()},
+            ))
+            continue
         for line in confirmation.lines.all():
             confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
     confirmed_bp_ids_any_team = {bp_id for (_team, bp_id) in confirmed_reste_du_hier_by_team_bp}
@@ -2363,7 +2427,37 @@ def _build_daily_closure_report(node, report_date=None):
             )
             for team in team_choices
         }
-        reste_du_jour_fc = _m(sum(Decimal(v or 0) for v in reste_du_jour_by_team.values()) * catalog_price)
+        if rotation and day_team is not None and handover_confirmations:
+            # BUG-247 : écart de stock constaté par l'équipe entrante à la
+            # relève (confirmé - dernier reste déclaré avant la confirmation),
+            # ajouté au départ de la journée (identité du rapport préservée).
+            handover_adjust = 0
+            for confirmed_at, qty_by_bp in handover_confirmations:
+                if bp_id not in qty_by_bp:
+                    continue
+                before = (
+                    DailyBreadStockSnapshot.objects
+                    .filter(node=node, bread_price=bp, date__lte=report_date, updated_at__lte=confirmed_at)
+                    .order_by('-date', '-updated_at', '-pk').first()
+                )
+                handover_adjust += qty_by_bp[bp_id] - (before.qty_at_close if before else 0)
+            if handover_adjust:
+                reste_du_hier_by_team[day_team] = (reste_du_hier_by_team.get(day_team) or 0) - handover_adjust
+        if rotation:
+            # BUG-247 : un seul rapport par jour calendaire, partagé par les deux
+            # équipes. Le reste de FIN DE JOURNÉE est le dernier reste déclaré
+            # de la date (toutes équipes) : celui de l'équipe sortante à la
+            # relève est le départ de l'équipe entrante, jamais additionné.
+            last_snap = (
+                DailyBreadStockSnapshot.objects
+                .filter(node=node, bread_price=bp, date=report_date)
+                .order_by('-updated_at', '-pk').first()
+            ) if day_is_complete else None
+            reste_du_jour_fin = last_snap.qty_at_close if last_snap else None
+            reste_du_jour_fc = _m(Decimal(reste_du_jour_fin or 0) * catalog_price)
+        else:
+            reste_du_jour_fin = None
+            reste_du_jour_fc = _m(sum(Decimal(v or 0) for v in reste_du_jour_by_team.values()) * catalog_price)
         reste_du_hier_fc = _m(sum(Decimal(v or 0) for v in reste_du_hier_by_team.values()) * catalog_price)
 
         appro_effectue_qty = appro_effectue_by_bp.get(bp_id, 0)
@@ -2405,6 +2499,7 @@ def _build_daily_closure_report(node, report_date=None):
             'facture_jr': {'quantity': normal.get('qty') or 0, 'fc': str(facture_fc)},
             'commission_jr': {'fc': str(commission_fc)},
             'reste_du_jour': reste_du_jour_by_team,
+            **({'reste_du_jour_fin_journee': reste_du_jour_fin} if rotation else {}),
             'reste_du_hier': reste_du_hier_by_team,
             'appro_effectue': {'quantity': appro_effectue_qty, 'fc': str(appro_effectue_fc)},
             'appro_recu':     {'quantity': appro_recu_qty, 'fc': str(appro_recu_fc)},
@@ -2793,7 +2888,10 @@ class DailyOpeningConfirmationView(APIView):
             # journée, toutes équipes confondues (le reste de A = départ de B).
             # Sans instantané antérieur pour la catégorie : stock courant.
             for bp in categories:
-                previous = DailyBreadStockSnapshot.last_snapshot_before(node, bp, report_date)
+                # BUG-247 : jusqu'à la date incluse — à la relève de midi, le
+                # reste de l'équipe sortante (même date calendaire) est le
+                # départ de l'équipe entrante.
+                previous = DailyBreadStockSnapshot.last_snapshot_upto(node, bp, report_date)
                 if previous is not None:
                     proposed_by_bp[bp.id] = previous.qty_at_close
 
@@ -2807,11 +2905,20 @@ class DailyOpeningConfirmationView(APIView):
             for bp in categories
         ]
 
+        confirmations_qs = DailyOpeningConfirmation.objects.filter(
+            node=node, date=report_date,
+        )
+        if rotation and not date_str:
+            # BUG-247 : une confirmation par PÉRIODE DE SERVICE (relève), pas
+            # par jour calendaire : celle d'une période précédente (même date
+            # calendaire ou veille) ne dispense pas l'équipe entrante.
+            from core.workday import shift_period_start
+            confirmations_qs = DailyOpeningConfirmation.objects.filter(
+                node=node, confirmed_at__gte=shift_period_start(node),
+            ).order_by('confirmed_at')
         confirmations_by_team = {
             confirmation.team: confirmation
-            for confirmation in DailyOpeningConfirmation.objects.filter(
-                node=node, date=report_date,
-            ).select_related('confirmed_by').prefetch_related('lines')
+            for confirmation in confirmations_qs.select_related('confirmed_by').prefetch_related('lines')
         }
 
         teams_payload = {}
@@ -2848,7 +2955,7 @@ class DailyOpeningConfirmationView(APIView):
             # que soit l'équipe ; l'équipe concernée est l'équipe désignée
             # (plus de choix d'équipe dans la boîte). Sans désignation, la
             # désignation passe d'abord (pas de boîte de stock de départ).
-            designated = team_for_work_date(node, report_date)
+            designated = team_at_day_start(node, report_date) if date_str else current_team(node)
             confirmed_any = any(t['confirmed'] for t in teams_payload.values())
             return Response({
                 'node': node.code,
@@ -3085,8 +3192,10 @@ class DailyOpeningConfirmationView(APIView):
 
 class TeamAssignmentView(APIView):
     """
-    BUG-161 (B2) : désignation MANUELLE de l'équipe de service de la journée
-    de travail courante (de relève à relève, `core.workday`).
+    BUG-161 (B2) / BUG-247 : désignation MANUELLE de l'équipe de service de la
+    PÉRIODE de service courante (de relève à relève, `core.workday`) ; la date
+    de travail `work_date` renvoyée est le jour calendaire local, `shift_date`
+    la date de la relève qui ouvre la période (clé de la désignation).
 
     `GET /api/production/team-assignment/?node=<code ou pk>` renvoie
     `{work_date, handover_time, team|null, suggested, assigned_by, server_now}`
@@ -3103,12 +3212,16 @@ class TeamAssignmentView(APIView):
 
     @staticmethod
     def _payload(node, now, assignment):
-        from core.workday import business_date, suggested_team
+        from core.workday import shift_date, suggested_team
 
         return {
             # BUG-227 : même journée que les autres routes (`work_date_for` :
             # date calendaire hors rotation, journée de relève en rotation).
             'work_date': work_date_for(node, now).isoformat(),
+            # BUG-247 : date de la PÉRIODE DE SERVICE (relève de début) à
+            # laquelle la désignation est rattachée ; en rotation elle peut
+            # précéder `work_date` (jour calendaire) avant l'heure de relève.
+            'shift_date': shift_date(node, now).isoformat(),
             'handover_time': node.handover_time.strftime('%H:%M'),
             'team': assignment.team if assignment else None,
             'suggested': suggested_team(node, now),
@@ -3120,7 +3233,7 @@ class TeamAssignmentView(APIView):
         }
 
     def get(self, request):
-        from core.workday import business_date
+        from core.workday import shift_date
 
         node, err = _opening_confirmation_resolve_node(request, request.query_params.get('node'))
         if err is not None:
@@ -3128,12 +3241,12 @@ class TeamAssignmentView(APIView):
         now = timezone.now()
         assignment = (
             DailyTeamAssignment.objects.select_related('assigned_by')
-            .filter(node=node, work_date=work_date_for(node, now)).first()
+            .filter(node=node, work_date=shift_date(node, now)).first()
         )
         return Response(self._payload(node, now, assignment))
 
     def post(self, request):
-        from core.workday import business_date
+        from core.workday import shift_date, shift_period_start
 
         # BUG-187 : le corps doit être un objet JSON ; `node`/`team` de bon type.
         data = request.data
@@ -3169,10 +3282,15 @@ class TeamAssignmentView(APIView):
         # facturation ; elle reste acceptée (rétro-compatibilité) mais sur la
         # date CALENDAIRE (comme le reste de l'API), jamais sur la journée de
         # relève J-1 — plus de désignation « parasite » décalée au basculement.
-        work_date = work_date_for(node, now)
+        # BUG-247 : `work_date` (colonne) = date de la période de service ; le
+        # jour calendaire reste la date de travail (accepté aussi en entrée).
+        work_date = shift_date(node, now)
+        calendar_today = work_date_for(node, now)
         for key in ('work_date', 'date'):
             requested = request.data.get(key)
-            if requested not in (None, '') and str(requested) != work_date.isoformat():
+            if requested not in (None, '') and str(requested) not in (
+                work_date.isoformat(), calendar_today.isoformat(),
+            ):
                 return Response(
                     {'detail': (
                         "La désignation ne peut porter que sur la journée de travail "
@@ -3196,7 +3314,8 @@ class TeamAssignmentView(APIView):
             if (
                 existing is None and node.team_rotation_enabled
                 and ProductionSession.objects.filter(
-                    node=node, is_closed=False, date__lt=work_date,
+                    Q(created_at__lt=shift_period_start(node, now)) | Q(date__lt=work_date),
+                    node=node, is_closed=False,
                 ).exists()
             ):
                 return Response(

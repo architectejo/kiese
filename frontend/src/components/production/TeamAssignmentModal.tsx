@@ -12,7 +12,8 @@ import { productionApi, ServiceTeam, TeamAssignment } from '@/api/services';
 //   n'est pas désignée.
 // - Mode correction (`dismissible = true`) : le gérant/facturier change l'équipe de la
 //   journée en cours ; fermable.
-// Le frontend n'envoie aucune date : le serveur calcule la journée de travail.
+// Le frontend n'envoie aucune date : le serveur calcule la période de service. BUG-272 : `work_date`
+// est le jour calendaire (inchangé à la relève) ; la période de service est identifiée par `shift_date`.
 
 export interface TeamAssignmentModalProps {
   assignment: TeamAssignment;
@@ -35,11 +36,12 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Nouvelle journée (relève passée) ou nouvelle suggestion : on repart de la proposition.
+  // Nouvelle période de service (relève passée : `shift_date` change, `team` repasse à null) ou
+  // nouvelle suggestion : on repart de la proposition.
   useEffect(() => {
     setSelected(assignment.team ?? assignment.suggested);
     setError(null);
-  }, [assignment.work_date, assignment.team, assignment.suggested]);
+  }, [assignment.shift_date, assignment.team, assignment.suggested]);
 
   // BUG-196 : le serveur refuse (400 PREVIOUS_WORKDAY_OPEN) tant que le reste du jour précédent
   // n'est pas confirmé. Message dédié (pas d'erreur générique) + relance automatique.
@@ -120,8 +122,8 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
     <Modal
       isOpen={true}
       onClose={() => { if (dismissible) onClose(); }}
-      title={assignment.team === null ? 'Équipe de service du jour' : "Changer l'équipe de service"}
-      subtitle={`Journée de travail du ${formatWorkDate(assignment.work_date)}`}
+      title={assignment.team === null ? 'Équipe de service' : "Changer l'équipe de service"}
+      subtitle={`Service du ${formatWorkDate(assignment.shift_date ?? assignment.work_date)} (relève de ${formatHandover(assignment.handover_time)})`}
       maxWidth="460px"
       closeOnBackdropClick={dismissible}
       showCloseButton={dismissible}
@@ -160,12 +162,12 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
       </div>
 
       <p style={{ fontSize: '0.74rem', color: 'hsl(var(--text-secondary))', marginTop: '10px', lineHeight: 1.4 }}>
-        Suggestion : l'autre équipe que la dernière journée (équipe {assignment.suggested}). Vous pouvez choisir librement.
+        Suggestion : l'autre équipe que la dernière période de service (équipe {assignment.suggested}). Vous pouvez choisir librement.
       </p>
 
       <p style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'hsl(var(--text-secondary))', marginTop: '8px' }}>
         <FiClock />
-        Relève des équipes à {formatHandover(assignment.handover_time)} chaque jour.
+        Relève des équipes à {formatHandover(assignment.handover_time)} chaque jour (la date, elle, change à minuit).
       </p>
 
       {blockedMessage && (

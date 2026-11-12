@@ -417,7 +417,7 @@ export const Nodes: React.FC = () => {
                   />
                   {formErrors.handover_time && <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', marginTop: '3px', display: 'block' }}>{formErrors.handover_time}</span>}
                   <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                    Heure à laquelle une équipe remplace l'autre (défaut 12:00). La journée de travail va de cette heure à la même heure le lendemain.
+                    Heure à laquelle une équipe remplace l'autre (défaut 12:00). Seule l'équipe en service change à cette heure : la date, elle, suit le jour calendaire (minuit à minuit).
                   </span>
                 </div>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>

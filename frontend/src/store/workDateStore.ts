@@ -5,14 +5,16 @@ import { create } from 'zustand';
  * BUG-161 (F3) : « date de travail » fournie par le SERVEUR.
  *
  * Le navigateur ne calcule plus « aujourd'hui » avec `new Date().toISOString()` (date UTC :
- * la veille entre 00:00 et 01:00 à Kinshasa) ni, en rotation de 24 h, avec le calendrier
- * (la journée de travail court de l'heure de relève à la relève suivante). Le store est
+ * la veille entre 00:00 et 01:00 à Kinshasa). BUG-272 (décision client 2026-11-12) : la date
+ * annoncée par le serveur est TOUJOURS le jour calendaire local (minuit à minuit), avec ou sans
+ * rotation ; la relève ne change que l'équipe en service, jamais la date. Le store est
  * alimenté par les réponses DÉJÀ existantes (`opening-confirmation`, `team-assignment`,
  * `shift-end-status`, `bread-stocks/by-date`, `daily-closure`) : aucun endpoint ni
  * `setInterval` supplémentaire.
  *
  * Repli tant que le serveur n'a pas répondu : date LOCALE du navigateur (jamais UTC), ce
- * qui est exact pour une boulangerie sans rotation (date de travail = date du calendrier).
+ * qui est exact (date de travail = date du calendrier). Une annonce d'un autre jour calendaire
+ * est périmée (minuit passé sans rechargement).
  */
 
 /** Date locale du navigateur au format AAAA-MM-JJ (jamais UTC). */
@@ -26,12 +28,12 @@ export function localIsoDate(d: Date = new Date()): string {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 interface WorkDateState {
-  /** Dernière journée de travail annoncée par le serveur (AAAA-MM-JJ), ou null. */
+  /** Dernier jour calendaire annoncé par le serveur (AAAA-MM-JJ), ou null. */
   serverWorkDate: string | null;
-  /** Vrai si l'annonce vient d'une boulangerie en rotation (valable jusqu'à la prochaine
-   *  annonce : le sondage de 10 s la rafraîchit) ; sinon valable le jour calendaire reçu. */
+  /** Vrai si l'annonce vient d'une boulangerie en rotation d'équipes (information : la date
+   *  reste calendaire dans tous les cas). */
   rotation: boolean;
-  /** Date locale du navigateur au moment de l'annonce (pour périmer une annonce calendaire). */
+  /** Date locale du navigateur au moment de l'annonce (pour périmer l'annonce au changement de jour). */
   localDateAtFeed: string | null;
   setWorkDate: (workDate: string | null | undefined, rotation?: boolean) => void;
   clearWorkDate: () => void;
@@ -47,23 +49,23 @@ export const useWorkDateStore = create<WorkDateState>((set, get) => ({
     // Une annonce « rotation » n'est pas rétrogradée par une réponse qui ne le précise pas
     // (ex. `by-date`) tant que la date est la même ; une date différente la remplace.
     const isRotation = rotation ?? (cur.rotation && cur.serverWorkDate === workDate);
-    if (cur.serverWorkDate === workDate && cur.rotation === isRotation) return;
+    if (cur.serverWorkDate === workDate && cur.rotation === isRotation && cur.localDateAtFeed === localIsoDate()) return;
     set({ serverWorkDate: workDate, rotation: isRotation, localDateAtFeed: localIsoDate() });
   },
   clearWorkDate: () => set({ serverWorkDate: null, rotation: false, localDateAtFeed: null }),
 }));
 
-/** Journée de travail courante : annonce serveur si valable, sinon date locale. */
+/** Jour courant (calendaire) : annonce serveur si elle date d'aujourd'hui, sinon date locale. */
 export function resolveWorkDate(s: Pick<WorkDateState, 'serverWorkDate' | 'rotation' | 'localDateAtFeed'>): string {
   const local = localIsoDate();
   if (!s.serverWorkDate) return local;
-  // Hors rotation, la date de travail = date du calendrier : une annonce d'un autre jour
-  // calendaire est périmée (minuit passé sans rechargement).
-  if (!s.rotation && s.localDateAtFeed !== local) return local;
+  // La date de travail = jour calendaire : une annonce d'un autre jour est périmée
+  // (minuit passé sans rechargement), avec ou sans rotation.
+  if (s.localDateAtFeed !== local) return local;
   return s.serverWorkDate;
 }
 
-/** Hook : journée de travail courante (AAAA-MM-JJ). */
+/** Hook : jour courant (calendaire, AAAA-MM-JJ). */
 export function useWorkDate(): string {
   return useWorkDateStore(s => resolveWorkDate(s));
 }
@@ -80,8 +82,8 @@ export function getWorkDate(): string {
 
 /**
  * Hook : jour sélectionné par l'utilisateur dans un sélecteur de jour. Par défaut (aucun choix)
- * il suit la journée de travail courante, y compris après la relève. Si l'utilisateur
- * regardait la journée courante au moment du changement de journée, il suit la nouvelle.
+ * il suit le jour courant. Si l'utilisateur regardait le jour courant au passage de minuit,
+ * il suit le nouveau.
  */
 export function useSelectedWorkDay(): [string, (iso: string) => void, string] {
   const workDate = useWorkDate();

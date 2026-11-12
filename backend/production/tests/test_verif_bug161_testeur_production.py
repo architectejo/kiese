@@ -77,7 +77,9 @@ class AssignmentApiRobustnessTests(TestCase):
         with _now(date(2026, 11, 12), 0, 0, 0):
             r = self.api.post(URL, {'team': 'B'}, format='json')
         self.assertEqual(r.status_code, 200, r.data)
-        self.assertEqual(r.data['work_date'], '2026-11-11')
+        # BUG-247 : date de travail calendaire ; la désignation vise la période du 11/11.
+        self.assertEqual(r.data['work_date'], '2026-11-12')
+        self.assertEqual(r.data['shift_date'], '2026-11-11')
 
     def test_post_at_handover_instant_targets_new_day(self):
         with _now(date(2026, 11, 12), 12, 0, 0):
@@ -110,7 +112,8 @@ class AssignmentApiRobustnessTests(TestCase):
             self.api.post(URL, {'team': 'A'}, format='json')
             self.node.handover_time = time(18, 0); self.node.save()
             g = self.api.get(URL)
-        self.assertEqual(g.data['work_date'], '2026-11-10')
+        self.assertEqual(g.data['shift_date'], '2026-11-10')
+        self.assertEqual(g.data['work_date'], '2026-11-11')  # BUG-247 : calendaire
         self.assertIsNone(g.data['team'])
 
     def test_activity_log_records_actor_and_node(self):

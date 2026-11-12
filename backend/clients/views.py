@@ -2,7 +2,7 @@ from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -128,9 +128,17 @@ class ClientViewSet(viewsets.ModelViewSet):
         if node is None:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({"node": "Utilisateur non assigné à un nœud. Précisez le nœud."})
+        extra = {}
+        if not (user.is_superuser or user.role in ('ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT')):
+            # BUG-250 : plafond de crédit et taux de commission réservés au
+            # gérant et supérieurs (CLAUDE.md §5.1) : valeurs par défaut sinon.
+            from decimal import Decimal
+            extra['credit_limit'] = Decimal(str(Client._meta.get_field('credit_limit').get_default()))
+            extra['commission_rate'] = Decimal(str(Client._meta.get_field('commission_rate').get_default()))
         client = serializer.save(
             node=node,
             node_origin=node.code,
+            **extra,
         )
         log_activity(
             self.request.user,
@@ -433,6 +441,10 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
             node = user.node
         else:
             node = serializer.validated_data.get('node') or user.node
+        # BUG-249 : le client doit appartenir au nœud retenu.
+        client = serializer.validated_data.get('client')
+        if client is not None and client.node_id != node.pk:
+            raise ValidationError({'client': "Ce client n'appartient pas à la boulangerie indiquée."})
         serializer.save(node=node)
 
     @action(detail=True, methods=['post'])
@@ -449,11 +461,17 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
         node_id = request.data.get('node')
         month   = request.data.get('month')
         year    = request.data.get('year')
-        amount  = request.data.get('amount', '3000.00')
+        user = request.user
+        if not user.can_access_all_nodes:
+            # BUG-249 : le nœud est imposé pour un non-siège ; un `node`
+            # étranger dans le corps est refusé.
+            if node_id and str(node_id) != str(user.node_id):
+                raise PermissionDenied("Vous ne pouvez créer des cotisations que pour votre boulangerie.")
+            node_id = user.node_id
         if not all([node_id, month, year]):
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'node, month et year sont requis.'})
-        clients = Client.objects.filter(node_id=node_id, is_active=True, cotisation_sociale=True)
+        # BUG-256 : `cotisation_sociale` est un montant (DecimalField) -> `> 0`.
+        clients = Client.objects.filter(node_id=node_id, is_active=True, cotisation_sociale__gt=0)
         created, skipped = 0, 0
         for client in clients:
             obj, is_new = SocialContribution.objects.get_or_create(
@@ -461,7 +479,7 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
                 node_id=node_id,
                 month=month,
                 year=year,
-                defaults={'amount': amount},
+                defaults={'amount': request.data.get('amount') or client.cotisation_sociale},
             )
             if is_new:
                 created += 1
@@ -504,7 +522,7 @@ class SocialDistributionViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Cette distribution est déjà clôturée.'})
         from django.db.models import Sum
-        clients = Client.objects.filter(node=distribution.node, is_active=True, cotisation_sociale=True)
+        clients = Client.objects.filter(node=distribution.node, is_active=True, cotisation_sociale__gt=0)  # BUG-256
         created, skipped = 0, 0
         for client in clients:
             paid_qs = SocialContribution.objects.filter(

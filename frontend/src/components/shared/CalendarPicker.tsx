@@ -42,7 +42,7 @@ const parseIso = (iso: string): Date => {
 
 export const CalendarPicker: React.FC<CalendarPickerProps> = ({ value, onSelect, maxDate }) => {
   const selected = value ? parseIso(value) : new Date();
-  // BUG-161 (F3) : par défaut, dernier jour sélectionnable = journée de travail du serveur.
+  // BUG-161 (F3) : par défaut, dernier jour sélectionnable = jour calendaire du serveur (BUG-272).
   const workDate = useWorkDate();
   const effectiveMaxDate = maxDate ?? workDate;
   const [viewYear, setViewYear] = useState(selected.getFullYear());

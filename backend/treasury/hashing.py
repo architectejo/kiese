@@ -198,8 +198,31 @@ def verify_cashbook_chain(entries):
     previous_hash = GENESIS_HASH
     for entry in entries:
         expected = compute_cashbook_entry_hash(entry, previous_hash=previous_hash)
-        is_valid = (entry.block_hash == expected)
+        # BUG-238 : le `previous_hash` stocké doit aussi correspondre au hash
+        # du bloc précédent reconstruit (il n'est pas relu par le calcul ci-dessus).
+        is_valid = (entry.block_hash == expected) and ((entry.previous_hash or '') == previous_hash)
         results.append((entry, expected, is_valid))
         if is_valid:
             previous_hash = entry.block_hash
     return results
+
+
+def check_cashbook_head(entries, head):
+    """BUG-240 : contrôle l'ancre de tête de chaîne (`CashbookHead`).
+
+    Une suppression directe de la dernière écriture laisse une chaîne
+    cohérente mais plus courte : l'ancre persistante (dernier hash + nombre
+    d'écritures, mise à jour à chaque ajout) la révèle. ``entries`` est la
+    liste ordonnée complète. Retourne ``None`` si tout va bien (ou si aucune
+    ancre n'existe encore), sinon une description de l'anomalie.
+    """
+    if head is None:
+        return None
+    last = entries[-1] if entries else None
+    last_hash = last.block_hash if last else ''
+    if len(entries) < head.entry_count or last_hash != head.last_hash:
+        return (
+            f"Tête de chaîne incohérente : {len(entries)} écriture(s) présente(s) pour "
+            f"{head.entry_count} enregistrée(s) (suppression ou insertion directe en base)."
+        )
+    return None

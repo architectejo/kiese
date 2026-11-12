@@ -4,6 +4,7 @@ Core API views — Authentication, Config, Nodes, Users management.
 
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -14,15 +15,29 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import Node, Config, BreadPrice, ExpenseCategory, ActivityLog, SystemNotification, ColisDistribution
 from .serializers import (
     NodeSerializer, UserSerializer, UserCreateSerializer,
-    ConfigSerializer, BreadPriceSerializer, ExpenseCategorySerializer, LoginSerializer,
+    ConfigSerializer, PublicConfigSerializer, BreadPriceSerializer, ExpenseCategorySerializer, LoginSerializer,
     ActivityLogSerializer, SystemNotificationSerializer,
     ColisDistributionSerializer,
 )
 from .permissions import IsAdmin, IsDirection, IsHeadquarters, IsGerant, IsSuperuser
 from .throttling import LoginAccountRateThrottle, LoginIPRateThrottle
+from .utils import log_activity
 from . import reset as reset_module
 
 User = get_user_model()
+
+
+def _generate_temporary_password(length=12):
+    """Mot de passe temporaire aléatoire (CSPRNG), sans caractères ambigus."""
+    import secrets
+    upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+    lower = 'abcdefghijkmnopqrstuvwxyz'
+    digits = '23456789'
+    allchars = upper + lower + digits
+    chars = [secrets.choice(upper), secrets.choice(lower), secrets.choice(digits)]
+    chars += [secrets.choice(allchars) for _ in range(length - 3)]
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
 
 
 # ─── Authentication ──────────────────────────────────────────────────
@@ -129,6 +144,14 @@ class ConfigView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return Config.get_instance()
 
+    def get_serializer_class(self):
+        # BUG-255 : l'anonyme (page publique / contrôle `on_line` au démarrage)
+        # ne reçoit que le strict nécessaire ; la configuration complète
+        # (plafond, taux, valeur du sac...) est réservée aux authentifiés.
+        if self.request.method == 'GET' and not self.request.user.is_authenticated:
+            return PublicConfigSerializer
+        return ConfigSerializer
+
 
 # ─── Nodes ───────────────────────────────────────────────────────────
 
@@ -169,13 +192,70 @@ class UserViewSet(viewsets.ModelViewSet):
             return [IsHeadquarters()]
         return [IsDirection()]
 
+    # BUG-247 : seul un ADMIN (ou le superuser) crée, modifie, supprime ou
+    # réinitialise un compte ADMIN/superuser ; personne ne change son propre
+    # rôle ou rattachement via /users/<id>/.
+    @staticmethod
+    def _is_admin_level(user):
+        return bool(user.is_superuser or user.role == 'ADMIN')
+
+    def _deny(self, message):
+        raise PermissionDenied(message)
+
+    def perform_create(self, serializer):
+        actor = self.request.user
+        if serializer.validated_data.get('role') == 'ADMIN' and not self._is_admin_level(actor):
+            self._deny("Seul un administrateur peut créer un compte administrateur.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        actor = self.request.user
+        target = serializer.instance
+        data = serializer.validated_data
+        if not self._is_admin_level(actor):
+            if self._is_admin_level(target):
+                self._deny("Seul un administrateur peut modifier un compte administrateur.")
+            if data.get('role') == 'ADMIN':
+                self._deny("Seul un administrateur peut attribuer le rôle administrateur.")
+        if target.pk == actor.pk:
+            if 'role' in data and data['role'] != target.role:
+                self._deny("Vous ne pouvez pas modifier votre propre rôle.")
+            if 'node' in data and data['node'] != target.node:
+                self._deny("Vous ne pouvez pas modifier votre propre boulangerie de rattachement.")
+            if 'is_active' in data and not data['is_active']:
+                self._deny("Vous ne pouvez pas désactiver votre propre compte.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        actor = self.request.user
+        if instance.pk == actor.pk:
+            self._deny("Vous ne pouvez pas supprimer votre propre compte.")
+        if self._is_admin_level(instance) and not self._is_admin_level(actor):
+            self._deny("Seul un administrateur peut supprimer un compte administrateur.")
+        instance.delete()
+
     @action(detail=True, methods=['post'], permission_classes=[IsDirection])
     def reset_password(self, request, pk=None):
-        """Reset a user's password to their username (DIRECTION only)."""
+        """BUG-248 : mot de passe temporaire aléatoire (jamais l'identifiant).
+
+        Le mot de passe n'est renvoyé qu'une seule fois dans `temporary_password`
+        et n'est JAMAIS journalisé.
+        """
         user = self.get_object()
-        user.set_password(user.username)
+        if self._is_admin_level(user) and not self._is_admin_level(request.user):
+            self._deny("Seul un administrateur peut réinitialiser le mot de passe d'un administrateur.")
+        temp = _generate_temporary_password()
+        user.set_password(temp)
         user.save()
-        return Response({'detail': f"Mot de passe réinitialisé — nouveau mot de passe : {user.username}"})
+        log_activity(
+            request.user, 'RESET_PASSWORD',
+            f"Mot de passe réinitialisé pour le compte {user.username}",
+            node_origin=user.node.code if user.node_id else 'CLOUD',
+        )
+        return Response({
+            'detail': "Mot de passe réinitialisé. Communiquez le mot de passe temporaire à l'utilisateur (affiché une seule fois).",
+            'temporary_password': temp,
+        })
 
 
 # ─── Bread Prices ────────────────────────────────────────────────────
@@ -272,7 +352,18 @@ class SystemNotificationViewSet(viewsets.ModelViewSet):
         # à tout utilisateur authentifié, filtrés par `get_queryset()`.
         if self.action in ('create', 'update', 'partial_update'):
             return [IsHeadquarters()]
+        # BUG-252 : suppression d'une alerte globale (siège, `CLOUD`) réservée
+        # au siège ; voir aussi `_assert_can_touch` pour mark_read.
         return [IsAuthenticated()]
+
+    @staticmethod
+    def _assert_can_touch(user, notification):
+        if notification.node_origin == 'CLOUD' and not user.can_access_all_nodes:
+            raise PermissionDenied("Les alertes du siège ne peuvent être traitées que par le siège.")
+
+    def destroy(self, request, *args, **kwargs):
+        self._assert_can_touch(request.user, self.get_object())
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -287,13 +378,17 @@ class SystemNotificationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         """Mark all unread notifications as read (dans le périmètre de l'utilisateur)."""
-        self.get_queryset().filter(is_read=False).update(is_read=True)
+        qs = self.get_queryset().filter(is_read=False)
+        if not request.user.can_access_all_nodes:
+            qs = qs.exclude(node_origin='CLOUD')  # BUG-252
+        qs.update(is_read=True)
         return Response({'status': 'notifications marked read'})
 
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
         """Mark a single notification as read."""
         notification = self.get_object()
+        self._assert_can_touch(request.user, notification)
         notification.is_read = True
         notification.save()
         return Response({'status': 'notification marked read'})

@@ -401,6 +401,26 @@ class CashbookEntry(SyncableModel):
         super().save(*args, **kwargs)
 
 
+class CashbookHead(models.Model):
+    """BUG-240 : ancre de tête de chaîne du Livre de Caisse (ligne unique).
+
+    Mise à jour par `append_cashbook_entry` dans la même transaction que
+    l'écriture : dernier hash, nombre d'écritures, code du nœud de la dernière.
+    Permet de détecter la suppression directe de la dernière écriture, que le
+    chaînage seul ne voit pas. Donnée locale, non synchronisée.
+    """
+    last_hash = models.CharField(max_length=64, blank=True, default='')
+    entry_count = models.PositiveIntegerField(default=0)
+    last_node_code = models.CharField(max_length=20, blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Ancre du Livre de Caisse")
+
+    def __str__(self):
+        return f"Tête de chaîne : {self.entry_count} écriture(s)"
+
+
 class DirectionCashCount(models.Model):
     """
     BUG-119 (Chantier A, analyse `data_kiese/D1-4...xlsx` — Livre de Caisse

@@ -42,7 +42,7 @@ export const ClotureJournaliere: React.FC = () => {
   // Le backend accepte un code boulangerie (`?node=K1`) — on travaille toujours avec le
   // code plutôt que le pk interne, qui n'est jamais exposé à l'utilisateur.
   const [selectedNodeCode, setSelectedNodeCode] = useState('');
-  // BUG-161 (F3) : jour affiché = journée de travail du serveur tant que l'utilisateur n'en choisit pas un autre.
+  // BUG-272 : jour affiché = jour calendaire du serveur tant que l'utilisateur n'en choisit pas un autre.
   const [date, setDate] = useSelectedWorkDay();
   const [report, setReport] = useState<DailyClosureReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -93,6 +93,9 @@ export const ClotureJournaliere: React.FC = () => {
   }, [effectiveNodeCode, date, fetchReport]);
 
   const totals = report?.totals;
+  // BUG-272 : en rotation, le serveur fournit `reste_du_jour_fin_journee` (reste de fin de journée
+  // = dernier reste déclaré de la date). Les restes des deux équipes ne sont jamais additionnés.
+  const hasEndOfDayRest = !!report?.categories.some(c => c.reste_du_jour_fin_journee !== undefined);
   const repartitionRows = totals
     ? (repartitionMode === 'QUANTITE' ? totals.repartition_pct_par_quantite : totals.repartition_pct_par_valeur)
     : [];
@@ -306,6 +309,11 @@ export const ClotureJournaliere: React.FC = () => {
                     <th style={{ textAlign: 'right' }}>Reste Jour (B)</th>
                     <th style={{ textAlign: 'right' }}>Reste Hier (A)</th>
                     <th style={{ textAlign: 'right' }}>Reste Hier (B)</th>
+                    {hasEndOfDayRest && (
+                      <th style={{ textAlign: 'right' }} title="Dernier reste déclaré du jour (les deux équipes ne sont pas additionnées). Vide tant qu'une fournée du jour n'est pas clôturée.">
+                        Reste fin de journée
+                      </th>
+                    )}
                     <th style={{ textAlign: 'right' }}>Appro Effectué</th>
                     <th style={{ textAlign: 'right' }}>Appro Reçu</th>
                     <th style={{ textAlign: 'right' }} title={NON_SERVI_HELP}>Non Servi</th>
@@ -335,6 +343,9 @@ export const ClotureJournaliere: React.FC = () => {
                       <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_jour.B)}</td>
                       <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_hier.A)}</td>
                       <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_hier.B)}</td>
+                      {hasEndOfDayRest && (
+                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatQty(cat.reste_du_jour_fin_journee)}</td>
+                      )}
                       <td style={{ textAlign: 'right' }}>
                         {formatQty(cat.appro_effectue.quantity)}
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_effectue.fc)}</div>

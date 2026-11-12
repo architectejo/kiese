@@ -93,25 +93,21 @@ class BreadSummaryTests(Vague1Base):
         self.assertEqual(resp.status_code, 403)
         self.assertNotIn('grand_total_qty', resp.data)
 
-    def test_bread_summary_suit_la_journee_de_travail_en_rotation(self):
-        """Rotation, relève 12:00 : une livraison de 03:00 le jour J+1 appartient à la journée J."""
-        from datetime import time
+    def test_bread_summary_suit_le_jour_calendaire_en_rotation(self):
+        """BUG-247 : rotation, relève 12:00 : une livraison de 03:00 est du jour calendaire (pas de la veille)."""
+        from datetime import time, datetime
         self.node.team_rotation_enabled = True
         self.node.handover_time = time(12, 0)
         self.node.save()
-        from core.workday import work_date_for
+        from core.workday import work_date_for, shift_date
         wd = work_date_for(self.node)
-        # instant de livraison = dans la journée de travail `wd` mais sur le jour calendaire suivant.
-        from core.workday import workday_bounds
-        start, end = workday_bounds(self.node, wd)
-        inst = end - timedelta(hours=1)  # 11:00 le lendemain calendaire
-        r = self.post(payment_type='CASH', payment_amount=1000, invoice_date=str(wd))
-        if r.status_code != 201:  # pas de désignation d'équipe : on la crée
-            from production.models import DailyTeamAssignment
-            DailyTeamAssignment.objects.create(node=self.node, work_date=wd, team='A', assigned_by=self.fact)
-            r = self.post(payment_type='CASH', payment_amount=1000, invoice_date=str(wd))
+        from production.models import DailyTeamAssignment
+        DailyTeamAssignment.objects.get_or_create(
+            node=self.node, work_date=shift_date(self.node), defaults={'team': 'A', 'assigned_by': self.fact})
+        inst = timezone.make_aware(datetime.combine(wd, time(3, 0)), timezone.get_current_timezone())
+        r = self.post(payment_type='CASH', payment_amount=1000)
         self.assertEqual(r.status_code, 201, r.data)
-        Invoice.objects.filter(pk=r.data['id']).update(status='DELIVERED', delivered_at=inst)
+        Invoice.objects.filter(pk=r.data['id']).update(status='DELIVERED', delivered_at=inst, invoice_date=wd)
         resp = self.api.get(INV + 'bread_summary/', {'date': str(wd)})
         self.assertEqual(resp.data['grand_total_qty'], 2)
 

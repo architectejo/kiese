@@ -8,7 +8,7 @@ from rest_framework.response import Response
 
 from core.models import Node
 from core.permissions import IsHeadquarters
-from treasury.hashing import verify_cashbook_chain
+from treasury.hashing import verify_cashbook_chain, check_cashbook_head
 from .models import TamperAlert, BlockchainSnapshot
 from .serializers import TamperAlertSerializer, BlockchainSnapshotSerializer
 
@@ -41,7 +41,18 @@ def _verify_full_chain():
     return verify_cashbook_chain(entries)
 
 
-def _verify_chain_for_node(node, chain_results=None) -> dict:
+def _check_head():
+    """BUG-240 : anomalie d'ancre de tête de chaîne (None si OK) et code du
+    nœud de la dernière écriture enregistrée."""
+    from treasury.models import CashbookEntry, CashbookHead
+
+    head = CashbookHead.objects.first()
+    entries = list(CashbookEntry.chain_queryset().only('block_hash'))
+    problem = check_cashbook_head(entries, head)
+    return problem, (head.last_node_code if head else '')
+
+
+def _verify_chain_for_node(node, chain_results=None, head_problem=None) -> dict:
     """Stats d'intégrité pour un nœud, à partir du résultat de la chaîne
     globale (calculé une fois par `_verify_full_chain`, et réutilisable pour
     plusieurs nœuds dans `run_check` afin d'éviter de reparcourir la chaîne
@@ -68,7 +79,8 @@ def _verify_chain_for_node(node, chain_results=None) -> dict:
         'total_entries':   total,
         'tampered_count':  len(tampered_ids),
         'tampered_ids':    tampered_ids,
-        'is_intact':       len(tampered_ids) == 0,
+        'head_problem':    head_problem or '',
+        'is_intact':       len(tampered_ids) == 0 and not head_problem,
     }
 
 
@@ -125,10 +137,20 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         nodes = Node.objects.filter(pk=node_id) if node_id else Node.objects.all()
 
         chain_results = _verify_full_chain()
+        head_problem, head_node_code = _check_head()
+        node_list = list(nodes)
+        # L'anomalie de tête est imputée au nœud de la dernière écriture
+        # connue (repli : premier nœud contrôlé).
+        head_node = next((n for n in node_list if n.code == head_node_code), None)
+        if head_problem and head_node is None and node_list:
+            head_node = node_list[0]
 
         results = []
-        for node in nodes:
-            stats = _verify_chain_for_node(node, chain_results=chain_results)
+        for node in node_list:
+            stats = _verify_chain_for_node(
+                node, chain_results=chain_results,
+                head_problem=head_problem if node is head_node else None,
+            )
 
             # Persist snapshot
             snapshot, _ = BlockchainSnapshot.objects.update_or_create(
@@ -152,6 +174,7 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
                     description=(
                         f"{stats['tampered_count']} écriture(s) falsifiée(s) détectée(s) "
                         f"sur le nœud {node.name}. IDs: {', '.join(stats['tampered_ids'][:5])}"
+                        + (f" {stats['head_problem']}" if stats['head_problem'] else '')
                     ),
                 )
                 # Notify HQ admin.

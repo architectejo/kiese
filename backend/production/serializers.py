@@ -127,7 +127,8 @@ class ConsumableStockSerializer(serializers.ModelSerializer):
             'id', 'node', 'node_display', 'consumable_type', 'consumable_type_display',
             'quantity', 'unit', 'average_unit_cost', 'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'average_unit_cost', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+        # BUG-251 : `quantity` n'évolue que par mouvements (ConsumableMovement).
+        read_only_fields = ['id', 'quantity', 'average_unit_cost', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
     def get_consumable_type_display(self, obj):
         return _consumable_type_label(obj.consumable_type)

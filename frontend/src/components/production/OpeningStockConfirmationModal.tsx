@@ -164,8 +164,10 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       const data = response.data;
       setReport(data);
       if (data.rotation) {
-        // Rotation : une seule équipe de service par journée (celle désignée), plus de choix A/B.
-        const workDay = data.work_date ?? data.date;
+        // Rotation : une seule équipe de service par relève (celle désignée), plus de choix A/B.
+        // BUG-272 : `date` est calendaire ; la confirmation est demandée PAR RELÈVE : la période est
+        // donc reconnue à l'équipe désignée (qui change à la relève) en plus de la date.
+        const workDay = `${data.work_date ?? data.date}|${data.team ?? ''}`;
         const key = `${workDay}|${data.categories.map(c => `${c.bread_price}:${c.qty_proposed}`).join(',')}`;
         if (!proposalKeyRef.current.startsWith(`${workDay}|`)) touchedRef.current = false;
         if (key !== proposalKeyRef.current) {
@@ -317,12 +319,12 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       isOpen={isOpen}
       suspended={suspended}
       onClose={handleDismiss}
-      title="Stock de départ du jour"
+      title={isRotation ? 'Stock de départ de la relève' : 'Stock de départ du jour'}
       subtitle={
         isManualMode
           ? `Confirmation volontaire du reste d'hier pour l'équipe ${selectedTeam} (demande manuelle depuis Production & Stocks).`
           : isRotation
-            ? `Équipe de service : ${selectedTeam}${handoverTime ? ` — relève de ${handoverTime}` : ''}. Confirmez ou corrigez le reste de l'équipe précédente pour démarrer la journée de travail.`
+            ? `Équipe de service : ${selectedTeam}${handoverTime ? ` — relève de ${handoverTime}` : ''}. Confirmez ou corrigez le reste de l'équipe précédente pour démarrer ce service.`
             : "Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
       }
       maxWidth="560px"

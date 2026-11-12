@@ -67,7 +67,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const isForced = forced != null;
-  // BUG-161 : boulangerie en rotation de 24 h — « journée de travail » au lieu de « créneau ».
+  // BUG-161 : boulangerie en rotation de 24 h — « service de l'équipe » au lieu de « créneau ».
   const isRotationForced = isForced && forced.rotation === true;
   // BUG-166 : clé stable du mode forcé (équipe + fournée). L'identité de l'objet
   // `forced` change à chaque sondage ; seule cette clé doit réinitialiser le formulaire.
@@ -186,12 +186,12 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
       suspended={suspended}
       onClose={() => { if (!submitting && !isForced) onClose(); }}
       title={isForced
-        ? (isRotationForced ? `Clôture de la journée de travail — Équipe ${forced!.team}` : `Clôture du créneau — Équipe ${forced!.team}`)
+        ? (isRotationForced ? `Clôture du service — Équipe ${forced!.team}` : `Clôture du créneau — Équipe ${forced!.team}`)
         : 'Clôturer la Fournée'}
       subtitle={
         isForced
           ? (isRotationForced
-            ? `La journée de travail${forced!.workDate ? ` du ${formatWorkDay(forced!.workDate)}` : ''} de l'équipe ${forced!.team} est terminée (heure de relève) et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.`
+            ? `Le service${forced!.workDate ? ` du ${formatWorkDay(forced!.workDate)}` : ''} de l'équipe ${forced!.team} est terminé (heure de relève) et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.`
             : "Le créneau de cette équipe est terminé et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.")
           : 'Reste du Jour par catégorie — déclaré en même temps que la clôture.'
       }

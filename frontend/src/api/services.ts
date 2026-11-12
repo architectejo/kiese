@@ -72,7 +72,10 @@ export interface BakeryNode {
 export type ServiceTeam = 'A' | 'B';
 
 export interface TeamAssignment {
+  /** BUG-272 : jour calendaire local (ne change PAS à la relève). */
   work_date: string;
+  /** BUG-272 : date de la relève qui ouvre la période de service (clé de la désignation). */
+  shift_date: string;
   handover_time: string;
   team: ServiceTeam | null;
   suggested: ServiceTeam;
@@ -358,8 +361,13 @@ export interface DailyClosureCategory {
   facture_jr: DailyClosureQuantityFc;
   commission_jr: DailyClosureFcOnly;
   // Clé = équipe ('A' | 'B'), valeur = quantité (peut être négative ou nulle, CLAUDE.md §5.2).
+  // Rotation : le reste de chaque équipe est celui de SA session ; ne jamais additionner les deux.
   reste_du_jour: Record<string, number | null>;
+  // Rotation : porté par l'équipe en service à minuit (l'autre vaut 0), écart de relève inclus.
   reste_du_hier: Record<string, number | null>;
+  /** BUG-272, rotation seulement : reste de fin de journée (dernier reste déclaré de la date,
+   *  connu quand toutes les sessions sont clôturées ; `null` sinon). Absent hors rotation. */
+  reste_du_jour_fin_journee?: number | null;
   appro_effectue: DailyClosureQuantityFc;
   appro_recu: DailyClosureQuantityFc;
   // BUG-177 : `fc` = montant positif affiché ; `fc_signe` = contribution négative
@@ -397,7 +405,7 @@ export interface DailyClosureTotals {
 export interface DailyClosureReport {
   node: string;
   date: string;
-  /** BUG-161 (B3) : journée de travail COURANTE du serveur (distincte de `date`). */
+  /** BUG-161 (B3) : jour calendaire COURANT du serveur (distinct de `date`). */
   work_date?: string;
   server_now?: string;
   categories: DailyClosureCategory[];
@@ -427,7 +435,7 @@ export interface ShiftEndStatusPending {
   pending_validation: true;
   remaining: ShiftEndRemainingLine[];
   auto_closed: false;
-  /** BUG-161 (B5), rotation seulement : journée de travail à clôturer. */
+  /** BUG-161 (B5), rotation seulement : date (calendaire) de la session concernée. */
   work_date?: string;
   current_work_date?: string;
   server_now?: string;
@@ -440,7 +448,7 @@ export interface ShiftEndStatusAutoClosed {
   pending_validation: false;
   auto_closed: true;
   team: ShiftEndTeam;
-  /** BUG-161 (B5), rotation seulement : journée de travail clôturée. */
+  /** BUG-161 (B5), rotation seulement : date (calendaire) de la session clôturée. */
   work_date?: string;
   current_work_date?: string;
   server_now?: string;
@@ -493,7 +501,7 @@ export interface OpeningConfirmationReport {
    *  modale (remplace l'ancien calcul frontend `!teams.A.confirmed ||
    *  !teams.B.confirmed`). */
   needs_confirmation: boolean;
-  /** BUG-161 (B3) : journée de travail et heure du serveur (AAAA-MM-JJ / ISO). */
+  /** BUG-161 (B3) : jour calendaire et heure du serveur (AAAA-MM-JJ / ISO). */
   work_date?: string;
   server_now?: string;
   /** BUG-161 (B4), rotation seulement : `rotation: true`, équipe désignée (ou null),
@@ -558,7 +566,7 @@ export interface BreadStockByDate {
   node: number;
   node_display?: string;
   date: string;
-  /** BUG-161 (B3) : journée de travail courante du serveur. */
+  /** BUG-161 (B3) : jour calendaire courant du serveur. */
   work_date?: string;
   server_now?: string;
   /** "live" = date = aujourd'hui (identique au solde courant `BreadStock`) ;
@@ -1207,7 +1215,7 @@ export const coreApi = {
       apiClient.put<UserAccount>(`/api/core/users/${id}/`, data),
     delete: (id: number) => apiClient.delete(`/api/core/users/${id}/`),
     resetPassword: (id: number) =>
-      apiClient.post(`/api/core/users/${id}/reset_password/`, {}),
+      apiClient.post<{ detail?: string; temporary_password: string }>(`/api/core/users/${id}/reset_password/`, {}),
   },
 };
 
@@ -1343,7 +1351,7 @@ export const salesApi = {
 // ── Production API ───────────────────────────────────────────────────────────
 
 export const productionApi = {
-  // BUG-161 (B2) : le serveur calcule la journée de travail ; le frontend n'envoie AUCUNE date.
+  // BUG-161 (B2) : le serveur calcule le jour calendaire et la période de service ; le frontend n'envoie AUCUNE date.
   // `node` : seulement pour un rôle Siège (ignoré côté serveur pour un non-HQ).
   teamAssignment: {
     get: (params?: { node?: string }) =>

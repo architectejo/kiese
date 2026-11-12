@@ -55,7 +55,7 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
     onClose={() => { /* non fermable sans confirmation explicite (Échap inclus) */ }}
     title={`Clôture automatique — Équipe ${notice.team}`}
     subtitle={notice.rotation
-      ? `Journée de travail du ${formatNoticeDate(notice.date)}`
+      ? `Jour du ${formatNoticeDate(notice.date)}`
       : `Constatée le ${formatNoticeDate(notice.date)}`}
     maxWidth="440px"
     closeOnBackdropClick={false}
@@ -88,10 +88,16 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
     >
       <FiClock style={{ color: 'hsl(var(--color-warning))', flexShrink: 0, marginTop: '3px' }} />
       <span>
-        {notice.rotation ? (
+        {notice.midnight ? (
           <>
-            La journée de travail de l'équipe <strong>{notice.team}</strong> (du {formatNoticeDate(notice.date)}) s'est
-            terminée à l'heure de relève, sans validation depuis plus de 30 minutes : la fournée a été{' '}
+            Le jour du {formatNoticeDate(notice.date)} s'est terminé à minuit : la fournée de l'équipe{' '}
+            <strong>{notice.team}</strong> a été <strong>clôturée automatiquement</strong> par le système, et le
+            service continue sur une nouvelle fournée du jour. Aucune action n'est requise.
+          </>
+        ) : notice.rotation ? (
+          <>
+            Le service de l'équipe <strong>{notice.team}</strong> (jour du {formatNoticeDate(notice.date)}) s'est
+            terminé à l'heure de relève, sans validation depuis plus de 30 minutes : la fournée a été{' '}
             <strong>clôturée automatiquement</strong> par le système.
           </>
         ) : (
@@ -100,7 +106,7 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
             sans validation : la fournée a été <strong>clôturée automatiquement</strong> par le système.
           </>
         )}{' '}
-        Le reste du jour a été calculé à partir du stock physique enregistré.
+        {notice.midnight ? 'Le reste du jour écoulé' : 'Le reste du jour'} a été calculé à partir du stock physique enregistré.
       </span>
     </div>
 

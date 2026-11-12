@@ -117,11 +117,14 @@ class TeamAssignmentApiTests(TestCase):
         with _now(11, 59, NEXT):
             g = self.api.get(URL)
             self.assertEqual(g.data['team'], 'A')
-            self.assertEqual(g.data['work_date'], '2026-11-11')
+            # BUG-247 : `work_date` = date calendaire ; `shift_date` = période de service.
+            self.assertEqual(g.data['work_date'], '2026-11-12')
+            self.assertEqual(g.data['shift_date'], '2026-11-11')
         with _now(12, 0, NEXT):
             r = self.api.get(URL)
         self.assertIsNone(r.data['team'])
         self.assertEqual(r.data['work_date'], '2026-11-12')
+        self.assertEqual(r.data['shift_date'], '2026-11-12')
 
     def test_post_between_midnight_and_handover_targets_previous_workday(self):
         # BUG-227 : journée de relève = mode rotation uniquement.

@@ -271,6 +271,11 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API du système de gestion des boulangeries ETS. KIESE',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
+    # BUG-255 : schéma et documentation réservés aux authentifiés (libres en DEBUG).
+    'SERVE_PERMISSIONS': [
+        'rest_framework.permissions.AllowAny' if DEBUG
+        else 'rest_framework.permissions.IsAuthenticated'
+    ],
 }
 
 

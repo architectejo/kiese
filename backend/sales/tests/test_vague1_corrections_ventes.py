@@ -122,18 +122,23 @@ class BreadSummaryTests(Base):
         r = direction.get(INV + 'bread_summary/', {'date': d, 'node': self.other_node.pk})
         self.assertEqual(r.data['grand_total_qty'], 0)
 
-    def test_suit_la_journee_de_travail_en_rotation(self):
-        from core.workday import work_date_for, workday_bounds
+    def test_suit_le_jour_calendaire_en_rotation(self):
+        # BUG-247 (décision 2026-11-12) : même en rotation, le récapitulatif
+        # suit le JOUR CALENDAIRE (minuit à minuit), pas la relève.
+        from datetime import datetime
+        from core.workday import work_date_for, shift_date
         from production.models import DailyTeamAssignment
         self.node.team_rotation_enabled = True
         self.node.handover_time = time(12, 0)
         self.node.save()
         wd = work_date_for(self.node)
-        DailyTeamAssignment.objects.create(node=self.node, work_date=wd, team='A', assigned_by=self.fact)
-        _, end = workday_bounds(self.node, wd)
-        self._delivered(end - timedelta(hours=1))
+        DailyTeamAssignment.objects.create(node=self.node, work_date=shift_date(self.node), team='A', assigned_by=self.fact)
+        inst = timezone.make_aware(datetime.combine(wd, time(3, 0)), timezone.get_current_timezone())
+        self._delivered(inst)
         resp = self.api.get(INV + 'bread_summary/', {'date': str(wd)})
         self.assertEqual(resp.data['grand_total_qty'], 2)
+        resp = self.api.get(INV + 'bread_summary/', {'date': str(wd - timedelta(days=1))})
+        self.assertEqual(resp.data['grand_total_qty'], 0)
 
     def test_date_invalide_400(self):
         self.assertEqual(self.api.get(INV + 'bread_summary/', {'date': 'n/a'}).status_code, 400)

@@ -1,5 +1,6 @@
 import random
 import time
+from datetime import date as _date_cls
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError, OperationalError, transaction
@@ -73,20 +74,13 @@ def _combine_date_with_now_time(target_date, node=None):
     n'est fournie (BUG-083). Si `target_date` est aujourd'hui, équivalent à
     `timezone.now()`.
 
-    BUG-161 (B3) : en mode rotation (`node.team_rotation_enabled`),
-    « aujourd'hui » est la journée de travail courante et l'horodatage
-    construit doit RESTER dans la journée de travail `target_date` (de relève
-    à relève) : si l'heure courante est antérieure à la relève, elle
-    appartient au jour calendaire suivant. Hors rotation : comportement
-    historique inchangé.
+    BUG-247 (décision client 2026-11-12) : la date est le JOUR CALENDAIRE
+    local, avec ou sans rotation d'équipes.
     """
-    from datetime import datetime, timedelta
+    # Décision client 2026-11-12 : jour calendaire local, avec ou sans
+    # rotation d'équipes (`node` n'influe plus sur le résultat).
+    from datetime import datetime
     now = timezone.localtime(timezone.now())
-    if node is not None and node.team_rotation_enabled:
-        if target_date == work_date_for(node):
-            return timezone.now()
-        calendar_day = target_date + timedelta(days=1) if now.time() < node.handover_time else target_date
-        return timezone.make_aware(datetime.combine(calendar_day, now.time()), now.tzinfo)
     if target_date == now.date():
         return timezone.now()
     combined = datetime.combine(target_date, now.time())
@@ -387,12 +381,19 @@ class InvoiceViewSet(
         if node.team_rotation_enabled:
             requested_date_raw = data.get('invoice_date')
             if requested_date_raw and requested_date_raw != work_date_for(node):
-                from production.models import DailyTeamAssignment
-                past_team = (
-                    DailyTeamAssignment.objects
-                    .filter(node=node, work_date=requested_date_raw)
-                    .values_list('team', flat=True).first()
-                )
+                # Décision 2026-11-12 : la date de la vente est calendaire ;
+                # l'équipe est celle de service à l'heure (locale) de la
+                # vente rétroactive, jour demandé + heure courante.
+                from core.workday import current_team
+                past_team = None
+                try:
+                    past_day = (
+                        requested_date_raw if hasattr(requested_date_raw, 'year')
+                        else _date_cls.fromisoformat(str(requested_date_raw))
+                    )
+                    past_team = current_team(node, _combine_date_with_now_time(past_day, node))
+                except (ValueError, TypeError):
+                    past_team = None
                 if past_team:
                     invoice_team = past_team
             else:

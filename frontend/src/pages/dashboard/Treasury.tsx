@@ -109,7 +109,7 @@ const renderReportCategoryDetail = (r: FacturierReport) => {
 
 export const Treasury: React.FC = () => {
   const { user } = useAuthStore();
-  // BUG-161 (F3) : « aujourd'hui » = journée de travail du serveur (repli : date locale, jamais UTC).
+  // BUG-161 (F3) : « aujourd'hui » = jour calendaire du serveur (repli : date locale, jamais UTC).
   const today = useWorkDate();
 
   // ── Data state ─────────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ export const Treasury: React.FC = () => {
   // BUG-175 : changement de boulangerie ou de jour => aucun rapport rétroactif résiduel.
   useEffect(() => { setExtraReports([]); }, [nodeFilter, today]);
 
-  // BUG-161 (F3) : à la relève (changement de journée de travail), les sélecteurs de jour qui
+  // BUG-161 (F3) : à la relève (passage de minuit), les sélecteurs de jour qui
   // étaient sur l'ancienne journée courante suivent la nouvelle.
   const prevTodayRef = useRef(today);
   useEffect(() => {

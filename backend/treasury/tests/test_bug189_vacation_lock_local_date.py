@@ -2,8 +2,8 @@
 BUG-189 : le verrou de vacation BUG-036 (`treasury.signals`) comparait
 `delivered_at.date()` (date UTC d'un datetime aware) à la date locale du
 rapport : entre 00:00 et 01:00 à Kinshasa (UTC+1) il ne bloquait plus. Corrigé
-par `core.workday.work_date_for` (date locale hors rotation, journée de relève
-à relève en rotation, BUG-161 B3).
+par `core.workday.work_date_for` (date locale du calendrier, avec ou sans
+rotation depuis la décision client du 2026-11-12, BUG-247).
 
 Tests déterministes : l'horloge est simulée (`timezone.now`) à 00:30 locale
 (= 23:30 UTC la veille), à midi, et en mode rotation à 03:00 / 13:00.
@@ -45,9 +45,9 @@ class VacationLockLocalDateTests(TestCase):
         self.api = APIClient()
         self.api.force_authenticate(self.gerant)
 
-    def _delivered_sale(self, invoice_date=None):
+    def _delivered_sale(self, invoice_date=None, team='A'):
         inv = Invoice.objects.create(
-            node=self.node, client=self.client_obj, facturier=self.fact, team='A',
+            node=self.node, client=self.client_obj, facturier=self.fact, team=team,
             status=Invoice.Status.PENDING, payment_type=Invoice.PaymentType.CASH,
             node_origin=self.node.code, debt_before=Decimal('0.00'),
             invoice_date=invoice_date or timezone.localdate(),
@@ -98,39 +98,40 @@ class VacationLockLocalDateTests(TestCase):
         with _now(0, 30):
             self._assert_second_sale_blocked()
 
-    def test_rotation_node_lock_uses_work_date(self):
+    def test_rotation_node_lock_uses_calendar_date(self):
         """
-        Rotation (relève 12:00) : à 03:00 locale on est dans la journée de
-        travail de la veille ; le rapport porte cette date, le verrou bloque
-        la 2e livraison ; à 13:00 (nouvelle journée) aucun rapport n'existe
-        pour la nouvelle journée : la livraison passe.
+        BUG-247 : rotation (relève 12:00) : à 03:00 locale la date de travail est
+        le jour CALENDAIRE (12/11) ; le rapport porte cette date, le verrou
+        bloque la 2e livraison de l'équipe A ; à 13:00 la même date calendaire
+        reste verrouillée pour A, mais l'équipe B (relève) livre librement :
+        un rapport par (équipe, date), la relève ne change pas la date.
         """
         self.node.team_rotation_enabled = True
         self.node.save(update_fields=['team_rotation_enabled'])
         with _now(3, 0):
-            first = self._delivered_sale(invoice_date=PREV)
+            first = self._delivered_sale(invoice_date=D)
             first.deliver(livreur=self.fact)
             self._generate()
             report = FacturierReport.objects.get(node=self.node, team='A')
-            self.assertEqual(report.date, PREV)
-            second = self._delivered_sale(invoice_date=PREV)
+            self.assertEqual(report.date, D)
+            second = self._delivered_sale(invoice_date=D)
             with self.assertRaises(ValidationError):
                 second.deliver(livreur=self.fact)
         with _now(13, 0):
-            third = self._delivered_sale(invoice_date=D)
-            third.deliver(livreur=self.fact)  # nouvelle journée : pas de rapport
+            third = self._delivered_sale(invoice_date=D, team='B')
+            third.deliver(livreur=self.fact)  # équipe B : pas de rapport B pour le 12/11
             self.assertEqual(third.status, Invoice.Status.DELIVERED)
 
     def test_report_generation_groups_by_work_date_in_rotation(self):
-        """Livraison à 03:00 locale (rotation) : comptée dans la journée de la veille."""
+        """BUG-247 : livraison à 03:00 locale (rotation) : comptée dans le jour calendaire (12/11)."""
         self.node.team_rotation_enabled = True
         self.node.save(update_fields=['team_rotation_enabled'])
         with _now(3, 0):
-            inv = self._delivered_sale(invoice_date=PREV)
+            inv = self._delivered_sale(invoice_date=D)
             inv.deliver(livreur=self.fact)
         from treasury.services import regenerate_facturier_reports
-        self.assertEqual(len(regenerate_facturier_reports(self.node, PREV)), 1)
-        self.assertEqual(regenerate_facturier_reports(self.node, D), [])
+        self.assertEqual(len(regenerate_facturier_reports(self.node, D)), 1)
+        self.assertEqual(regenerate_facturier_reports(self.node, PREV), [])
 
     def test_report_generation_without_rotation_uses_local_calendar_day(self):
         """Hors rotation : livraison à 00:30 locale -> jour calendaire local (12/11), pas UTC."""

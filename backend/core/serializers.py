@@ -81,6 +81,14 @@ class ConfigSerializer(serializers.ModelSerializer):
         read_only_fields = ['updated_at']
 
 
+class PublicConfigSerializer(serializers.ModelSerializer):
+    """BUG-255 : vue anonyme de la configuration (indicateur en ligne seulement)."""
+    class Meta:
+        model = Config
+        fields = ['on_line']
+        read_only_fields = ['on_line']
+
+
 class BreadPriceSerializer(serializers.ModelSerializer):
     # BUG-039 : category est désormais un champ texte libre (plus de
     # TextChoices) — category_display n'a plus de get_category_display()

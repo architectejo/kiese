@@ -58,7 +58,7 @@ const mapApiClient = (c: ApiClient): ClientItem => ({
 
 export const Clients: React.FC = () => {
   const { user } = useAuthStore();
-  // BUG-161 : journée de travail du serveur (jamais la date UTC du navigateur) ; 403 TEAM_NOT_ASSIGNED.
+  // BUG-161 : jour calendaire du serveur (jamais la date UTC du navigateur) ; 403 TEAM_NOT_ASSIGNED.
   const workDate = useWorkDate();
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
   const [clients, setClients] = useState<ClientItem[]>([]);
@@ -443,6 +443,10 @@ export const Clients: React.FC = () => {
   const totalOutstanding = clients.reduce((acc, c) => acc + c.outstandingDebt, 0);
   const overdueCount = clients.filter(c => c.outstandingDebt > c.creditLimit).length;
   const activeCount = clients.filter(c => c.active).length;
+  // BUG-269 : les KPI calculés côté client ne sont définitifs qu'une fois toutes les pages lues.
+  const kpiComplete = !isLoading && !clientsBackgroundLoading
+    && clientsTotalCount !== null && clientsLoadedCount === clientsTotalCount;
+  const kpiPending = '…';
 
   const needsNodeSelector = !user?.node;
   // ADMIN/DIRECTION/COMPTABLE (HQ) et FACTURIER/LIVREUR voient les clients de toutes
@@ -1059,8 +1063,8 @@ export const Clients: React.FC = () => {
           </div>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, marginBottom: '1px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Total Clients</p>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--text-primary))' }}>{clients.length} fiches</h3>
-            <span style={{ fontSize: '0.6rem', color: 'hsl(var(--color-success))', fontWeight: 700 }}>Actifs : {activeCount}</span>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--text-primary))' }}>{clientsTotalCount !== null ? clientsTotalCount : kpiPending} fiches</h3>
+            <span style={{ fontSize: '0.6rem', color: 'hsl(var(--color-success))', fontWeight: 700 }}>Actifs : {kpiComplete ? activeCount : kpiPending}</span>
           </div>
         </div>
 
@@ -1070,7 +1074,7 @@ export const Clients: React.FC = () => {
           </div>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, marginBottom: '1px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Plafonds Dépassés</p>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--color-danger))' }}>{overdueCount} alertes</h3>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--color-danger))' }}>{kpiComplete ? overdueCount : kpiPending} alertes</h3>
             <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', fontWeight: 700 }}>BP à recouvrer</span>
           </div>
         </div>
@@ -1081,7 +1085,7 @@ export const Clients: React.FC = () => {
           </div>
           <div style={{ minWidth: 0 }}>
             <p style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, marginBottom: '1px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Encours Global</p>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--text-primary))' }}>{totalOutstanding.toLocaleString('fr-FR')} FC</h3>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 800, marginBottom: '0px', color: 'hsl(var(--text-primary))' }}>{kpiComplete ? `${totalOutstanding.toLocaleString('fr-FR')} FC` : kpiPending}</h3>
             <span style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', fontWeight: 700 }}>BP active consolidée</span>
           </div>
         </div>

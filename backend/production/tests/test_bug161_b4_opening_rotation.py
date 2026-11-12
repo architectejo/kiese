@@ -1,8 +1,9 @@
 """
 BUG-161 (B4) : boîte « Stock de départ du jour » aux heures de rotation.
 
-En rotation (`Node.team_rotation_enabled`) : une confirmation par JOURNÉE DE
-TRAVAIL (de relève à relève), quelle que soit l'équipe ; l'équipe concernée
+En rotation (`Node.team_rotation_enabled`) : une confirmation par PÉRIODE DE
+SERVICE (de relève à relève, BUG-247 : la date de travail reste calendaire),
+quelle que soit l'équipe ; l'équipe concernée
 est l'équipe désignée ; chaînage inter-équipes (le reste de A devient le
 départ de B) ; confirmer un départ ne modifie JAMAIS le snapshot ni le rapport
 de la journée précédente. Hors rotation : comportement historique inchangé.
@@ -93,7 +94,8 @@ class RotationNeedsConfirmationTests(_Base):
             self.assertEqual(self._post(team='A').status_code, 200)
         with _now(11, 59):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-11')
+        self.assertEqual(r.data['date'], '2026-11-12')  # BUG-247 : date calendaire
+        self.assertEqual(r.data['team'], 'A')           # équipe de la période démarrée le 11/11
         self.assertFalse(r.data['needs_confirmation'])
         with _now(12, 0):
             r = self.api.get(OPENING)
@@ -107,13 +109,14 @@ class RotationNeedsConfirmationTests(_Base):
             self.assertEqual(self._post().status_code, 200)
         with _now(0, 0, d=date(2026, 11, 13)):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-12')
+        self.assertEqual(r.data['date'], '2026-11-13')  # BUG-247 : minuit change la date, pas l'équipe
         self.assertFalse(r.data['needs_confirmation'])
 
     def test_confirmation_by_any_team_clears_the_box(self):
         self._rotation()
         self._assign(D, 'B')
-        DailyOpeningConfirmation.objects.create(node=self.node, team='A', date=D, confirmed_by=self.gerant)
+        c = DailyOpeningConfirmation.objects.create(node=self.node, team='A', date=D, confirmed_by=self.gerant)
+        DailyOpeningConfirmation.objects.filter(pk=c.pk).update(confirmed_at=_at(D, 12, 30))
         with _now(13, 0):
             r = self.api.get(OPENING)
         self.assertFalse(r.data['needs_confirmation'])
@@ -132,7 +135,8 @@ class RotationNeedsConfirmationTests(_Base):
         self._assign(D, 'B')
         with _now(23, 29):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-11')
+        self.assertEqual(r.data['date'], '2026-11-12')
+        self.assertEqual(r.data['opening_team'], 'A')
         with _now(23, 30):
             r = self.api.get(OPENING)
         self.assertEqual(r.data['date'], '2026-11-12')
@@ -153,7 +157,8 @@ class RotationNeedsConfirmationTests(_Base):
             k1 = self.api.get(OPENING)
             k2 = api2.get(OPENING)
         self.assertEqual(k1.data['date'], '2026-11-12')
-        self.assertEqual(k2.data['date'], '2026-11-11')    # K2 n'a pas encore sa relève
+        self.assertEqual(k2.data['date'], '2026-11-12')    # BUG-247 : même date calendaire
+        self.assertEqual(k2.data['team'], 'B')             # K2 n'a pas encore sa relève
         self.assertEqual(k2.data['opening_team'], 'B')
 
     def test_without_rotation_response_is_unchanged(self):
@@ -208,8 +213,8 @@ class RotationPostTests(_Base):
         self._assign(D, 'B')
         with _now(2, 0):
             r = self._post()
-        self.assertEqual(r.data['date'], '2026-11-11')
-        self.assertEqual(r.data['team'], 'A')
+        self.assertEqual(r.data['date'], '2026-11-12')  # BUG-247 : date calendaire
+        self.assertEqual(r.data['team'], 'A')           # équipe de la période démarrée le 11/11
 
     def test_without_rotation_team_still_required(self):
         with _now(13, 0):
@@ -290,7 +295,7 @@ class PreviousDayFrozenTests(_Base):
 
     def _closed_day(self):
         self._assign(PREV, 'A')
-        with _now(9, 0):
+        with _now(13, 0, d=PREV):
             r = self.api.post(SESSIONS, {
                 'flour_sacks_used': '1.00', 'lines': [{'bread_price': self.bp.pk, 'quantity': 20}],
             }, format='json')
@@ -325,7 +330,11 @@ class PreviousDayFrozenTests(_Base):
         after = self._state()
         self.assertEqual(before, after)
         self.assertTrue(ProductionSession.objects.get(node=self.node, date=PREV).is_closed)
-        # La journée J+1 porte bien la valeur confirmée.
+        # BUG-247 : le rapport du jour D (UN seul, deux équipes) démarre sur le
+        # reste de l'équipe A (période démarrée la veille) ; la confirmation de
+        # l'équipe entrante B à la relève est un transfert interne, jamais
+        # additionnée telle quelle au « reste du hier » : seul son ÉCART avec le
+        # dernier reste déclaré (11 confirmés - 6) est ajouté au départ de journée.
         report_d = _build_daily_closure_report(self.node, D)
         cat = next(c for c in report_d['categories'] if c['bread_price'] == self.bp.pk)
-        self.assertEqual(cat['reste_du_hier']['B'], -11)
+        self.assertEqual(cat['reste_du_hier'], {'A': -11, 'B': 0})

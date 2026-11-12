@@ -25,6 +25,9 @@ export const Commissions: React.FC = () => {
   const [manuelValue, setManuelValue] = useState('');
   const [manuelNotes, setManuelNotes] = useState('');
   const [manuelLoading, setManuelLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // BUG-270 : « Payer » et l'ajustement manuel réservés à ADMIN/DIRECTION (403 pour COMPTABLE).
+  const canPay = user?.role === 'ADMIN' || user?.role === 'DIRECTION' || !!user?.is_superuser;
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid'>('All');
   const [nodeFilter, setNodeFilter] = useState('');
@@ -106,12 +109,14 @@ export const Commissions: React.FC = () => {
   const handleMarkPaid = async (id: string) => {
     if (payoutLoading) return;
     setPayoutLoading(true);
+    setActionError(null);
     try {
       await commissionsApi.commissions.markPaid(id);
       await loadData();
       setPayoutItem(null);
     } catch (err) {
-      console.error('Mark paid failed', err);
+      setActionError(getErrorDetail(err, 'Erreur lors du paiement de la commission.'));
+      setPayoutItem(null);
     } finally {
       setPayoutLoading(false);
     }
@@ -126,6 +131,7 @@ export const Commissions: React.FC = () => {
   const handleSetManuel = async (clear = false) => {
     if (!manuelItem) return;
     setManuelLoading(true);
+    setActionError(null);
     try {
       await commissionsApi.commissions.setManuel(manuelItem.id, {
         manuel_adjustment: clear ? null : manuelValue,
@@ -135,7 +141,8 @@ export const Commissions: React.FC = () => {
       setManuelItem(null);
       setFicheItem(null);
     } catch (err) {
-      console.error('Set manuel failed', err);
+      setActionError(getErrorDetail(err, "Erreur lors de l'enregistrement de l'ajustement."));
+      setManuelItem(null);
     } finally {
       setManuelLoading(false);
     }
@@ -472,7 +479,7 @@ export const Commissions: React.FC = () => {
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                         {c.is_paid ? (
                           <span style={{ color: 'hsl(var(--color-success))', fontWeight: 700, fontSize: '0.65rem' }}>À jour</span>
-                        ) : (user?.role === 'DIRECTION' || user?.is_superuser) ? (
+                        ) : canPay ? (
                           <button
                             onClick={e => { e.stopPropagation(); setPayoutItem(c); }}
                             className="btn btn-primary"
@@ -498,6 +505,13 @@ export const Commissions: React.FC = () => {
           </div>
         )}
       </div>
+
+      {actionError && (
+        <div role="alert" style={{ margin: '8px 0', padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'hsl(var(--color-danger) / 0.1)', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', fontWeight: 700, display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }} aria-label="Fermer">×</button>
+        </div>
+      )}
 
       {/* Payout Modal */}
       {payoutItem && (
@@ -532,7 +546,7 @@ export const Commissions: React.FC = () => {
         const carriedDebtIn = parseFloat(f.carried_debt_in || '0');
         const net      = parseFloat(f.net_payable        || '0');
         const rate     = parseFloat(f.commission_rate    || '0') * 100;
-        const isDir    = user?.role === 'DIRECTION' || user?.is_superuser;
+        const isDir    = canPay;
         const fmt = (n: number) => n.toLocaleString('fr-FR') + ' FC';
         const row = (label: string, value: number, color?: string, prefix = '') => (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid hsl(var(--border-color) / 0.4)', fontSize: '0.76rem' }}>
