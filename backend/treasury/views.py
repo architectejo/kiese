@@ -599,6 +599,17 @@ class CashClosureViewSet(viewsets.ModelViewSet):
         closure = self.get_object()
         if closure.is_validated:
             return Response({'detail': 'Clôture déjà confirmée.'}, status=status.HTTP_400_BAD_REQUEST)
+        # BUG-277 (CLAUDE.md §5.4) : un transfert en litige bloque aussi la
+        # confirmation, comme la création et le versement au livre.
+        unresolved_gap = _unresolved_incoming_transfer_gap(closure.node)
+        if unresolved_gap:
+            return Response({
+                'detail': (
+                    "Confirmation bloquée : un transfert de pains reçu "
+                    f"par {closure.node.code} présente un écart de quantité non résolu "
+                    f"({unresolved_gap}). Faites valider/corriger le transfert d'abord."
+                )
+            }, status=status.HTTP_400_BAD_REQUEST)
         comptable_note = (request.data.get('notes') or '').strip()
         update_fields = ['is_validated', 'is_rejected', 'rejection_reason']
         closure.is_validated  = True

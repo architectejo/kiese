@@ -408,7 +408,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
         <>
           {isRotation && !isManualMode ? (
             <div style={{ marginBottom: '16px', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid hsl(var(--border-color))', fontSize: '0.85rem' }}>
-              <strong>Équipe de service du jour : {selectedTeam}</strong>
+              <strong>Équipe de service de la période : {selectedTeam}{handoverTime ? ` (relève de ${handoverTime})` : ''}</strong>
               <div style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))', marginTop: '4px' }}>
                 Les quantités proposées sont le reste de l'équipe précédente.
               </div>

@@ -340,10 +340,15 @@ class RotationDefaultsTests(_Base):
 
     def test_journal_entry_default_date_is_calendar_date_in_rotation(self):
         with Clock(J1, 3, 0):
+            # Le serializer exige `date` : sans elle, 400 explicite (pas de date par défaut côté API).
             r = self.api.post('/api/treasury/journal/', {'imput': 'RATION', 'exit_amount': '100'}, format='json')
-            self.assertIn(r.status_code, (201, 400), r.content)
-            if r.status_code == 201:
-                self.assertEqual(r.json()['date'], str(J1))
+            self.assertEqual(r.status_code, 400, r.content)
+            self.assertIn('date', r.json())
+            # Avec la date calendaire courante (03:00, avant la relève) : acceptée et conservée telle quelle.
+            r = self.api.post('/api/treasury/journal/',
+                              {'date': str(J1), 'imput': 'RATION', 'exit_amount': '100'}, format='json')
+            self.assertEqual(r.status_code, 201, r.content)
+            self.assertEqual(r.json()['date'], str(J1))
 
     def test_future_closure_date_refused_and_current_calendar_date_accepted(self):
         with Clock(J1, 3, 0):

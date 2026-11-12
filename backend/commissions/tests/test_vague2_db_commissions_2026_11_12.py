@@ -187,6 +187,26 @@ class DefautsConstatesTests(Base):
         cc.refresh_from_db()
         self.assertEqual(cc.deduction_social, D('1000.00'), 'la retenue sociale saisie est écrasée par la régénération')
 
+    def test_bug264_regeneration_saute_les_lignes_payees_et_rafraichit_les_champs_derives(self):
+        pay, open_ = make_client(self.node), make_client(self.node)
+        self.invoice(pay, 2)                                           # 1000 -> CM 250
+        self.invoice(open_, 2)
+        p = self.generate()
+        _api(self.direction).post(f'{COMM}{self.row(p, pay).pk}/mark_paid/')
+        _api(self.comptable).patch(f'{COMM}{self.row(p, open_).pk}/', {'deduction_prints': '200', 'deduction_other': '50'}, format='json')
+        self.invoice(pay, 2)                                           # nouvelles factures du mois
+        self.invoice(open_, 2)
+        self.generate()
+        a, b = self.row(p, pay), self.row(p, open_)
+        self.assertEqual(a.order_value, D('1000.00'), 'ligne payée recalculée')
+        self.assertTrue(a.is_paid)
+        self.assertEqual(b.order_value, D('2000.00'))                  # champs dérivés rafraîchis
+        self.assertEqual(b.commission_gross, D('500.00'))              # 2000 x 0,25
+        self.assertEqual(b.deduction_prints, D('200.00'))              # retenues saisies conservées
+        self.assertEqual(b.deduction_other, D('50.00'))
+        # net = 500 - (0 + 3000 + 200 + 50 + carte 5,00)
+        self.assertEqual(b.net_payable, D('500') - D('3255.00'))
+
     def test_bug265_mark_paid_et_set_manuel_reserves_a_la_direction(self):
         c = make_client(self.node)
         self.invoice(c, 2)

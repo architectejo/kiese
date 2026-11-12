@@ -143,6 +143,7 @@ export const Commissions: React.FC = () => {
     } catch (err) {
       setActionError(getErrorDetail(err, "Erreur lors de l'enregistrement de l'ajustement."));
       setManuelItem(null);
+      setFicheItem(null); // la fiche recouvrirait la bannière d'erreur (BUG-280)
     } finally {
       setManuelLoading(false);
     }

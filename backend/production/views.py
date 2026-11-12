@@ -389,6 +389,53 @@ def _force_close_session(session, stocks, node, user):
     return True
 
 
+def _reopen_session_for_redesignated_team(session, node, user):
+    """
+    BUG-278 (décision coordinateur, conforme au client : « l'équipe en place
+    peut décider de poursuivre les travaux ») : la session d'un jour calendaire
+    est unique par (équipe, date). Si cette équipe a été clôturée à la relève
+    (ou automatiquement) puis est DÉSIGNÉE de nouveau pour la période en
+    cours, la session close du jour est ROUVERTE pour la nouvelle période
+    (pas de second rapport : le rapport reste un par boulangerie et date).
+
+    Réouverture licite uniquement si : rotation activée, session close, date
+    = jour calendaire courant, équipe = équipe désignée pour la période en
+    cours, et session née AVANT le début de cette période (une session
+    clôturée volontairement DANS la période en cours reste refusée, BUG-093).
+    Effets : `is_closed=False`, `closed_at`/`closure_summary` vidés,
+    `created_at` ramené à maintenant (la session appartient à la nouvelle
+    période : elle n'est plus « échue » pour la détection de relève), lignes
+    `REMAINING` de l'ancienne clôture supprimées (le reste sera redéclaré à la
+    prochaine clôture ; l'instantané `DailyBreadStockSnapshot` est écrasé par
+    upsert à cette clôture — jamais additionné). Journalisé. Appelée dans une
+    transaction, session verrouillée. Retourne True si rouverte.
+    """
+    if not (node.team_rotation_enabled and session.is_closed):
+        return False
+    from core.workday import shift_period_start
+    now = timezone.now()
+    if (
+        session.date != work_date_for(node, now)
+        or session.team != current_team(node, now)
+        or session.created_at >= shift_period_start(node, now)
+    ):
+        return False
+    removed, _ = BreadDisposal.objects.filter(
+        session=session, disposal_type=BreadDisposal.DisposalType.REMAINING,
+    ).delete()
+    ProductionSession.objects.filter(pk=session.pk).update(
+        is_closed=False, closed_at=None, closure_summary=None, created_at=now,
+    )
+    session.refresh_from_db()
+    log_activity(
+        user, "Réouverture Production",
+        f"{node.code} Éq.{session.team} {session.date} : session rouverte (équipe "
+        f"redésignée pour la nouvelle période, {removed} ligne(s) de reste supprimée(s)).",
+        node_origin=node.code,
+    )
+    return True
+
+
 def _close_leftover_session(session, user):
     """
     BUG-190 : clôture silencieuse d'une session « restante » (même journée de
@@ -662,6 +709,8 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             ).first()
 
             if existing is not None:
+                if existing.is_closed and _reopen_session_for_redesignated_team(existing, node, user):
+                    existing = ProductionSession.objects.select_for_update().get(pk=existing.pk)
                 if existing.is_closed:
                     raise ValidationError({
                         'detail': (
@@ -2718,6 +2767,8 @@ def _sync_carryover_session_lines(node, team, date, user, parsed_lines, sac_valu
     session = ProductionSession.objects.select_for_update().filter(
         node=node, team=team, date=date,
     ).first()
+    if session is not None and session.is_closed and _reopen_session_for_redesignated_team(session, node, user):
+        session = ProductionSession.objects.select_for_update().get(pk=session.pk)
     if session is not None and session.is_closed:
         return None, Response(
             {

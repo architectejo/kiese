@@ -19,11 +19,20 @@ export const BILL_FACES: Record<string, string> = {
   bills_50: '50 FC',
 };
 
-/** Convertit une saisie en nombre entier de billets, jamais négatif (la borne haute est signalée, pas tronquée). */
+/**
+ * BUG-276 : la saisie n'est plus corrigée en silence. Vide -> 0 ; négatif, décimal
+ * ou hors borne sont conservés tels quels pour que `validateBillCounts` les refuse
+ * avec le message français (validation native du navigateur désactivée).
+ */
 export const parseBillCount = (raw: string): number => {
-  const n = Math.floor(Number(raw));
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  if (raw.trim() === '') return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
 };
+
+/** Vrai si la valeur d'une coupure est refusée (négatif, décimal, > 100 000). */
+export const isInvalidBillCount = (n: number): boolean =>
+  !Number.isInteger(n) || n < 0 || n > MAX_BILLS_PER_DENOMINATION;
 
 /** Renvoie un message en français si une coupure sort de 0..100 000 (entier), sinon null. */
 export const validateBillCounts = (bills: Record<string, number>): string | null => {

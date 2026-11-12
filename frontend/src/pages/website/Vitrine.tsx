@@ -89,7 +89,7 @@ export const Vitrine: React.FC = () => {
       transition: 'background-color 0.3s ease'
     }}>
       {/* Header */}
-      <header style={{
+      <header className="vitrine-header" style={{
         height: '80px',
         borderBottom: '1px solid hsl(var(--border-color))',
         display: 'flex',
@@ -112,7 +112,7 @@ export const Vitrine: React.FC = () => {
         </div>
 
         {/* Navigation Tabs */}
-        <div style={{ display: 'flex', gap: '8px', backgroundColor: 'hsl(var(--bg-tertiary))', padding: '4px', borderRadius: 'var(--radius-md)', border: '1px solid hsl(var(--border-color))' }}>
+        <div className="vitrine-nav" style={{ display: 'flex', gap: '8px', backgroundColor: 'hsl(var(--bg-tertiary))', padding: '4px', borderRadius: 'var(--radius-md)', border: '1px solid hsl(var(--border-color))' }}>
           <button 
             onClick={() => setActiveTab('catalog')}
             style={{
@@ -166,7 +166,7 @@ export const Vitrine: React.FC = () => {
           </button>
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div className="vitrine-actions" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           {/* Public Theme Switcher Widget */}
           <div style={{ 
             display: 'flex', 
@@ -234,9 +234,9 @@ export const Vitrine: React.FC = () => {
       </header>
 
       {/* Hero Showcase banner */}
-      <main style={{ flex: 1, padding: '60px 40px', maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
+      <main className="vitrine-main" style={{ flex: 1, padding: '60px 40px', maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '60px' }} className="animate-fade-in">
-          <h1 style={{ fontSize: '3.2rem', fontWeight: 800, marginBottom: '16px', lineHeight: 1.15, letterSpacing: '-0.03em' }}>
+          <h1 className="vitrine-title" style={{ fontSize: '3.2rem', fontWeight: 800, marginBottom: '16px', lineHeight: 1.15, letterSpacing: '-0.03em' }}>
             Qualité, Moelleux et <span style={{ color: 'hsl(var(--accent-color))', transition: 'color 0.3s ease' }}>Régularité Irréprochable</span>
           </h1>
           <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '1.2rem', maxWidth: '750px', margin: '0 auto' }}>
@@ -250,7 +250,7 @@ export const Vitrine: React.FC = () => {
             <h2 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '24px', textAlign: 'center', letterSpacing: '-0.02em' }}>
               Tarification Consolidée Officielle (Toutes Zones)
             </h2>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '24px', marginBottom: '60px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '24px', marginBottom: '60px' }}>
               {breadCategories.map((bread, index) => (
                 <div key={index} className="glass-card" style={{
                   display: 'flex',
@@ -274,7 +274,7 @@ export const Vitrine: React.FC = () => {
 
         {/* Tab Content 2: Active Nodes Showcase */}
         {activeTab === 'nodes' && (
-          <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '32px', marginBottom: '60px' }}>
+          <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '32px', marginBottom: '60px' }}>
             {/* Grid Selectors */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <h3 style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '12px' }}>
@@ -335,7 +335,7 @@ export const Vitrine: React.FC = () => {
 
         {/* Tab Content 3: Commission Calculator */}
         {activeTab === 'calculator' && (
-          <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '32px', marginBottom: '60px' }}>
+          <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '32px', marginBottom: '60px' }}>
             {/* Inputs Panel */}
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <h3 style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '8px' }}>
@@ -420,7 +420,7 @@ export const Vitrine: React.FC = () => {
         )}
 
         {/* Quick Contacts Footer Widget */}
-        <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '32px', marginTop: '32px' }}>
+        <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '32px', marginTop: '32px' }}>
           <div>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '12px', color: 'hsl(var(--accent-color))' }}>
               Siège Administratif Consolidé
@@ -443,7 +443,7 @@ export const Vitrine: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer style={{
+      <footer className="vitrine-footer" style={{
         padding: '32px 40px',
         borderTop: '1px solid hsl(var(--border-color))',
         backgroundColor: 'hsl(var(--bg-secondary))',

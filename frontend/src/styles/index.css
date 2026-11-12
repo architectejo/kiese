@@ -620,3 +620,21 @@ select.form-input {
     gap: 32px;
   }
 }
+
+/* Vitrine publique : pas de débordement horizontal sur petits écrans (BUG-282) */
+.vitrine-title { overflow-wrap: anywhere; }
+.vitrine-main, .vitrine-footer { min-width: 0; box-sizing: border-box; }
+@media (max-width: 768px) {
+  .vitrine-header { height: auto !important; min-height: 64px; flex-wrap: wrap; gap: 10px; padding: 10px 16px !important; box-sizing: border-box; }
+  .vitrine-nav { order: 3; width: 100%; box-sizing: border-box; overflow-x: auto; }
+  .vitrine-nav button { flex: 1 0 auto; white-space: nowrap; padding: 8px 10px !important; }
+  .vitrine-actions { gap: 8px !important; }
+  .vitrine-actions .btn { padding: 8px 12px !important; }
+  .vitrine-main { padding: 32px 16px !important; }
+  .vitrine-title { font-size: 2rem !important; }
+  .vitrine-footer { padding: 24px 16px !important; overflow-wrap: anywhere; }
+}
+@media (max-width: 400px) {
+  .vitrine-title { font-size: 1.7rem !important; }
+  .vitrine-actions .btn span { display: none; }
+}

@@ -7,6 +7,10 @@ Chaque test reproduit, sur la base de test éphémère (jamais db.sqlite3), un
 correction (le testeur confirme ensuite).
 
 Tickets : BUG-247 à BUG-253 (docs/qa/REGISTRE_BUGS.md).
+
+Mise à jour 2026-11-12 (vague 3) : tous les `@expectedFailure` ont été retirés par
+dev-backend ; les tests passent et les tickets 247 à 252 sont VÉRIFIÉS par le
+testeur. Non-régression de la matrice : test_vague3_db_permissions.py.
 """
 
 from clients.models import Client, SocialContribution

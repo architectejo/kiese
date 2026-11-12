@@ -244,6 +244,21 @@ class DisputedTransferBlocksClosureTests(TestCase):
         self.assertEqual(_api(self.comptable).post(
             f'/api/treasury/closures/{self.closure.id}/push_to_cashbook/').status_code, 201)
 
+    def test_validate_blocked_then_passes_once_resolved(self):
+        """BUG-277 : la confirmation par le comptable est aussi bloquée."""
+        pending = CashClosure.objects.create(node=self.k3, gerant=self.gerant, date=date(2026, 11, 7),
+                                             total_entries=Decimal('100'), net_cash=Decimal('100'))
+        url = f'/api/treasury/closures/{pending.id}/validate/'
+        r = _api(self.comptable).post(url)
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn('écart', r.json()['detail'])
+        pending.refresh_from_db()
+        self.assertFalse(pending.is_validated)
+        r = _api(self.g2).post(f'/api/production/transfers/{self.tr.id}/resolve_dispute/',
+                               {'resolution': 'ALIGN_ON_RECEIVED', 'reason': 'ZZ recompte'}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(_api(self.comptable).post(url).status_code, 200)
+
     def test_cancelled_transfer_does_not_block(self):
         self.tr.transfer_status = BreadTransfer.TransferStatus.CANCELLED
         self.tr.save()

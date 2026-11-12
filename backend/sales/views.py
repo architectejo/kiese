@@ -1014,9 +1014,17 @@ class InvoiceViewSet(
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def pending_deliveries(self, request):
-        """Livreur screen: all PENDING invoices for today."""
+        """Livreur screen: all non-expired PENDING invoices of the node.
+
+        BUG-274 : indépendant de la date du jour (une facture créée à 23:55
+        reste listée après minuit) ; bornée par l'expiration de 12 h de
+        `cleanup_expired`.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+        cutoff = timezone.now() - timedelta(hours=12)
         qs = self.get_queryset().filter(
-            status=Invoice.Status.PENDING, invoice_date=_default_work_date(request.user),
+            status=Invoice.Status.PENDING, created_at__gte=cutoff,
         ).exclude(special_code=Invoice.SpecialCode.NS)  # BUG-177 : NS jamais livrable
         return Response(InvoiceSerializer(qs, many=True).data)
 

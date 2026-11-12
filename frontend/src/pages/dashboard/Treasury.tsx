@@ -13,7 +13,7 @@ import {
 } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import {
-  MAX_BILLS_PER_DENOMINATION, parseBillCount, validateBillCounts,
+  isInvalidBillCount, parseBillCount, validateBillCounts,
   isGerantOrAbove, canConfirmClosures, treasuryErrorMessage,
 } from '@/components/treasury/treasuryRules';
 import { useAuthStore } from '@/store/authStore';
@@ -641,9 +641,9 @@ export const Treasury: React.FC = () => {
     setClosureError(null);
     setClosureInfo(null);
     setClosureBlockedByTransferGap(false);
-    if (billTotal === 0) { setClosureError('Effectuez le billetage (entrez les coupures).'); return; }
     const billsProblem = validateBillCounts(bills);
     if (billsProblem) { setClosureError(billsProblem); return; }
+    if (billTotal === 0) { setClosureError('Effectuez le billetage (entrez les coupures).'); return; }
     // BUG-046 : une clôture déjà confirmée par le comptable est figée côté serveur (400) —
     // on évite même la requête si l'état local sait déjà que la clôture est confirmée
     // (ex. confirmée entre-temps dans un autre onglet pendant que ce formulaire était ouvert).
@@ -930,9 +930,9 @@ export const Treasury: React.FC = () => {
   const handleCreateDirectionCashCount = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setDccError(null);
-    if (dccBillTotal <= 0) { setDccError('Effectuez le billetage (entrez les coupures).'); return; }
     const dccProblem = validateBillCounts(dccBills);
     if (dccProblem) { setDccError(dccProblem); return; }
+    if (dccBillTotal <= 0) { setDccError('Effectuez le billetage (entrez les coupures).'); return; }
     setDccSubmitting(true);
     try {
       await treasuryApi.directionCashCounts.create({
@@ -955,9 +955,9 @@ export const Treasury: React.FC = () => {
     e.preventDefault();
     setVoucherError(null);
     if (!voucherMotif) { setVoucherError('Indiquez le motif du bordereau.'); return; }
-    if (voucherBillTotal <= 0) { setVoucherError('Saisissez au moins un billet.'); return; }
     const voucherProblem = validateBillCounts(voucherBills);
     if (voucherProblem) { setVoucherError(voucherProblem); return; }
+    if (voucherBillTotal <= 0) { setVoucherError('Saisissez au moins un billet.'); return; }
     setVoucherSubmitting(true);
     try {
       await treasuryApi.vouchers.create({
@@ -1663,7 +1663,7 @@ export const Treasury: React.FC = () => {
           <p style={{ fontSize: '0.68rem', color: 'hsl(var(--text-secondary))', marginBottom: '12px' }}>
             Saisir le nombre de coupures physiques — le système calcule et compare au solde théorique.
           </p>
-          <form onSubmit={handleCreateClosure} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <form noValidate onSubmit={handleCreateClosure} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {/* Header row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.8fr 1fr', gap: '8px', fontSize: '0.6rem', color: 'hsl(var(--text-muted))', fontWeight: 700, textTransform: 'uppercase', marginBottom: '2px', paddingBottom: '4px', borderBottom: '1px solid hsl(var(--border-color))' }}>
               <span>Valeur Faciale</span><span style={{ textAlign: 'right' }}>Quantité</span><span style={{ textAlign: 'right' }}>Sous-Total FC</span>
@@ -1674,11 +1674,10 @@ export const Treasury: React.FC = () => {
                 <div key={b.key} style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.8fr 1fr', gap: '8px', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.75rem', fontWeight: 700 }}>{b.label}</span>
                   <input
-                    type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric"
+                    type="number" inputMode="numeric"
                     value={bills[b.key] || ''}
                     placeholder="0"
-                    aria-invalid={bills[b.key] > MAX_BILLS_PER_DENOMINATION}
-                    onChange={e => setBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
+                    aria-invalid={isInvalidBillCount(bills[b.key])}                    onChange={e => setBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                     className="form-input"
                     disabled={!!editingClosure?.is_validated}
                     style={{ fontSize: '0.78rem', height: '26px', padding: '0 6px', textAlign: 'right', fontWeight: 700 }}
@@ -1817,7 +1816,7 @@ export const Treasury: React.FC = () => {
             </div>
 
             {showExpenseForm && (
-              <form onSubmit={handleAddExpense} style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px', padding: '10px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
+              <form noValidate onSubmit={handleAddExpense} style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px', padding: '10px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '2px' }}>Catégorie</label>
@@ -2022,7 +2021,7 @@ export const Treasury: React.FC = () => {
           </div>
 
           {showVoucherForm && (
-            <form onSubmit={handleCreateVoucher} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px', padding: '12px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
+            <form noValidate onSubmit={handleCreateVoucher} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px', padding: '12px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px' }}>Motif *</label>
@@ -2041,7 +2040,7 @@ export const Treasury: React.FC = () => {
                     <div key={b.key}>
                       <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '2px' }}>{b.label}</div>
                       <input
-                        type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric" value={voucherBills[b.key]}
+                        type="number" inputMode="numeric" value={voucherBills[b.key]} aria-invalid={isInvalidBillCount(voucherBills[b.key])}
                         onChange={e => setVoucherBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                         className="form-input" style={{ height: '28px', fontSize: '0.72rem', padding: '0 6px', width: '100%' }}
                       />
@@ -2267,7 +2266,7 @@ export const Treasury: React.FC = () => {
           </div>
 
           {showDccForm && (
-            <form onSubmit={handleCreateDirectionCashCount} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px', padding: '12px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
+            <form noValidate onSubmit={handleCreateDirectionCashCount} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px', padding: '12px', backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px' }}>Date du comptage *</label>
                 <input
@@ -2283,7 +2282,7 @@ export const Treasury: React.FC = () => {
                     <div key={b.key}>
                       <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '2px' }}>{b.label}</div>
                       <input
-                        type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric" value={dccBills[b.key]}
+                        type="number" inputMode="numeric" value={dccBills[b.key]} aria-invalid={isInvalidBillCount(dccBills[b.key])}
                         onChange={e => setDccBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                         className="form-input" style={{ height: '28px', fontSize: '0.72rem', padding: '0 6px', width: '100%' }}
                       />
