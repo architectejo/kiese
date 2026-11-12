@@ -12,6 +12,10 @@ import {
   DirectionCashCount
 } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
+import {
+  MAX_BILLS_PER_DENOMINATION, parseBillCount, validateBillCounts,
+  isGerantOrAbove, canConfirmClosures, treasuryErrorMessage,
+} from '@/components/treasury/treasuryRules';
 import { useAuthStore } from '@/store/authStore';
 import { useWorkDate } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
@@ -236,6 +240,10 @@ export const Treasury: React.FC = () => {
   // siège (`IsHeadquarters`, cf. BUG-026) — on ne l'appelle même pas pour un rôle non-HQ,
   // au lieu de laisser la requête échouer en 403.
   const isHq = !!user?.can_access_all_nodes;
+  // BUG-231 / BUG-200 : confirmer, infirmer et inscrire au Livre de Caisse = siège (COMPTABLE/DIRECTION/ADMIN) ;
+  // jamais le gérant. Écriture journal/épargne = gérant et au-dessus. Le serveur reste l'autorité (403 affiché).
+  const canConfirm = canConfirmClosures(user);
+  const canWriteTreasury = isGerantOrAbove(user);
   const nodeParam: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
 
   const reportsQ = useProgressiveList<FacturierReport>({
@@ -294,12 +302,17 @@ export const Treasury: React.FC = () => {
     setAuxLoading(true);
     const nf = nodeFilter || undefined;
     try {
+      // BUG-230 : le résumé des ventes peut répondre 403 (boulangerie étrangère) ou 400 (date
+      // invalide) : on l'isole pour ne pas perdre les sessions, sans planter l'écran.
       const [sessionRes, breadRes] = await Promise.all([
         productionApi.sessions.list({ date: today, ...(nf && { node: nf }) }),
-        salesApi.breadSummary({ date: today, ...(nf && { node: nf }) }),
+        salesApi.breadSummary({ date: today, ...(nf && { node: nf }) }).catch((e: unknown) => {
+          console.error('Résumé des ventes indisponible :', getErrorDetail(e, 'Résumé des ventes indisponible.'));
+          return null;
+        }),
       ]);
       setTodaySessions(Array.isArray(sessionRes.data) ? sessionRes.data : []);
-      setBreadSold(breadRes.data ?? null);
+      setBreadSold(breadRes?.data ?? null);
     } catch (err) {
       console.error('Treasury load failed', err);
     } finally {
@@ -437,8 +450,13 @@ export const Treasury: React.FC = () => {
   const handleSavingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSError(null);
+    if (!canWriteTreasury) { setSError("Enregistrement réservé au gérant et aux rôles supérieurs."); return; }
     const rev = parseFloat(sRevenue) || 0;
     if (rev <= 0) { setSError('Indiquez le revenu du jour.'); return; }
+    const flour = parseFloat(sFlour || '0');
+    if (!Number.isFinite(flour) || flour < 0) { setSError('Le nombre de sacs ne peut pas être négatif.'); return; }
+    const rate = parseFloat(sRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) { setSError("Le taux d'épargne doit être compris entre 0 et 1 (ex. 0,158)."); return; }
     setSSubmitting(true);
     try {
       const payload: Record<string, string> = {
@@ -447,15 +465,13 @@ export const Treasury: React.FC = () => {
         daily_revenue: String(rev),
         savings_rate: sRate,
       };
-      if (nodeFilter) payload.node = nodeFilter;
+      // BUG-231 / BUG-206 : `node` n'est envoyé que par le siège (le serveur l'ignore sinon).
+      if (isHq && nodeFilter) payload.node = nodeFilter;
       await treasuryApi.savings.create(payload);
       setSFlour(''); setSRevenue('');
       await loadSavings();
     } catch (err: unknown) {
-      const d = axios.isAxiosError(err)
-        ? (err.response?.data as { detail?: string; node?: string[]; non_field_errors?: string[] } | undefined)
-        : undefined;
-      setSError(d?.detail || d?.node?.[0] || d?.non_field_errors?.[0] || "Erreur lors de l'enregistrement.");
+      setSError(treasuryErrorMessage(err, "Erreur lors de l'enregistrement."));
     } finally {
       setSSubmitting(false);
     }
@@ -522,6 +538,8 @@ export const Treasury: React.FC = () => {
     setJError(null);
     const ea = parseFloat(jEntry) || 0;
     const xa = parseFloat(jExit)  || 0;
+    if (!canWriteTreasury) { setJError("Écriture réservée au gérant et aux rôles supérieurs."); return; }
+    if (ea < 0 || xa < 0) { setJError('Les montants ne peuvent pas être négatifs.'); return; }
     if (ea === 0 && xa === 0) { setJError('Indiquez une entrée ou une sortie.'); return; }
     setJSubmitting(true);
     try {
@@ -530,7 +548,7 @@ export const Treasury: React.FC = () => {
         entry_amount: ea ? String(ea) : '0',
         exit_amount:  xa ? String(xa) : '0',
       };
-      if (nodeFilter) payload.node = nodeFilter;
+      if (isHq && nodeFilter) payload.node = nodeFilter;
       const res = await treasuryApi.journal.create(payload);
       // BUG-105 — confrontation à la Clôture renvoyée par le serveur pour
       // l'imputation CA (jamais calculée/forcée côté client).
@@ -539,8 +557,7 @@ export const Treasury: React.FC = () => {
       setJSuggestedCa(null);
       await loadJournal();
     } catch (err: unknown) {
-      const d = (err as { response?: { data?: { detail?: string; node?: string[] } } })?.response?.data;
-      setJError(d?.detail || d?.node?.[0] || "Erreur lors de l'enregistrement.");
+      setJError(treasuryErrorMessage(err, "Erreur lors de l'enregistrement."));
     } finally {
       setJSubmitting(false);
     }
@@ -615,7 +632,7 @@ export const Treasury: React.FC = () => {
       await treasuryApi.reports.validate(id);
       await loadData();
     } catch (err: unknown) {
-      console.error('Validate report failed', axios.isAxiosError(err) ? err.response?.data : err);
+      setGenerateError(getErrorDetail(err, 'Erreur lors de la validation du rapport.'));
     }
   };
 
@@ -625,6 +642,8 @@ export const Treasury: React.FC = () => {
     setClosureInfo(null);
     setClosureBlockedByTransferGap(false);
     if (billTotal === 0) { setClosureError('Effectuez le billetage (entrez les coupures).'); return; }
+    const billsProblem = validateBillCounts(bills);
+    if (billsProblem) { setClosureError(billsProblem); return; }
     // BUG-046 : une clôture déjà confirmée par le comptable est figée côté serveur (400) —
     // on évite même la requête si l'état local sait déjà que la clôture est confirmée
     // (ex. confirmée entre-temps dans un autre onglet pendant que ce formulaire était ouvert).
@@ -665,11 +684,12 @@ export const Treasury: React.FC = () => {
         ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
         : undefined;
       const detail = d?.detail;
+      const fieldMsg = treasuryErrorMessage(err, '');
       // BUG-048 : message reçu tel quel du serveur (jamais inventé) — on ne fait que
       // repérer s'il décrit un transfert entrant en écart non résolu (CLAUDE.md §5.4)
       // pour proposer un renvoi vers la section Transferts de Production.tsx.
       setClosureBlockedByTransferGap(!!detail && /transfert/i.test(detail) && /écart/i.test(detail));
-      setClosureError(detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur lors de la clôture.');
+      setClosureError(detail || d?.non_field_errors?.[0] || fieldMsg || 'Erreur lors de la clôture.');
     }
   };
 
@@ -728,7 +748,8 @@ export const Treasury: React.FC = () => {
   const handleAddExpense = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setExpError(null);
-    if (!expDesc || !expAmount || parseFloat(expAmount) <= 0 || !expCategory) { setExpError('Remplissez tous les champs.'); return; }
+    if (!expDesc || !expAmount || !expCategory) { setExpError('Remplissez tous les champs.'); return; }
+    if (!(parseFloat(expAmount) > 0)) { setExpError('Le montant de la dépense doit être supérieur à 0.'); return; }
     try {
       await treasuryApi.expenses.create({
         description: expDesc, category: Number(expCategory),
@@ -739,7 +760,7 @@ export const Treasury: React.FC = () => {
       setShowExpenseForm(false);
       await loadData();
     } catch (err: unknown) {
-      setExpError(getErrorDetail(err, 'Erreur.'));
+      setExpError(getErrorDetail(err, "Erreur lors de l'enregistrement de la dépense."));
     }
   };
 
@@ -910,6 +931,8 @@ export const Treasury: React.FC = () => {
     e.preventDefault();
     setDccError(null);
     if (dccBillTotal <= 0) { setDccError('Effectuez le billetage (entrez les coupures).'); return; }
+    const dccProblem = validateBillCounts(dccBills);
+    if (dccProblem) { setDccError(dccProblem); return; }
     setDccSubmitting(true);
     try {
       await treasuryApi.directionCashCounts.create({
@@ -922,8 +945,7 @@ export const Treasury: React.FC = () => {
       setShowDccForm(false);
       await loadDirectionCashCounts();
     } catch (err: unknown) {
-      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
-      setDccError(d?.detail || "Erreur lors de l'enregistrement du comptage.");
+      setDccError(treasuryErrorMessage(err, "Erreur lors de l'enregistrement du comptage."));
     } finally {
       setDccSubmitting(false);
     }
@@ -934,6 +956,8 @@ export const Treasury: React.FC = () => {
     setVoucherError(null);
     if (!voucherMotif) { setVoucherError('Indiquez le motif du bordereau.'); return; }
     if (voucherBillTotal <= 0) { setVoucherError('Saisissez au moins un billet.'); return; }
+    const voucherProblem = validateBillCounts(voucherBills);
+    if (voucherProblem) { setVoucherError(voucherProblem); return; }
     setVoucherSubmitting(true);
     try {
       await treasuryApi.vouchers.create({
@@ -945,7 +969,7 @@ export const Treasury: React.FC = () => {
       setShowVoucherForm(false);
       await Promise.all([loadVouchers(), loadData()]);
     } catch (err: unknown) {
-      setVoucherError(getErrorDetail(err, 'Erreur lors de la création du bordereau.'));
+      setVoucherError(treasuryErrorMessage(err, 'Erreur lors de la création du bordereau.'));
     } finally {
       setVoucherSubmitting(false);
     }
@@ -1304,7 +1328,7 @@ export const Treasury: React.FC = () => {
               </span>
 
               {/* HQ only: confirm / reject */}
-              {user?.can_access_all_nodes && !cl.is_validated && (
+              {canConfirm && !cl.is_validated && (
                 <>
                   <button
                     onClick={() => { setValidatingClosureId(validatingClosureId === cl.id ? null : cl.id); setRejectingClosureId(null); }}
@@ -1324,7 +1348,7 @@ export const Treasury: React.FC = () => {
               )}
 
               {/* HQ: push to cashbook after validation */}
-              {cl.is_validated && user?.can_access_all_nodes && (
+              {cl.is_validated && canConfirm && (
                 <button
                   onClick={() => { handlePushToCashbook(cl.id); setDetailClosure(null); }}
                   disabled={closureActionLoading}
@@ -1650,10 +1674,11 @@ export const Treasury: React.FC = () => {
                 <div key={b.key} style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.8fr 1fr', gap: '8px', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.75rem', fontWeight: 700 }}>{b.label}</span>
                   <input
-                    type="number" min={0}
+                    type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric"
                     value={bills[b.key] || ''}
                     placeholder="0"
-                    onChange={e => setBills(prev => ({ ...prev, [b.key]: Math.max(0, Number(e.target.value)) }))}
+                    aria-invalid={bills[b.key] > MAX_BILLS_PER_DENOMINATION}
+                    onChange={e => setBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                     className="form-input"
                     disabled={!!editingClosure?.is_validated}
                     style={{ fontSize: '0.78rem', height: '26px', padding: '0 6px', textAlign: 'right', fontWeight: 700 }}
@@ -1931,7 +1956,7 @@ export const Treasury: React.FC = () => {
                         Motif : {c.rejection_reason || 'Non précisé'}
                       </div>
                     )}
-                    {user?.can_access_all_nodes && !c.is_validated && (
+                    {canConfirm && !c.is_validated && (
                       <div style={{ fontSize: '0.62rem', textAlign: 'center', color: 'hsl(var(--text-muted))' }}>
                         Cliquez pour confirmer / infirmer
                       </div>
@@ -1950,7 +1975,7 @@ export const Treasury: React.FC = () => {
                           <FiRefreshCw size={11} /> Corriger et re-soumettre
                         </button>
                       )}
-                      {c.is_validated && user?.can_access_all_nodes && !c.has_cashbook_entry && (
+                      {c.is_validated && canConfirm && !c.has_cashbook_entry && (
                         <button onClick={() => handlePushToCashbook(c.id)} className="btn btn-secondary" style={{ flex: 1, padding: '4px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                           <FiBook /> Inscrire au Livre de Caisse
                         </button>
@@ -2016,8 +2041,8 @@ export const Treasury: React.FC = () => {
                     <div key={b.key}>
                       <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '2px' }}>{b.label}</div>
                       <input
-                        type="number" min={0} value={voucherBills[b.key]}
-                        onChange={e => setVoucherBills(prev => ({ ...prev, [b.key]: Math.max(0, parseInt(e.target.value) || 0) }))}
+                        type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric" value={voucherBills[b.key]}
+                        onChange={e => setVoucherBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                         className="form-input" style={{ height: '28px', fontSize: '0.72rem', padding: '0 6px', width: '100%' }}
                       />
                     </div>
@@ -2258,8 +2283,8 @@ export const Treasury: React.FC = () => {
                     <div key={b.key}>
                       <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '2px' }}>{b.label}</div>
                       <input
-                        type="number" min={0} value={dccBills[b.key]}
-                        onChange={e => setDccBills(prev => ({ ...prev, [b.key]: Math.max(0, parseInt(e.target.value) || 0) }))}
+                        type="number" min={0} max={MAX_BILLS_PER_DENOMINATION} step={1} inputMode="numeric" value={dccBills[b.key]}
+                        onChange={e => setDccBills(prev => ({ ...prev, [b.key]: parseBillCount(e.target.value) }))}
                         className="form-input" style={{ height: '28px', fontSize: '0.72rem', padding: '0 6px', width: '100%' }}
                       />
                     </div>
@@ -2382,7 +2407,8 @@ export const Treasury: React.FC = () => {
           </div>
         )}
 
-        {/* Form — new entry */}
+        {/* Form — new entry (BUG-231 : ajout seul, gérant et au-dessus ; aucune édition/suppression de ligne, le serveur répond 405) */}
+        {canWriteTreasury ? (
         <form onSubmit={handleJournalSubmit} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '14px', padding: '12px 14px', backgroundColor: 'hsl(var(--bg-secondary))', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
             <label style={{ fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', textTransform: 'uppercase' }}>Date</label>
@@ -2457,6 +2483,11 @@ export const Treasury: React.FC = () => {
             </div>
           )}
         </form>
+        ) : (
+          <div style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginBottom: '14px', padding: '8px 12px', backgroundColor: 'hsl(var(--bg-secondary))', borderRadius: 'var(--radius-sm)' }}>
+            Le journal est en lecture seule pour votre rôle : la saisie est réservée au gérant et aux rôles supérieurs.
+          </div>
+        )}
 
         {/* Entries table */}
         {journalQ.error && (
@@ -2611,7 +2642,8 @@ export const Treasury: React.FC = () => {
           </div>
         )}
 
-        {/* Formulaire saisie */}
+        {/* Formulaire saisie (BUG-231 : gérant et au-dessus) */}
+        {canWriteTreasury && (
         <form onSubmit={handleSavingsSubmit} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20, alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <label style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))' }}>Date</label>
@@ -2645,6 +2677,7 @@ export const Treasury: React.FC = () => {
           </button>
           {sError && <div style={{ color: 'hsl(var(--color-danger))', fontSize: '0.8rem', alignSelf: 'center' }}>{sError}</div>}
         </form>
+        )}
 
         {/* Table mensuelle */}
         {savingsQ.error && (

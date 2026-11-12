@@ -301,7 +301,12 @@ def record_backdated_correction(closure, delta, invoice, acting_user=None):
     via `correction_reason`/`correction_source_invoice`/`source_closure`.
     """
     today = timezone.localdate()
-    piece = f"CORR-{closure.node.code}-{closure.date.strftime('%Y%m%d')}-{today.strftime('%Y%m%d%H%M%S')}"
+    # BUG-204 : n° <= 30 caractères (max_length de `piece_number`) et distinct
+    # à chaque correction : `CORR-<nœud>-<date clôture AAAAMMJJ>-<rang>` où
+    # <rang> = n° de la correction de cette clôture (01, 02...). Les numéros
+    # déjà émis (ancien format) ne sont pas modifiés.
+    rank = CashbookEntry.objects.filter(source_closure=closure, is_correction=True).count() + 1
+    piece = f"CORR-{closure.node.code}-{closure.date.strftime('%Y%m%d')}-{rank:02d}"[:30]
     reason = (
         f"Correction suite à vente rétroactive : facture {invoice.receipt_number} "
         f"({invoice.invoice_date}) livrée/ajoutée après la clôture déjà validée et "

@@ -269,7 +269,7 @@ export interface InvoiceCreatePayload {
   client?: string | null;
   payment_type: 'CASH' | 'CREDIT';
   payment_amount: string;
-  commission_rate?: string | number;
+  // BUG-230 : `commission_rate` n'est plus envoyé (ignoré par le serveur, qui applique le taux du client).
   is_soldee?: boolean;
   commission_exempt?: boolean;
   special_code?: '' | 'NV' | 'RG' | 'NS';
@@ -613,6 +613,13 @@ export interface BreadTransfer {
   created_at: string;
 }
 
+export type DisputeResolution = 'ALIGN_ON_RECEIVED' | 'ALIGN_ON_SENT';
+
+export interface ResolveDisputePayload {
+  resolution: DisputeResolution;
+  reason: string;
+}
+
 export interface ConsumableMovement {
   id: string;
   node: string;
@@ -833,6 +840,14 @@ export interface CashClosure {
   notes: string;
   created_at: string;
   has_cashbook_entry: boolean;
+}
+
+/** BUG-207 : ligne de `cashbook/period_summary/` (un élément par boulangerie ; montants = chaînes décimales). */
+export interface PeriodSummaryNode {
+  node__code: string;
+  node__name: string;
+  total_entries: string;
+  total_exits: string;
 }
 
 export interface FacturierReport {
@@ -1401,6 +1416,9 @@ export const productionApi = {
       apiClient.post(`/api/production/transfers/${id}/respond_to_request/`, { approved, lines }),
     confirm: (id: string, lines: Array<{ bread_price: number; quantity_received: number }>) =>
       apiClient.post(`/api/production/transfers/${id}/confirm_reception/`, { lines }),
+    // BUG-232 : résolution d'un litige (gérant émetteur ou siège/direction), motif obligatoire.
+    resolveDispute: (id: string, data: ResolveDisputePayload) =>
+      apiClient.post<BreadTransfer>(`/api/production/transfers/${id}/resolve_dispute/`, data),
   },
   movements: {
     list: (params?: Record<string, string>) =>
@@ -1479,7 +1497,9 @@ export const treasuryApi = {
     // BUG-164 : page brute pour le chargement progressif (`useProgressiveList`).
     page: (params?: Record<string, string>) =>
       getPage<FacturierReport>('/api/treasury/reports/', params),
-    create: (data: Partial<FacturierReport>) =>
+    // BUG-231 / BUG-203 : les totaux ne sont jamais envoyés (ignorés par le serveur) ;
+    // un rapport se crée par `generate`. Seuls date/nœud/équipe sont acceptés ici.
+    create: (data: { date: string; node?: string; team?: string }) =>
       apiClient.post<FacturierReport>('/api/treasury/reports/', data),
     validate: (id: string) =>
       apiClient.post(`/api/treasury/reports/${id}/validate/`),
@@ -1519,8 +1539,9 @@ export const treasuryApi = {
       apiClient.get<{ chain_valid: boolean; tampered_count: number }>(
         '/api/treasury/cashbook/integrity_check/'
       ),
+    // BUG-207/231 : montants en CHAÎNES décimales (`"18400.50"`), à formater sans passer par un flottant.
     periodSummary: (params?: Record<string, string>) =>
-      apiClient.get('/api/treasury/cashbook/period_summary/', { params }),
+      apiClient.get<PeriodSummaryNode[]>('/api/treasury/cashbook/period_summary/', { params }),
   },
   vouchers: {
     list: (params?: Record<string, string>) =>

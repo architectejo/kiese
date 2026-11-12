@@ -72,6 +72,8 @@ class AssignmentApiRobustnessTests(TestCase):
         self.api = APIClient(); self.api.force_authenticate(self.gerant)
 
     def test_post_midnight_exactly_on_midnight_targets_previous_workday(self):
+        # BUG-227 : la journée de relève ne s'applique qu'en mode rotation.
+        self.node.team_rotation_enabled = True; self.node.save(update_fields=['team_rotation_enabled'])
         with _now(date(2026, 11, 12), 0, 0, 0):
             r = self.api.post(URL, {'team': 'B'}, format='json')
         self.assertEqual(r.status_code, 200, r.data)
@@ -102,6 +104,8 @@ class AssignmentApiRobustnessTests(TestCase):
     def test_changing_handover_after_assignment_moves_work_date(self):
         """Caractérisation : déplacer la relève (12:00 -> 18:00) à 14:00 renvoie à la journée de la
         veille ; la désignation de la journée courante n'est donc plus visible."""
+        # BUG-227 : la journée de relève ne s'applique qu'en mode rotation.
+        self.node.team_rotation_enabled = True; self.node.save(update_fields=['team_rotation_enabled'])
         with _now(D, 14):
             self.api.post(URL, {'team': 'A'}, format='json')
             self.node.handover_time = time(18, 0); self.node.save()

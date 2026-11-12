@@ -10,7 +10,6 @@ Tests sans décorateur : comportements CONFORMES vérifiés (non-régression).
 """
 from datetime import date, datetime
 from decimal import Decimal
-from unittest import expectedFailure
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -148,32 +147,31 @@ class ConformityTests(_Base):
 # ─────────────────────────────── Anomalies ────────────────────────────────
 
 class NegativeQuantityTests(_Base):
-    @expectedFailure
-    def test_bug216_entree_negative_ou_nulle_refusee(self):
-        """BUG-216 : un mouvement ENTRY de quantité négative est accepté (201) et DIMINUE le stock."""
+    """BUG-216 : REJETÉ par décision du client (2026-11-12) — une quantité négative ou nulle sur un
+    mouvement de consommables (et sur un inventaire) doit être ACCEPTÉE, cohérent avec BUG-143
+    (stock négatif autorisé). Les anciennes sondes qui affirmaient le refus (400) sont inversées :
+    elles documentent et verrouillent désormais l'acceptation (aucune validation `> 0`)."""
+
+    def test_bug216_rejete_entree_negative_ou_nulle_acceptee(self):
         self._entry('SALT', '5000')
         r = self._entry('SALT', '-5')
-        self.assertEqual(r.status_code, 400, r.content)
-        self.assertEqual(_stock_qty(self.node, 'SALT'), Decimal('5000.000'))
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(_stock_qty(self.node, 'SALT'), Decimal('4995.000'))
+        self.assertEqual(self._entry('SALT', '0').status_code, 201)
 
-    @expectedFailure
-    def test_bug216_sortie_negative_refusee(self):
-        """BUG-216 : un mouvement EXIT négatif AUGMENTE le stock (201)."""
+    def test_bug216_rejete_sortie_negative_acceptee(self):
         self._entry('YEAST', '4')
         r = self._entry('YEAST', '-1', mtype='EXIT')
-        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(r.status_code, 201, r.content)
 
-    @expectedFailure
-    def test_bug216_inventaire_physique_negatif_refuse(self):
-        """BUG-216 : un comptage physique négatif (-1400 g) est accepté (201)."""
+    def test_bug216_rejete_inventaire_physique_negatif_accepte(self):
         r = self.api.post('/api/production/counts/', {
             'consumable_type': 'SALT', 'count_date': '2026-11-12', 'physical_quantity': '-1400',
         }, format='json')
-        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(r.status_code, 201, r.content)
 
 
 class StockNegativeNotificationTests(_Base):
-    @expectedFailure
     def test_bug217_message_stock_negatif_lisible(self):
         """BUG-217 : le message cite `F(quantity) - Value(Decimal('5000'))` au lieu de la quantité disponible."""
         self._entry('SALT', '3500')
@@ -186,7 +184,6 @@ class StockNegativeNotificationTests(_Base):
 
 
 class TheoreticalYieldDecimalTests(_Base):
-    @expectedFailure
     def test_bug218_valeur_theorique_exacte_pour_sacs_decimaux(self):
         """BUG-218 : 1,13 sac x 210 000 FC = 237 300 FC ; obtenu 237 299 (float tronqué)."""
         r = self._declare(flour_sacks_used='1.13', lines=[{'bread_price': self.bp500.pk, 'quantity': 474}])
@@ -196,7 +193,6 @@ class TheoreticalYieldDecimalTests(_Base):
 
 
 class AtomicityTests(_Base):
-    @expectedFailure
     def test_bug219_consumables_used_invalide_ne_laisse_aucune_trace(self):
         """BUG-219 : `consumables_used` invalide -> 500 APRES création de la session et du stock pains ;
         un rejeu double la production. Attendu : 400 et aucun effet de bord."""
@@ -208,7 +204,6 @@ class AtomicityTests(_Base):
 
 
 class SessionEditStockTests(_Base):
-    @expectedFailure
     def test_bug220_modifier_les_sacs_ajuste_le_stock_farine(self):
         """BUG-220 : PATCH flour_sacks_used (3 -> 5) ne modifie pas le stock de farine (aucun mouvement)."""
         self._entry('FLOUR', '10')
@@ -232,7 +227,6 @@ class DisposalEditStockTests(_Base):
     def _avail(self):
         return BreadStock.objects.get(node=self.node, bread_price=self.bp200).qty_available
 
-    @expectedFailure
     def test_bug221_modifier_une_disposition_ajuste_le_stock(self):
         """BUG-221 : PATCH quantity 50 -> 100 laisse qty_disposed à 50."""
         did = self._disposal(50)
@@ -240,7 +234,6 @@ class DisposalEditStockTests(_Base):
         self.api.patch(f'/api/production/disposals/{did}/', {'quantity': 100}, format='json')
         self.assertEqual(self._avail(), 400)
 
-    @expectedFailure
     def test_bug221_supprimer_une_disposition_rend_les_pains(self):
         """BUG-221 : DELETE d'une disposition (204) ne restitue pas les pains au stock."""
         did = self._disposal(50)
@@ -251,7 +244,6 @@ class DisposalEditStockTests(_Base):
 
 
 class MovementEditTests(_Base):
-    @expectedFailure
     def test_bug222_modifier_un_mouvement_ne_double_pas_le_stock(self):
         """BUG-222 : PATCH quantity 2 -> 10 sur une ENTRY ajoute de NOUVEAU 10 au stock (stock = 2 + 10)."""
         r = self._entry('YEAST', '2')
@@ -259,7 +251,6 @@ class MovementEditTests(_Base):
         self.api.patch(f'/api/production/movements/{mid}/', {'quantity': '10'}, format='json')
         self.assertEqual(_stock_qty(self.node, 'YEAST'), Decimal('10.000'))
 
-    @expectedFailure
     def test_bug222_supprimer_un_mouvement_inverse_le_stock_ou_est_refuse(self):
         """BUG-222 : DELETE (204) d'une ENTRY laisse le stock inchangé : registre et stock divergent."""
         r = self._entry('SALT', '500')
@@ -292,7 +283,6 @@ class TransferDisputeTests(_Base):
         self.assertEqual(r.status_code, 400)
         self.assertIn('Clôture bloquée', r.json()['detail'])
 
-    @expectedFailure
     def test_bug223_un_litige_doit_pouvoir_etre_resolu(self):
         """BUG-223 : un transfert DISPUTED ne peut plus changer d'état (confirm_reception exige RESPONDED)
         et aucune action de résolution n'existe -> la clôture du récepteur reste bloquée à jamais
@@ -308,25 +298,21 @@ class TransferInputValidationTests(_Base):
     def _post(self, api, body):
         return api.post('/api/production/transfers/', body, format='json')
 
-    @expectedFailure
     def test_bug224_quantite_non_numerique_400(self):
         r = self._post(_api(self.gerant_other), {'from_node': self.node.pk,
                                                  'lines': [{'bread_price': self.bp200.pk, 'quantity_sent': 'abc'}]})
         self.assertEqual(r.status_code, 400, r.status_code)
 
-    @expectedFailure
     def test_bug224_auto_transfert_refuse(self):
         r = self._post(_api(self.gerant_other), {'from_node': self.other.pk,
                                                  'lines': [{'bread_price': self.bp200.pk, 'quantity_sent': 5}]})
         self.assertEqual(r.status_code, 400, r.status_code)
 
-    @expectedFailure
     def test_bug224_demande_sans_ligne_refusee(self):
         r = self._post(_api(self.gerant_other), {'from_node': self.node.pk, 'lines': []})
         self.assertEqual(r.status_code, 400, r.status_code)
         self.assertEqual(BreadTransfer.objects.count(), 0)
 
-    @expectedFailure
     def test_bug224_reception_negative_400(self):
         _adjust_bread_stock(self.node, self.bp200, produced=50)
         rcv = _api(self.gerant_other)
@@ -338,7 +324,6 @@ class TransferInputValidationTests(_Base):
                      {'lines': [{'bread_price': self.bp200.pk, 'quantity_received': -30}]}, format='json')
         self.assertEqual(r.status_code, 400, r.status_code)
 
-    @expectedFailure
     def test_bug224_siege_sans_boulangerie_pas_de_500(self):
         hq = make_user('DIRECTION', node=None)
         r = self._post(_api(hq), {'from_node': self.node.pk,
@@ -347,7 +332,6 @@ class TransferInputValidationTests(_Base):
 
 
 class InvalidDateTests(_Base):
-    @expectedFailure
     def test_bug225_date_calendaire_invalide_400(self):
         """BUG-225 : `date=2026-13-45` (format valide, date impossible) -> ValueError 500 sur 4 endpoints."""
         for url in (
@@ -364,7 +348,6 @@ class ClassicPreviousDayTests(_Base):
     def _at(self, y, m, d, hh, mm):
         return timezone.make_aware(datetime(y, m, d, hh, mm), timezone.get_current_timezone())
 
-    @expectedFailure
     def test_bug226_session_de_la_veille_cloturee_en_mode_classique(self):
         """BUG-226 : hors rotation, `shift-end-status` ne regarde que `date=today` : la session de
         l'équipe B de la VEILLE (fin de créneau 20:00 dépassée de 10 h) reste ouverte indéfiniment."""
@@ -383,7 +366,6 @@ class ClassicPreviousDayTests(_Base):
 
 
 class ClassicTeamAssignmentTests(_Base):
-    @expectedFailure
     def test_bug227_team_assignment_hors_rotation_meme_journee_que_le_reste(self):
         """BUG-227 : hors rotation, GET/POST team-assignment utilisent la journée de relève
         (05:00 -> J-1) alors que sessions/opening-confirmation/daily-closure utilisent la date calendaire."""

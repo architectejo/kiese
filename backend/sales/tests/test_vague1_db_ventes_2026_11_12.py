@@ -5,7 +5,6 @@ Chaque test attendu en échec porte `@expectedFailure` et la référence du
 ticket (docs/qa/REGISTRE_BUGS.md). Données fictives uniquement.
 """
 from datetime import timedelta
-from unittest import expectedFailure
 
 from django.test import TestCase
 from django.utils import timezone
@@ -37,22 +36,18 @@ class Vague1Base(TestCase):
 
 
 class QuantiteEtMontantsTests(Vague1Base):
-    @expectedFailure  # BUG-208
     def test_quantite_negative_refusee_en_400(self):
         r = self.post(lines=[{'bread_price': self.bp.pk, 'quantity': -3}])
         self.assertEqual(r.status_code, 400)
 
-    @expectedFailure  # BUG-208
     def test_quantite_zero_refusee(self):
         r = self.post(lines=[{'bread_price': self.bp.pk, 'quantity': 0}])
         self.assertEqual(r.status_code, 400)
 
-    @expectedFailure  # BUG-209
     def test_versement_negatif_refuse_sur_facture(self):
         r = self.post(payment_amount='-500')
         self.assertEqual(r.status_code, 400)
 
-    @expectedFailure  # BUG-209
     def test_versement_negatif_refuse_sur_remboursement(self):
         r = self.api.post(INV, {'client': str(self.cl.pk), 'payment_type': 'CASH',
                                 'payment_amount': '-3000', 'is_debt_repayment': True, 'lines': []}, format='json')
@@ -60,13 +55,11 @@ class QuantiteEtMontantsTests(Vague1Base):
         self.cl.refresh_from_db()
         self.assertEqual(self.cl.current_debt, 0)
 
-    @expectedFailure  # BUG-213
     def test_remboursement_a_zero_refuse(self):
         r = self.api.post(INV, {'client': str(self.cl.pk), 'payment_type': 'CASH',
                                 'payment_amount': '0', 'is_debt_repayment': True, 'lines': []}, format='json')
         self.assertEqual(r.status_code, 400)
 
-    @expectedFailure  # BUG-214
     def test_vente_sans_client_a_credit_refusee(self):
         r = self.api.post(INV, {'payment_type': 'CREDIT', 'payment_amount': 0,
                                 'lines': [{'bread_price': self.bp.pk, 'quantity': 2}]}, format='json')
@@ -74,13 +67,11 @@ class QuantiteEtMontantsTests(Vague1Base):
 
 
 class TauxCommissionTests(Vague1Base):
-    @expectedFailure  # BUG-210
     def test_taux_hors_025_030_refuse(self):
         for rate in ('1.00', '-0.50', '5.00'):
             r = self.post(payment_type='CASH', payment_amount=1000, commission_rate=rate)
             self.assertEqual(r.status_code, 400, rate)
 
-    @expectedFailure  # BUG-210
     def test_taux_du_client_utilise_quand_absent_du_payload(self):
         Client.objects.filter(pk=self.cl.pk).update(commission_rate='0.30')
         r = self.post(payment_type='CASH', payment_amount=1000)
@@ -89,7 +80,6 @@ class TauxCommissionTests(Vague1Base):
 
 
 class BreadSummaryTests(Vague1Base):
-    @expectedFailure  # BUG-212
     def test_bread_summary_ne_fuite_pas_vers_une_autre_boulangerie(self):
         r = self.post(payment_type='CASH', payment_amount=1000)
         self.assertEqual(r.status_code, 201, r.data)
@@ -98,9 +88,11 @@ class BreadSummaryTests(Vague1Base):
         other.force_authenticate(self.fact_other)
         d = timezone.localdate().isoformat()
         resp = other.get(INV + 'bread_summary/', {'date': d, 'node': self.node.pk})
-        self.assertEqual(resp.data['grand_total_qty'], 0)
+        # BUG-212 : comportement décidé = 403 pour un nœud étranger (adapté ici :
+        # le test lisait `grand_total_qty`) ; aucune donnée de l'autre nœud ne fuit.
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn('grand_total_qty', resp.data)
 
-    @expectedFailure  # BUG-211
     def test_bread_summary_suit_la_journee_de_travail_en_rotation(self):
         """Rotation, relève 12:00 : une livraison de 03:00 le jour J+1 appartient à la journée J."""
         from datetime import time
@@ -136,12 +128,12 @@ class ModificationDirecteTests(Vague1Base):
         Invoice.objects.filter(pk=r.data['id']).update(status='DELIVERED', delivered_at=timezone.now())
         return r.data['id']
 
-    @expectedFailure  # BUG-215
     def test_patch_facture_livree_refuse(self):
         r = self.g.patch(f'{INV}{self._livree()}/', {'payment_amount': '1000'}, format='json')
-        self.assertIn(r.status_code, (403, 405))
+        # BUG-233 : PATCH reste ouvert pour `commission_exempt` seul ; tout autre
+        # champ (ici `payment_amount`) est refusé en 400 (403/405 acceptés aussi).
+        self.assertIn(r.status_code, (400, 403, 405))
 
-    @expectedFailure  # BUG-215
     def test_delete_facture_livree_refuse(self):
         r = self.g.delete(f'{INV}{self._livree()}/')
         self.assertIn(r.status_code, (403, 405))

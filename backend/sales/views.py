@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, Sum, Count
 from django.utils import timezone
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -202,7 +202,16 @@ def _warn_if_commission_period_locked(invoice, client):
         )
 
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    # BUG-215 : pas de `update`/`destroy` génériques — une facture est
+    # immuable (« grande trace » BUG-097) ; toute correction passe par les
+    # actions métier `cancel` / `adjust` (et `deliver`). Seule exception
+    # (BUG-233) : `partial_update` = PATCH de `commission_exempt` UNIQUEMENT.
     queryset = Invoice.objects.select_related(
         'node', 'client', 'facturier', 'livreur'
     ).prefetch_related('lines__bread_price').all()
@@ -248,6 +257,68 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             qs = qs.filter(node=user.node)
         return qs
 
+    # BUG-233 : liste blanche STRICTE des champs modifiables par PATCH
+    # (BUG-052 : « vente sans commission de 25 % », remarque.md l.190).
+    _PATCHABLE_FIELDS = ('commission_exempt',)
+
+    @transaction.atomic
+    def partial_update(self, request, *args, **kwargs):
+        """
+        BUG-233 : seul PATCH de `commission_exempt` est autorisé (GÉRANT et
+        au-dessus, voir `get_permissions`). Tout autre champ -> 400 ; PUT et
+        DELETE restent 405 (BUG-215, immuabilité BUG-097). Le taux de
+        commission est recalculé : exonérée -> 0,00 ; sinon taux du client
+        (BUG-210) sauf cas structurellement à 0 (vente soldée, sans client,
+        NS/RG, remboursement). Aucun impact sur BP, stock ni totaux.
+        """
+        data = request.data
+        if not hasattr(data, 'keys'):
+            return Response({'detail': "Corps de requête invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        forbidden = sorted(k for k in data.keys() if k not in self._PATCHABLE_FIELDS)
+        if forbidden:
+            return Response(
+                {'detail': (
+                    "Une facture n'est pas modifiable directement (champ(s) refusé(s) : "
+                    f"{', '.join(forbidden)}). Utilisez l'ajustement ou l'annulation."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if 'commission_exempt' not in data:
+            return Response({'detail': "Le champ commission_exempt est requis."}, status=status.HTTP_400_BAD_REQUEST)
+        from rest_framework import serializers as drf_serializers
+        try:
+            new_value = drf_serializers.BooleanField().run_validation(data['commission_exempt'])
+        except drf_serializers.ValidationError:
+            return Response({'detail': "commission_exempt doit être un booléen."}, status=status.HTTP_400_BAD_REQUEST)
+
+        invoice = self.get_object()
+        invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+        if invoice.status == Invoice.Status.CANCELLED:
+            return Response({'detail': "Une facture annulée n'est plus modifiable."}, status=status.HTTP_400_BAD_REQUEST)
+        old_rate = invoice.commission_rate
+        if new_value:
+            new_rate = Decimal('0.00')
+        elif (
+            invoice.is_soldee or invoice.client_id is None or invoice.is_debt_repayment
+            or invoice.special_code in (Invoice.SpecialCode.NS, Invoice.SpecialCode.RG)
+        ):
+            new_rate = Decimal('0.00')
+        else:
+            config = Config.get_instance()
+            client = invoice.client
+            new_rate = client.commission_rate if client.commission_rate is not None else config.default_commission_rate
+        if new_value != invoice.commission_exempt or new_rate != old_rate:
+            invoice.commission_exempt = new_value
+            invoice.commission_rate = new_rate
+            invoice.save(update_fields=['commission_exempt', 'commission_rate', 'updated_at'])
+            log_activity(
+                request.user, "Facture — exonération de commission",
+                f"Facture {invoice.receipt_number} : commission_exempt = {new_value} "
+                f"(taux {old_rate} -> {new_rate}).",
+                node_origin=invoice.node.code,
+            )
+        return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
+
     def create(self, request, *args, **kwargs):
         """
         BUG-062 : retentative avec backoff aléatoire court sur
@@ -275,7 +346,18 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     def _create_once(self, request, *args, **kwargs):
         """Create invoice with lines. Calculates BP and locks order_total."""
         serializer = InvoiceCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # BUG-208/209/210 : en plus des erreurs par champ, un `detail`
+            # en français (convention API, CLAUDE.md §4).
+            def _first_message(err):
+                if isinstance(err, dict):
+                    return _first_message(next(iter(err.values()), ''))
+                if isinstance(err, (list, tuple)):
+                    return _first_message(err[0]) if err else ''
+                return str(err)
+            body = dict(serializer.errors)
+            body['detail'] = _first_message(serializer.errors) or "Données de facture invalides."
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
 
         # BUG-030 : un utilisateur non-HQ (ex. FACTURIER) ne doit jamais pouvoir
@@ -376,6 +458,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             # Pure repayment — no bread lines, no stock deduction, commission = 0
             if client is None:
                 return Response({'detail': 'Un client doit être sélectionné pour un remboursement BP.'}, status=status.HTTP_400_BAD_REQUEST)
+            # BUG-213 : un remboursement à 0 FC n'a aucun effet (ni BP ni
+            # versement) mais consommerait un numéro de reçu.
+            if payment_amount <= 0:
+                return Response({'detail': 'Le montant du remboursement doit être supérieur à 0 FC.'}, status=status.HTTP_400_BAD_REQUEST)
             debt_before = client.current_debt
             invoice = Invoice.objects.create(
                 node=node, client=client,
@@ -447,6 +533,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             _effective_unit_price(bp_map[int(ld['bread_price'])]) * ld['quantity'] for ld in lines_data
         )
 
+        # BUG-214 : une vente sans client (« CLIENT DIVERS ») est au comptant ;
+        # aucune dette ne serait traçable. NS/RG (écritures de classeur) exclues.
+        if client is None and not is_ns and not is_rg and (
+            data['payment_type'] == Invoice.PaymentType.CREDIT or payment_amount < order_total_est
+        ):
+            return Response(
+                {'detail': 'Une vente sans client doit être réglée au comptant : versez au moins la valeur de la commande ou sélectionnez un client.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Credit block applies only when a client is selected — jamais pour
         # une NS (BUG-177 : écriture de régularisation d'une commande déjà
         # prise, pas une nouvelle vente à crédit) ni pour une RG (BUG-180 :
@@ -511,7 +607,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         if is_soldee or commission_exempt or client is None or is_ns or is_rg:
             comm_rate = Decimal('0.00')
         else:
-            comm_rate = data.get('commission_rate', config.default_commission_rate)
+            # BUG-210 : le taux vient de la configuration serveur (taux du
+            # client), jamais du payload (déjà validé dans le serializer).
+            comm_rate = client.commission_rate if client.commission_rate is not None else config.default_commission_rate
         debt_before = client.current_debt if client is not None else 0
 
         invoice = Invoice.objects.create(
@@ -949,15 +1047,35 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def bread_summary(self, request):
         """Pains vendus par catégorie (unit_price) pour les factures livrées à une date donnée."""
-        date_str = request.query_params.get('date', str(_default_work_date(request.user)))
-        node_id  = request.query_params.get('node')
-        qs = InvoiceLine.objects.filter(invoice__status='DELIVERED')
-        if date_str:
-            qs = qs.filter(invoice__delivered_at__date=date_str)
-        if node_id:
-            qs = qs.filter(invoice__node=node_id)
-        elif not self.request.user.can_access_all_nodes and self.request.user.node_id:
-            qs = qs.filter(invoice__node=self.request.user.node)
+        from datetime import date as _date
+        from django.db.models import Q
+        from core.workday import delivered_on_work_date_filter
+        user = request.user
+        date_str = request.query_params.get('date') or str(_default_work_date(user))
+        try:
+            target_date = _date.fromisoformat(date_str)
+        except ValueError:
+            return Response({'detail': 'Date invalide (format AAAA-MM-JJ attendu).'}, status=status.HTTP_400_BAD_REQUEST)
+        node_param = request.query_params.get('node')
+        # BUG-212 : périmètre par nœud. Un utilisateur non-HQ rattaché à une
+        # boulangerie ne voit que la sienne ; `?node=` d'un autre nœud -> 403.
+        if not user.can_access_all_nodes and user.node_id:
+            if node_param and str(node_param) != str(user.node_id):
+                return Response({'detail': "Accès refusé : vous ne pouvez consulter que votre boulangerie."}, status=status.HTTP_403_FORBIDDEN)
+            nodes = Node.objects.filter(pk=user.node_id)
+        elif node_param:
+            try:
+                nodes = Node.objects.filter(pk=int(node_param))
+            except (TypeError, ValueError):
+                return Response({'detail': 'Boulangerie invalide.'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            nodes = Node.objects.all()
+        # BUG-211 : « livré le » = journée de travail du nœud (relève à
+        # relève en rotation), via la source unique core/workday.py.
+        cond = Q(pk__in=[])
+        for n in nodes:
+            cond |= Q(invoice__node=n, **delivered_on_work_date_filter(n, target_date, 'invoice__delivered_at'))
+        qs = InvoiceLine.objects.filter(invoice__status='DELIVERED').filter(cond)
         summary = (
             qs.values('unit_price')
               .annotate(total_qty=Sum('quantity'), total_fc=Sum('line_total'))

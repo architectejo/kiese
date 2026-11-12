@@ -30,3 +30,27 @@ Détail complet et étapes de vérification manuelle : `docs/qa/REGISTRE_BUGS.md
 - `TeamAssignmentModal.tsx` + `api/errors.ts` : gestion du 400 `PREVIOUS_WORKDAY_OPEN` (message clair, « Réessayer », relance automatique toutes les 5 s, boîte non bloquée).
 - `npx tsc --noEmit` : aucune erreur ; `npm run build` non lancé (consigne du coordinateur). Aucun nouveau `any`. Étapes manuelles dans les fiches BUG-195 et BUG-196.
 
+
+
+## BUG-229 — client à risque dans la facturation (CORRIGÉ)
+- `Sales.tsx` : suppression de l'exclusion `category !== 'RISK'` ; badge « À risque » dans les suggestions, bandeau d'avertissement (BP / plafond) à la sélection ; blocage laissé au serveur (403).
+- `npx tsc --noEmit` : OK ; build non lancé. Étapes manuelles : fiche BUG-229.
+
+## BUG-230 — contrat API des ventes (CORRIGÉ)
+- `commission_rate` n'est plus envoyé (`Sales.tsx`, `Clients.tsx`, type `InvoiceCreatePayload`) ; reçu de `Clients.tsx` : taux issu de la réponse.
+- Vente sans client / « Client Occasionnel » : comptant forcé, versement = commande, champ désactivé, message en français.
+- Erreurs de création via `getErrorDetail` ; `breadSummary` (Trésorerie) isolé : 403/400 sans crash. Aucun PATCH/PUT/DELETE sur `/api/sales/invoices/`.
+- Validations : quantité entière 1 à 100 000, versement ≥ 0. `npx tsc --noEmit` : OK ; build non lancé. Étapes manuelles : fiche BUG-230.
+
+## BUG-231 (Trésorerie : contrat API BUG-200 à 207) — dev-frontend
+
+Statut : CORRIGÉ (à vérifier par testeur-tresorerie). Fichiers : `frontend/src/pages/dashboard/Treasury.tsx`, `frontend/src/api/services.ts`, `frontend/src/components/treasury/treasuryRules.ts` (nouveau). `npx tsc --noEmit` OK ; build non lancé (consigne).
+
+Résumé : boutons Confirmer/Infirmer/Inscrire réservés au siège ; formulaires journal et épargne réservés gérant+, `node` envoyé seulement par le siège ; billetage 0..100 000 entier validé à l'écran (3 formulaires) et erreurs `bills_x` libellées ; dépense > 0 ; `period_summary` typé en chaînes décimales avec helpers de somme en centimes ; `reports.create` ne porte plus de totaux ; erreurs via `getErrorDetail`. Aucune édition/suppression de journal ni d'épargne n'existait dans l'écran. Étapes de vérification manuelle : voir la fiche BUG-231.
+
+Point ouvert : le formulaire de billetage de clôture reste affiché à tout non-siège (FACTURIER/LIVREUR inclus) ; le serveur répond 403, affiché. À masquer si le client le souhaite.
+
+
+## BUG-232 — Transferts en litige (Production §3.3)
+- Nouveau `components/production/TransferDisputeCard.tsx` (badge litige, quantités envoyée/reçue/écart, recomptage récepteur, « Résoudre le litige » gérant émetteur + siège avec motif obligatoire, message de levée du blocage de clôture) ; `services.ts` : `transfers.resolveDispute` et types stricts ; `Production.tsx` : erreurs de transfert/fournée via `getErrorDetail`, import `axios` retiré.
+- Aucune action de modification/suppression de transfert dans l'UI (point 4 sans objet). `npx tsc --noEmit` OK ; build non lancé. Étapes de vérification : fiche BUG-232.

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import axios from 'axios';
 import {
   FiTruck, FiPlusCircle, FiClock, FiCheckCircle,
   FiAlertCircle, FiSearch, FiX, FiPrinter, FiChevronRight, FiCreditCard
@@ -278,7 +277,7 @@ export const Sales: React.FC = () => {
     clientsApi.list({ search: debouncedClientSearch, page_size: '10' })
       .then(res => {
         if (cancelled) return;
-        setClientSuggestions(res.data.filter(c => c.is_active && c.category !== 'RISK').slice(0, 8));
+        setClientSuggestions(res.data.filter(c => c.is_active).slice(0, 8));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -316,9 +315,13 @@ export const Sales: React.FC = () => {
   const isRegularisationForm = specialCode === 'RG';
   // BUG-177 : pour NS, le type de paiement exprime le choix du client (garde la dette ou non) ;
   // sinon il est déduit du versement comme avant.
+  // BUG-230 : une vente sans client enregistré est obligatoirement payée comptant — le versement
+  // est alors égal à la valeur de la commande (le serveur refuse le crédit sans client, en 400).
+  const isCashOnlySale = isOccasional && !isNonServiForm && !isRegularisationForm;
+  const effectiveVersement = isCashOnlySale ? orderTotal : versement;
   const paymentType: 'CASH' | 'CREDIT' = isNonServiForm
     ? nsPaymentType
-    : (versement >= orderTotal && orderTotal > 0 ? 'CASH' : 'CREDIT');
+    : (isCashOnlySale || (versement >= orderTotal && orderTotal > 0) ? 'CASH' : 'CREDIT');
 
   const resetForm = () => {
     setSelectedClient(null);
@@ -463,6 +466,15 @@ export const Sales: React.FC = () => {
     if (!isOccasional && !selectedClient) { setFormError('Sélectionnez un client ou cochez "Vente occasionnelle".'); return; }
     const lines = breadPrices.filter(b => (quantities[b.id] || 0) > 0).map(b => ({ bread_price: b.id, quantity: quantities[b.id] }));
     if (lines.length === 0) { setFormError('Entrez au moins une quantité de pain.'); return; }
+    // BUG-230 : contrôles de forme minimaux (le serveur reste l'autorité : quantité entière 1 à 100 000).
+    if (lines.some(l => !Number.isInteger(l.quantity) || l.quantity < 1 || l.quantity > 100000)) {
+      setFormError('Chaque quantité doit être un nombre entier compris entre 1 et 100 000.');
+      return;
+    }
+    if (!isNonServiForm && !isRegularisationForm && (!Number.isFinite(effectiveVersement) || effectiveVersement < 0)) {
+      setFormError('Le versement ne peut pas être négatif.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -474,8 +486,9 @@ export const Sales: React.FC = () => {
         client: isOccasional ? null : selectedClient?.id,
         payment_type: paymentType,
         // BUG-177 : aucun versement pour NS (rien n'est remis) ni RG (aucune dette créée).
-        payment_amount: (isNonServiForm || isRegularisationForm ? 0 : versement).toString(),
-        ...(venteSoldee ? { commission_rate: '0.00', is_soldee: true } : {}),
+        payment_amount: (isNonServiForm || isRegularisationForm ? 0 : effectiveVersement).toString(),
+        // BUG-230 : `commission_rate` n'est plus envoyé (le serveur applique le taux du client).
+        ...(venteSoldee ? { is_soldee: true } : {}),
         // BUG-052 : exonération de commission dédiée, indépendante de « Vente Soldée » —
         // forcée côté serveur (comm_rate=0) même si combinée avec is_soldee (§ ci-dessus).
         ...(commissionExempt ? { commission_exempt: true } : {}),
@@ -499,14 +512,8 @@ export const Sales: React.FC = () => {
         requestTeamAssignment();
         return;
       }
-      const detail = axios.isAxiosError(err) ? err.response?.data : undefined;
-      const msg = typeof detail === 'string' ? detail
-        : (detail as { detail?: string; client?: string[]; lines?: string[] } | undefined)?.detail
-          || (detail as { client?: string[] } | undefined)?.client?.[0]
-          || (detail as { lines?: string[] } | undefined)?.lines?.[0]
-          || (detail ? JSON.stringify(detail) : undefined) || 'Erreur lors de la facturation.';
-      setFormError(msg);
-      console.error('Invoice creation failed:', JSON.stringify(detail) || (err instanceof Error ? err.message : String(err)));
+      // BUG-230 : `detail` d'abord, puis les erreurs par champ (helper commun).
+      setFormError(getErrorDetail(err, 'Erreur lors de la facturation.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1085,6 +1092,9 @@ export const Sales: React.FC = () => {
                       <div>
                         <span style={{ fontWeight: 800, fontSize: '0.72rem', color: 'hsl(var(--accent-color))' }}>{c.code}</span>
                         <span style={{ fontSize: '0.78rem', marginLeft: '8px', fontWeight: 700 }}>{c.full_name}</span>
+                        {c.category === 'RISK' && (
+                          <span style={{ marginLeft: '6px', fontSize: '0.6rem', fontWeight: 800, padding: '1px 6px', borderRadius: '999px', backgroundColor: 'hsl(var(--color-danger) / 0.15)', color: 'hsl(var(--color-danger))' }}>À risque</span>
+                        )}
                       </div>
                       <span style={{ fontSize: '0.65rem', color: parseFloat(c.current_debt) > 0 ? 'hsl(var(--color-warning))' : 'hsl(var(--text-muted))', fontWeight: 700 }}>
                         {parseFloat(c.current_debt) > 0 ? `BP: ${parseFloat(c.current_debt).toLocaleString('fr-FR')} FC` : 'Solde OK'}
@@ -1107,6 +1117,17 @@ export const Sales: React.FC = () => {
                     BP : {parseFloat(selectedClient.current_debt).toLocaleString('fr-FR')} FC
                   </div>
                   <div style={{ color: 'hsl(var(--text-muted))' }}>Balance antérieure</div>
+                </div>
+              </div>
+            )}
+
+            {/* BUG-229 : client à risque servi quand même ; le serveur décide du blocage (403). */}
+            {!isOccasional && selectedClient && selectedClient.category === 'RISK' && (
+              <div role="alert" style={{ backgroundColor: 'hsl(var(--color-danger) / 0.1)', border: '1px solid hsl(var(--color-danger) / 0.4)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: '0.7rem', color: 'hsl(var(--color-danger))', fontWeight: 700 }}>
+                Client à risque — BP {parseFloat(selectedClient.current_debt).toLocaleString('fr-FR')} FC
+                {parseFloat(selectedClient.credit_limit) > 0 && ` / plafond ${parseFloat(selectedClient.credit_limit).toLocaleString('fr-FR')} FC`}.
+                <div style={{ fontWeight: 500, marginTop: '2px' }}>
+                  Si la BP atteint le plafond, la facture n'est acceptée que si le versement couvre au moins la valeur de la commande ; sinon le serveur la refuse.
                 </div>
               </div>
             )}
@@ -1213,8 +1234,9 @@ export const Sales: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', alignItems: 'center' }}>
                 <input
                   type="number" min={0}
-                  value={versement || ''}
+                  value={isCashOnlySale ? orderTotal : (versement || '')}
                   placeholder="0"
+                  disabled={isCashOnlySale}
                   onChange={e => setVersement(Math.max(0, Number(e.target.value)))}
                   className="form-input"
                   style={{ fontSize: '0.78rem', height: '30px', padding: '0 8px', borderColor: 'hsl(var(--color-success) / 0.4)', fontWeight: 800 }}
@@ -1223,6 +1245,11 @@ export const Sales: React.FC = () => {
                   {venteSoldee ? 'SOLDÉ ✓' : paymentType === 'CASH' ? 'CASH ✓' : 'CRÉDIT'}
                 </span>
               </div>
+              {isCashOnlySale && (
+                <div style={{ fontSize: '0.62rem', color: 'hsl(var(--color-info))', marginTop: '3px', fontWeight: 700 }}>
+                  Vente sans client enregistré : paiement comptant obligatoire, le versement est égal à la valeur de la commande (pas de crédit).
+                </div>
+              )}
               {selectedClient && orderTotal > 0 && (
                 <div style={{ fontSize: '0.62rem', color: venteSoldee ? 'hsl(var(--color-warning))' : 'hsl(var(--text-muted))', marginTop: '3px', fontWeight: venteSoldee ? 700 : 400 }}>
                   {venteSoldee

@@ -109,6 +109,10 @@ class TeamAssignmentApiTests(TestCase):
         self.assertEqual(r.data['suggested'], 'B')
 
     def test_handover_11h59_keeps_yesterdays_assignment_12h00_does_not(self):
+        # BUG-227 : la journée de relève (J-1 avant la relève) ne s'applique
+        # qu'en mode rotation ; hors rotation la date est calendaire.
+        self.node.team_rotation_enabled = True
+        self.node.save(update_fields=['team_rotation_enabled'])
         DailyTeamAssignment.objects.create(node=self.node, work_date=D, team='A')
         with _now(11, 59, NEXT):
             g = self.api.get(URL)
@@ -120,6 +124,9 @@ class TeamAssignmentApiTests(TestCase):
         self.assertEqual(r.data['work_date'], '2026-11-12')
 
     def test_post_between_midnight_and_handover_targets_previous_workday(self):
+        # BUG-227 : journée de relève = mode rotation uniquement.
+        self.node.team_rotation_enabled = True
+        self.node.save(update_fields=['team_rotation_enabled'])
         with _now(3, 0, NEXT):
             r = self.api.post(URL, {'team': 'A'}, format='json')
         self.assertEqual(r.status_code, 200, r.data)

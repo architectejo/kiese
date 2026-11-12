@@ -103,7 +103,14 @@ class ProductionSession(SyncableModel):
         total_fc = sum(line.quantity * line.bread_price.unit_price for line in declared_lines)
         self.total_breads      = sum(line.quantity for line in lines)
         self.total_fc_produced = total_fc
-        self.theoretical_yield = int(float(self.flour_sacks_used) * self.sac_value_fc_used)
+        # BUG-218 : calcul en Decimal (CLAUDE.md §4), arrondi explicite au franc
+        # (demi supérieur) — l'ancien `int(float(...) * ...)` tronquait 1 FC
+        # (1,13 sac x 210 000 = 237 299 au lieu de 237 300).
+        from decimal import Decimal, ROUND_HALF_UP
+        self.theoretical_yield = int(
+            (Decimal(str(self.flour_sacks_used or 0)) * Decimal(str(self.sac_value_fc_used)))
+            .quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        )
         self.yield_gap         = total_fc - self.theoretical_yield
         # sync legacy per-price fields (best-effort, by unit_price) — sommées
         # sur TOUTES les lignes (DECLARED + CARRYOVER), jamais écrasées entre
@@ -661,6 +668,10 @@ class ConsumableMovement(SyncableModel):
                 # cohérent (même règle quel que soit le point d'entrée).
                 self.unit_price = stock.average_unit_cost
                 super().save(*args, **kwargs)
+                # BUG-217 : `stock.quantity` devient une expression F() après
+                # cette écriture ; on garde la quantité disponible AVANT sortie
+                # (valeur lue sous verrou) pour le message de notification.
+                available_before = stock.quantity
                 stock.quantity = models.F('quantity') - self.quantity
                 stock.save(update_fields=['quantity'])
                 if resulting_quantity < 0:
@@ -669,7 +680,7 @@ class ConsumableMovement(SyncableModel):
                         title=f"Stock négatif — {self.stock.consumable_type} {self.node.code}",
                         message=(
                             f"Sortie de {self.quantity} {self.stock.consumable_type} à "
-                            f"{self.node.code} alors que {stock.quantity} seulement "
+                            f"{self.node.code} alors que {available_before} seulement "
                             f"étai(en)t disponible(s) : stock désormais à {resulting_quantity} "
                             f"(BUG-143, sortie autorisée en négatif sur demande client)."
                         ),
@@ -699,14 +710,40 @@ class ConsumableMovement(SyncableModel):
                 stock.save(update_fields=['quantity', 'average_unit_cost'])
             return
 
-        super().save(*args, **kwargs)
-        # Update running stock balance (correction/rare non-`is_new` path).
-        stock = self.stock
-        if self.movement_type == self.MovementType.ENTRY:
-            stock.quantity = models.F('quantity') + self.quantity
-        else:
-            stock.quantity = models.F('quantity') - self.quantity
-        stock.save(update_fields=['quantity'])
+        # BUG-222 : modification d'un mouvement existant. Auparavant la quantité
+        # ENTIÈRE était ré-ajoutée au stock (double comptage). On applique
+        # désormais le DELTA : on contre-passe l'effet de l'ancienne version
+        # (lue sous verrou) puis on applique celui de la nouvelle, sur le bon
+        # stock si celui-ci a changé — le tout dans une transaction.
+        with transaction.atomic():
+            old = type(self).objects.select_for_update().get(pk=self.pk)
+            stock_ids = sorted({old.stock_id, self.stock_id}, key=str)
+            list(ConsumableStock.objects.select_for_update().filter(pk__in=stock_ids))
+            ConsumableStock.objects.filter(pk=old.stock_id).update(
+                quantity=models.F('quantity') - old._signed_effect(),
+            )
+            super().save(*args, **kwargs)
+            ConsumableStock.objects.filter(pk=self.stock_id).update(
+                quantity=models.F('quantity') + self._signed_effect(),
+            )
+
+    def _signed_effect(self):
+        """Effet du mouvement sur le stock : +quantité (ENTRY) ou −quantité (EXIT)."""
+        from decimal import Decimal
+        qty = self.quantity if isinstance(self.quantity, Decimal) else Decimal(str(self.quantity))
+        return qty if self.movement_type == self.MovementType.ENTRY else -qty
+
+    def delete(self, *args, **kwargs):
+        # BUG-222 : supprimer un mouvement inverse son effet sur le stock
+        # (registre et stock restent cohérents), de façon atomique.
+        from django.db import transaction
+        with transaction.atomic():
+            old = type(self).objects.select_for_update().get(pk=self.pk)
+            ConsumableStock.objects.select_for_update().filter(pk=old.stock_id).first()
+            ConsumableStock.objects.filter(pk=old.stock_id).update(
+                quantity=models.F('quantity') - old._signed_effect(),
+            )
+            return super().delete(*args, **kwargs)
 
 
 class ConsumableCount(models.Model):

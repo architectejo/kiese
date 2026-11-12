@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import ProtectedError
-from django.db.models import Sum, F
+from django.db.models import Sum, F, Q
 from django.utils import timezone
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
@@ -273,6 +273,18 @@ class FacturierReportViewSet(viewsets.ModelViewSet):
             qs = qs.filter(node=user.node)
         return qs
 
+    def perform_update(self, serializer):
+        # BUG-203 : un rapport validé est figé (il alimente la clôture N2).
+        if serializer.instance.is_validated:
+            raise ValidationError({'detail': "Rapport déjà validé : modification impossible."})
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if self.get_object().is_validated:
+            return Response({'detail': "Rapport déjà validé : suppression impossible."},
+                            status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         obj = serializer.save(
             facturier=self.request.user,
@@ -367,6 +379,11 @@ class FacturierReportViewSet(viewsets.ModelViewSet):
         return Response(FacturierReportSerializer(report).data)
 
 
+# BUG-201 : borne des montants représentables (DecimalField 14,2).
+_MAX_MONEY = Decimal('999999999999.99')
+_CLOSURE_MONEY_DEFER = ('physical_cash_total', 'cash_gap', 'net_cash')
+
+
 class CashClosureViewSet(viewsets.ModelViewSet):
     queryset = CashClosure.objects.select_related('node', 'gerant').prefetch_related('cashbook_entries').all()
     serializer_class = CashClosureSerializer
@@ -377,6 +394,12 @@ class CashClosureViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]
+        # BUG-200 : confirmation, infirmation et versement au Livre de Caisse
+        # = comptable / direction / siège UNIQUEMENT (CLAUDE.md §5.5). Le
+        # gérant crée, modifie (si infirmée) et supprime (si non confirmée)
+        # sa clôture, il ne la confirme jamais lui-même.
+        if self.action in ('validate', 'reject', 'push_to_cashbook'):
+            return [IsHeadquarters()]
         return [IsGerant()]
 
     def get_queryset(self):
@@ -384,6 +407,16 @@ class CashClosureViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        # BUG-201 : lecture robuste d'une clôture déjà corrompue (totaux hors
+        # plage DecimalField) : jamais de 500 sur la liste ; la suppression
+        # (destroy) reste possible car elle ne lit pas ces colonnes.
+        if self.action == 'destroy':
+            qs = qs.defer(*_CLOSURE_MONEY_DEFER)
+        else:
+            corrupted = Q()
+            for f in _CLOSURE_MONEY_DEFER:
+                corrupted |= Q(**{f'{f}__gt': _MAX_MONEY}) | Q(**{f'{f}__lt': -_MAX_MONEY})
+            qs = qs.exclude(corrupted)
         return qs
 
     def perform_create(self, serializer):
@@ -452,6 +485,10 @@ class CashClosureViewSet(viewsets.ModelViewSet):
                     total_entries=total_entries,
                     total_expenses=total_expenses,
                 )
+                # BUG-201 : calcul et 2e écriture dans la même transaction —
+                # plus de ligne committée à moitié calculée.
+                closure.compute_physical_cash()
+                closure.save(update_fields=['net_cash', 'physical_cash_total', 'cash_gap'])
         except IntegrityError:
             # BUG-035 : la contrainte unique_together (node, date) protège
             # bien les données, mais doit être traduite en un refus propre
@@ -459,8 +496,6 @@ class CashClosureViewSet(viewsets.ModelViewSet):
             raise ValidationError({
                 'detail': f"Une clôture existe déjà pour {node.code} à la date {target_date}."
             })
-        closure.compute_physical_cash()
-        closure.save(update_fields=['net_cash', 'physical_cash_total', 'cash_gap'])
 
         if closure.cash_gap != 0:
             create_notification(
@@ -693,11 +728,19 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         date_from = request.query_params.get('date_from', str(timezone.localdate().replace(day=1)))
         date_to   = request.query_params.get('date_to',   str(timezone.localdate()))
         qs = self.get_queryset().filter(date__gte=date_from, date__lte=date_to)
-        summary = qs.values('node__code', 'node__name').annotate(
+        summary = qs.order_by().values('node__code', 'node__name').annotate(
             total_entries=Sum('entry_amount'),
             total_exits=Sum('exit_amount'),
-        )
-        return Response(list(summary))
+        ).order_by('node__code')
+        # BUG-207 : montants en chaînes décimales (jamais de flottants JSON).
+        return Response([
+            {
+                **row,
+                'total_entries': str(Decimal(row['total_entries'] or 0).quantize(Decimal('0.01'))),
+                'total_exits': str(Decimal(row['total_exits'] or 0).quantize(Decimal('0.01'))),
+            }
+            for row in summary
+        ])
 
 
 class DisbursementVoucherViewSet(viewsets.ModelViewSet):
@@ -872,7 +915,15 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date', 'imput']
     ordering         = ['date', 'created_at', 'pk']  # BUG-172/176
-    permission_classes = [IsAuthenticated]
+    # BUG-202 : le journal est en ajout seul (le solde progressif n'est calculé
+    # qu'à la création) : ni PUT/PATCH ni DELETE (405). Création réservée au
+    # gérant et au-dessus ; lecture à tout utilisateur authentifié de son nœud.
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsGerant()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -983,7 +1034,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
         reconciliation_gap = Decimal('0.00')
 
         if imput == 'CA':
-            closure = CashClosure.objects.filter(node=node, date=target_date).first()
+            closure = CashClosure.objects.defer(*_CLOSURE_MONEY_DEFER).filter(node=node, date=target_date).first()
             if closure:
                 reconciled_closure = closure
                 is_reconciled = True
@@ -1067,7 +1118,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        closure = CashClosure.objects.filter(node_id=node_id, date=target_date).first()
+        closure = CashClosure.objects.defer(*_CLOSURE_MONEY_DEFER).filter(node_id=node_id, date=target_date).first()
         if not closure:
             return Response({
                 'available': False,
@@ -1140,17 +1191,25 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'date']
     ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        # BUG-206 : saisie/modification/suppression réservées au gérant et
+        # au-dessus (un livreur ou un facturier ne saisit pas l'épargne).
+        if self.action in ('list', 'retrieve', 'monthly_total'):
+            return [IsAuthenticated()]
+        return [IsGerant()]
 
     def get_queryset(self):
         qs = super().get_queryset()
         user   = self.request.user
         params = self.request.query_params
         node_id = params.get('node')
-        if node_id:
+        # BUG-206 : `?node=` n'est honoré que pour un rôle siège (même règle
+        # que BUG-113) ; un non-HQ est toujours confiné à son nœud.
+        if not user.can_access_all_nodes:
+            qs = qs.filter(node=user.node) if user.node_id else qs.none()
+        elif node_id:
             qs = qs.filter(node_id=node_id)
-        elif not user.can_access_all_nodes and user.node_id:
-            qs = qs.filter(node=user.node)
         month = params.get('month')
         year  = params.get('year')
         # BUG-115 : même défaut que BUG-114 — valider avant tout
@@ -1221,10 +1280,10 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
 
         qs = DailySavings.objects.filter(date__month=month, date__year=year)
-        if node_id:
+        if not request.user.can_access_all_nodes:
+            qs = qs.filter(node=request.user.node) if request.user.node_id else qs.none()
+        elif node_id:
             qs = qs.filter(node_id=node_id)
-        elif not request.user.can_access_all_nodes and request.user.node_id:
-            qs = qs.filter(node=request.user.node)
 
         totals = qs.aggregate(
             total_revenue=Sum('daily_revenue'),

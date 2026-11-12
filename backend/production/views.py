@@ -47,6 +47,49 @@ def _body_not_object_response(request):
     )
 
 
+def _strict_int(value, label, minimum=0):
+    """
+    BUG-224 : entier strict (int ou chaîne d'entier ; ni booléen, ni décimal
+    fractionnaire) ≥ `minimum` et plafonné à la capacité de la colonne ; sinon
+    400 en français (`{"detail": ...}`) au lieu d'un 500.
+    """
+    n = None
+    if isinstance(value, bool) or value is None:
+        n = None
+    elif isinstance(value, int):
+        n = value
+    elif isinstance(value, float) and value.is_integer():
+        n = int(value)
+    elif isinstance(value, str):
+        s = value.strip()
+        if s.lstrip('-').isdigit():
+            n = int(s)
+    if n is None:
+        raise ValidationError({'detail': f"Valeur invalide pour {label} : un nombre entier est attendu."})
+    if n < minimum:
+        raise ValidationError({'detail': (
+            f"Valeur invalide pour {label} : doit être supérieure ou égale à {minimum}."
+        )})
+    if n > 2_000_000_000:
+        raise ValidationError({'detail': f"Valeur trop grande pour {label}."})
+    return n
+
+
+def _safe_parse_date(value):
+    """
+    BUG-225 : `parse_date` renvoie None pour un format non conforme mais LÈVE
+    `ValueError` pour une date de bon format et impossible (« 2026-13-45 »).
+    Retourne la date, ou None dans les deux cas (l'appelant répond 400).
+    """
+    try:
+        return parse_date(value)
+    except (ValueError, TypeError):
+        return None
+
+
+_INVALID_DATE_DETAIL = "Date invalide — format attendu AAAA-MM-JJ."
+
+
 def _effective_sac_value(node, config):
     """
     Valeur théorique par sac de farine (FC) à utiliser pour une boulangerie :
@@ -56,6 +99,57 @@ def _effective_sac_value(node, config):
     if node.sac_value_fc:
         return int(node.sac_value_fc)
     return config.sac_value_fc
+
+
+_CONSUMABLE_QTY_Q = Decimal('0.001')
+_CONSUMABLE_QTY_MAX = Decimal('9999999.999')
+
+
+def _parse_consumables_used(raw, node):
+    """
+    BUG-219 : valide et normalise le champ `consumables_used` d'une
+    déclaration de fournée AVANT toute écriture. Attendu : liste (ou absent)
+    d'objets `{consumable_type: <code>, quantity: <nombre>}`. Toute anomalie
+    (corps non liste, élément non objet, type de consommable inconnu,
+    quantité non numérique / non finie / hors limites) → 400 en français.
+    Les quantités nulles ou négatives restent ignorées (comportement
+    historique : rien à déduire). Retourne une liste de dicts normalisés
+    (`quantity` en `Decimal`, 3 décimales).
+    """
+    from decimal import InvalidOperation
+
+    if raw in (None, ''):
+        return []
+    if not isinstance(raw, list):
+        raise ValidationError({'detail': "« consumables_used » invalide : une liste est attendue."})
+    known = set(ConsumableType.objects.values_list('code', flat=True))
+    known |= set(ConsumableStock.objects.filter(node=node).values_list('consumable_type', flat=True))
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValidationError({'detail': "« consumables_used » invalide : chaque élément doit être un objet {consumable_type, quantity}."})
+        code = item.get('consumable_type')
+        if not isinstance(code, str) or not code.strip():
+            raise ValidationError({'detail': "« consumables_used » invalide : consumable_type requis."})
+        code = code.strip()
+        if code not in known:
+            raise ValidationError({'detail': f"« consumables_used » invalide : consommable inconnu « {code} »."})
+        raw_qty = item.get('quantity', 0)
+        if isinstance(raw_qty, bool) or raw_qty is None or isinstance(raw_qty, (list, dict)):
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
+        try:
+            qty = Decimal(str(raw_qty).strip() or '0')
+        except InvalidOperation:
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
+        if not qty.is_finite():
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non finie pour {code}."})
+        if qty > _CONSUMABLE_QTY_MAX:
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité trop grande pour {code}."})
+        out.append({
+            'consumable_type': code,
+            'quantity': qty.quantize(_CONSUMABLE_QTY_Q, rounding=ROUND_HALF_UP) if qty > 0 else qty,
+        })
+    return out
 
 
 def _record_consumable_exits(session, user, extra_consumables=None):
@@ -75,15 +169,17 @@ def _record_consumable_exits(session, user, extra_consumables=None):
     desc = f"Fournée Éq.{session.team} {session.date}"
     entries = [('FLOUR', session.flour_sacks_used)]
     if extra_consumables:
+        # `extra_consumables` est déjà validé/normalisé par
+        # `_parse_consumables_used` (BUG-219) : quantités `Decimal` finies.
         for cu in extra_consumables:
             ct  = cu.get('consumable_type', '')
             qty = cu.get('quantity', 0)
-            if ct and float(qty or 0) > 0:
+            if ct and Decimal(str(qty or 0)) > 0:
                 entries.append((ct, qty))
     processed = []
     with transaction.atomic():
         for ct, qty in entries:
-            if not qty or float(qty) <= 0:
+            if not qty or Decimal(str(qty)) <= 0:
                 continue
             stock = ConsumableStock.objects.filter(node=node, consumable_type=ct).first()
             if stock:
@@ -515,6 +611,13 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         return patched
 
     def perform_create(self, serializer):
+        # BUG-219 : toute la déclaration (session, lignes, stock de pains,
+        # sorties de consommables, notifications) est atomique — une erreur
+        # n'en laisse AUCUNE trace (un rejeu ne double plus la production).
+        with transaction.atomic():
+            self._perform_create_locked(serializer)
+
+    def _perform_create_locked(self, serializer):
         """
         BUG-142 (remarque.md) : une déclaration supplémentaire de fournée le
         même jour pour la même équipe (node, team, date) ne doit plus être
@@ -543,6 +646,9 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             node = serializer.validated_data.get('node') or user.node
         if node is None:
             raise ValidationError({'node': 'Compte non assigné à une boulangerie. Précisez le nœud.'})
+
+        # BUG-219 : `consumables_used` est validé AVANT toute écriture.
+        extra_consumables = _parse_consumables_used(self.request.data.get('consumables_used'), node)
 
         team = serializer.validated_data.get('team')
         date = serializer.validated_data.get('date')
@@ -628,7 +734,7 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         try:
             processed_entries = _record_consumable_exits(
                 session, user,
-                extra_consumables=self.request.data.get('consumables_used', []),
+                extra_consumables=extra_consumables,
             )
         except DjangoValidationError as exc:
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
@@ -675,6 +781,7 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             ).select_related('bread_price').all()
         }
         user = self.request.user
+        old_flour = Decimal(str(serializer.instance.flour_sacks_used or 0))
         if not user.can_access_all_nodes:
             # BUG-056 : un non-HQ ne peut jamais réaffecter une session
             # existante à une autre boulangerie via `node` dans le payload —
@@ -683,6 +790,34 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             session = serializer.save(node=serializer.instance.node, node_origin=serializer.instance.node.code)
         else:
             session = serializer.save()
+        # BUG-220 : modifier `flour_sacks_used` régularise le stock de farine
+        # par un mouvement de sortie du DELTA (positif : farine consommée en
+        # plus ; négatif : sortie négative = farine restituée, acceptée comme
+        # tout mouvement négatif — décision client BUG-216). Aucun mouvement
+        # « entrée » fictif : l'approvisionnement (finance) reste intact.
+        # `consumables_used` n'est pas pris en compte en PATCH (comportement
+        # inchangé : seul le déclaratif initial alimente sel/levure/huile).
+        new_flour = Decimal(str(session.flour_sacks_used or 0))
+        delta_flour = new_flour - old_flour
+        if delta_flour != 0:
+            flour_stock = ConsumableStock.objects.filter(node=session.node, consumable_type='FLOUR').first()
+            if flour_stock is not None:
+                ConsumableMovement.objects.create(
+                    # `session` volontairement non renseigné : ces mouvements
+                    # ne doivent pas fausser la moyenne historique de
+                    # surconsommation (`_check_overconsumption`).
+                    node=session.node, stock=flour_stock,
+                    movement_type=ConsumableMovement.MovementType.EXIT,
+                    quantity=delta_flour,
+                    description=f"Régularisation fournée Éq.{session.team} {session.date} ({old_flour} → {new_flour} sacs)",
+                    recorded_by=user, node_origin=session.node.code,
+                )
+                log_activity(
+                    user, "Régularisation Farine Fournée",
+                    f"{session.node.code} Éq.{session.team} {session.date} : sacs {old_flour} → {new_flour} "
+                    f"(mouvement de farine {delta_flour:+}).",
+                    node_origin=session.node.code,
+                )
         # BUG-038 : ne JAMAIS relire _effective_sac_value() ici — une édition
         # ultérieure (même sans rapport avec la valeur du sac) ne doit pas
         # faire glisser l'historique vers la valeur du sac courante. On
@@ -718,6 +853,11 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         date     = params.get('date')
         date_from = params.get('date_from')
         date_to   = params.get('date_to')
+
+        # BUG-225 : une date impossible (« 2026-13-45 ») ou non conforme → 400.
+        for raw in (date, date_from, date_to):
+            if raw and _safe_parse_date(raw) is None:
+                return Response({'detail': _INVALID_DATE_DETAIL}, status=status.HTTP_400_BAD_REQUEST)
 
         sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
             user=request.user, node_id=node_id, date=date, date_from=date_from, date_to=date_to,
@@ -915,15 +1055,26 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         if node.team_rotation_enabled:
             return self._handover_shift_end_response(node, user, now, time_info)
 
-        for team, end_time in (('A', node.team_a_end_time), ('B', node.team_b_end_time)):
-            if end_time is None or current_time < end_time:
-                continue
-            session = ProductionSession.objects.filter(node=node, team=team, date=today).first()
-            if session is None or session.is_closed:
+        # BUG-226 : on examine aussi les sessions NON CLÔTURÉES des jours
+        # antérieurs (la fin de créneau de leur jour est forcément dépassée),
+        # de la plus ancienne à la plus récente (équipe A avant B), avec le
+        # même délai de grâce et la même clôture forcée que pour aujourd'hui.
+        # Pour le jour courant, l'ordre (A puis B) et les conditions sont
+        # inchangés (BUG-155/158/165).
+        end_times = {'A': node.team_a_end_time, 'B': node.team_b_end_time}
+        open_sessions = list(
+            ProductionSession.objects
+            .filter(node=node, is_closed=False, date__lte=today, team__in=[t for t, e in end_times.items() if e is not None])
+            .order_by('date', 'team')
+        )
+        for session in open_sessions:
+            team = session.team
+            end_time = end_times[team]
+            if session.date == today and current_time < end_time:
                 continue
 
             end_dt = timezone.make_aware(
-                datetime.combine(today, end_time), timezone.get_current_timezone(),
+                datetime.combine(session.date, end_time), timezone.get_current_timezone(),
             )
             elapsed = now - end_dt
 
@@ -1271,23 +1422,39 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
         """
         from core.models import BreadPrice as BP
         user = self.request.user
-        transfer = serializer.save(
-            initiated_by=user,
-            to_node=user.node,  # requester is always the caller's own node
-            node_origin=user.node.code if user.node else 'CLOUD',
-        )
-        lines_data = self.request.data.get('lines', [])
-        for ld in lines_data:
+
+        # BUG-224 : toutes les entrées sont validées AVANT la moindre écriture.
+        if not user.node_id:
+            raise ValidationError({'detail': (
+                "Votre compte n'est rattaché à aucune boulangerie : une demande de pains "
+                "doit être faite depuis une boulangerie."
+            )})
+        if serializer.validated_data.get('from_node') == user.node:
+            raise ValidationError({'detail': "Une boulangerie ne peut pas demander des pains à elle-même."})
+        raw_data = self.request.data
+        raw_lines = raw_data.get('lines') if hasattr(raw_data, 'get') else None
+        if not isinstance(raw_lines, list) or not raw_lines:
+            raise ValidationError({'detail': "Au moins une ligne (catégorie de pain et quantité) est requise."})
+        wanted = {}
+        for ld in raw_lines:
+            if not isinstance(ld, dict):
+                raise ValidationError({'detail': "Chaque ligne doit être un objet {bread_price, quantity_sent}."})
             bp_id = ld.get('bread_price')
-            qty   = int(ld.get('quantity_sent', 0))
-            if bp_id and qty > 0:
-                try:
-                    bp = BP.objects.get(pk=bp_id)
-                    BreadTransferLine.objects.create(
-                        transfer=transfer, bread_price=bp, quantity_sent=qty,
-                    )
-                except BP.DoesNotExist:
-                    pass
+            try:
+                bp = BP.objects.get(pk=bp_id)
+            except (BP.DoesNotExist, TypeError, ValueError, DjangoValidationError):
+                raise ValidationError({'detail': f"Catégorie de pain introuvable ({bp_id})."})
+            qty = _strict_int(ld.get('quantity_sent'), f"quantité envoyée ({bp.label})", minimum=1)
+            wanted[bp.pk] = (bp, wanted.get(bp.pk, (bp, 0))[1] + qty)
+
+        with transaction.atomic():
+            transfer = serializer.save(
+                initiated_by=user,
+                to_node=user.node,  # requester is always the caller's own node
+                node_origin=user.node.code,
+            )
+            for bp, qty in wanted.values():
+                BreadTransferLine.objects.create(transfer=transfer, bread_price=bp, quantity_sent=qty)
         lines = transfer.lines.select_related('bread_price').all()
         summary = ', '.join(f"{l.quantity_sent}×{l.bread_price.label}" for l in lines) or '—'
         create_notification(
@@ -1341,23 +1508,40 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
         if not lines_data:
             return Response({'detail': '`lines` est requis pour une réponse positive.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # BUG-224 : validation de toutes les quantités avant la moindre écriture.
+        if not isinstance(lines_data, list):
+            return Response({'detail': "`lines` doit être une liste."}, status=status.HTTP_400_BAD_REQUEST)
+        parsed = []
         for ld in lines_data:
-            bp_id    = ld.get('bread_price')
-            qty_send = int(ld.get('quantity_sent', 0))
-            try:
-                line = transfer.lines.get(bread_price_id=bp_id)
+            if not isinstance(ld, dict):
+                return Response({'detail': "Chaque ligne doit être un objet {bread_price, quantity_sent}."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            parsed.append((ld.get('bread_price'), _strict_int(ld.get('quantity_sent', 0), "quantité envoyée")))
+
+        with transaction.atomic():
+            # Relecture verrouillée : deux réponses simultanées ne doivent pas
+            # déduire deux fois le stock de l'émetteur.
+            locked = BreadTransfer.objects.select_for_update().get(pk=transfer.pk)
+            if locked.transfer_status != BreadTransfer.TransferStatus.PENDING:
+                return Response(
+                    {'detail': f"Transfert déjà au statut « {locked.get_transfer_status_display()} »."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for bp_id, qty_send in parsed:
+                try:
+                    line = transfer.lines.get(bread_price_id=bp_id)
+                except (BreadTransferLine.DoesNotExist, ValueError, TypeError):
+                    continue
                 line.quantity_sent = qty_send  # B confirms/adjusts the quantity they'll send
                 line.save(update_fields=['quantity_sent'])
-            except BreadTransferLine.DoesNotExist:
-                continue
 
-        # Deduct B's stock now that bread physically leaves
-        for line in transfer.lines.select_related('bread_price').all():
-            if line.quantity_sent > 0:
-                _adjust_bread_stock(transfer.from_node, line.bread_price, sent=line.quantity_sent)
+            # Deduct B's stock now that bread physically leaves
+            for line in transfer.lines.select_related('bread_price').all():
+                if line.quantity_sent > 0:
+                    _adjust_bread_stock(transfer.from_node, line.bread_price, sent=line.quantity_sent)
 
-        transfer.transfer_status = BreadTransfer.TransferStatus.RESPONDED
-        transfer.save(update_fields=['transfer_status'])
+            transfer.transfer_status = BreadTransfer.TransferStatus.RESPONDED
+            transfer.save(update_fields=['transfer_status'])
 
         lines = transfer.lines.select_related('bread_price').all()
         summary = ', '.join(f"{l.quantity_sent}×{l.bread_price.label}" for l in lines) or '—'
@@ -1386,7 +1570,12 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
         # BUG-023 : seule la boulangerie destinataire (to_node) peut
         # confirmer la réception — pas l'émettrice (from_node) elle-même.
         self._check_node_involved(request, transfer.to_node_id)
-        if transfer.transfer_status != BreadTransfer.TransferStatus.RESPONDED:
+        # BUG-223 : un transfert en litige (DISPUTED) peut être RE-VALIDÉ par
+        # le récepteur (recomptage) ; le stock est alors régularisé du DELTA
+        # entre l'ancienne et la nouvelle quantité reçue (jamais recrédité en
+        # entier). Si le recomptage égale l'envoyé, le litige est levé.
+        confirmable = (BreadTransfer.TransferStatus.RESPONDED, BreadTransfer.TransferStatus.DISPUTED)
+        if transfer.transfer_status not in confirmable:
             return Response(
                 {'detail': f"Le transfert doit être au statut 'Réceptionné' pour être confirmé (statut : {transfer.get_transfer_status_display()})."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1399,19 +1588,46 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
         if not lines_data:
             return Response({'detail': '`lines` est requis.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        has_dispute = False
+        # BUG-224 : validation de toutes les quantités avant la moindre écriture.
+        if not isinstance(lines_data, list):
+            return Response({'detail': "`lines` doit être une liste."}, status=status.HTTP_400_BAD_REQUEST)
+        parsed = []
         for ld in lines_data:
-            bp_id        = ld.get('bread_price')
-            qty_received = int(ld.get('quantity_received', 0))
-            try:
-                line = transfer.lines.get(bread_price_id=bp_id)
+            if not isinstance(ld, dict):
+                return Response({'detail': "Chaque ligne doit être un objet {bread_price, quantity_received}."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            parsed.append((ld.get('bread_price'), _strict_int(ld.get('quantity_received', 0), "quantité reçue")))
+
+        has_dispute = False
+        with transaction.atomic():
+            # Relecture verrouillée : une double validation simultanée ne doit
+            # pas créditer deux fois le stock du récepteur.
+            locked = BreadTransfer.objects.select_for_update().get(pk=transfer.pk)
+            if locked.transfer_status not in confirmable:
+                return Response(
+                    {'detail': f"Le transfert doit être au statut 'Réceptionné' pour être confirmé (statut : {locked.get_transfer_status_display()})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for bp_id, qty_received in parsed:
+                try:
+                    line = transfer.lines.get(bread_price_id=bp_id)
+                except (BreadTransferLine.DoesNotExist, ValueError, TypeError):
+                    continue
+                previous = line.quantity_received or 0
                 line.quantity_received = qty_received
                 line.save(update_fields=['quantity_received'])
-            except BreadTransferLine.DoesNotExist:
-                continue
-            _adjust_bread_stock(transfer.to_node, line.bread_price, received=qty_received)
-            if qty_received != line.quantity_sent:
-                has_dispute = True
+                if qty_received != previous:
+                    _adjust_bread_stock(transfer.to_node, line.bread_price, received=qty_received - previous)
+            has_dispute = any(
+                l.quantity_received is not None and l.quantity_received != l.quantity_sent
+                for l in transfer.lines.all()
+            )
+            # Statut posé dans la même transaction que le crédit du stock.
+            transfer.transfer_status = (
+                BreadTransfer.TransferStatus.DISPUTED if has_dispute else BreadTransfer.TransferStatus.CONFIRMED
+            )
+            transfer.confirmed_by = request.user
+            transfer.save(update_fields=['transfer_status', 'confirmed_by', 'updated_at'])
 
         transfer.confirmed_by = request.user
         if has_dispute:
@@ -1443,6 +1659,125 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
             node_origin=transfer.to_node.code
         )
         return Response(BreadTransferSerializer(transfer).data)
+
+    RESOLUTIONS = ('ALIGN_ON_RECEIVED', 'ALIGN_ON_SENT')
+
+    @action(detail=True, methods=['post'])
+    def resolve_dispute(self, request, pk=None):
+        """
+        BUG-223 (CLAUDE.md §5.4 : écart → alerte et blocage de la clôture, puis
+        déblocage à la résolution) : résolution d'un transfert en litige
+        (`DISPUTED`) par la DIRECTION/le siège ou le gérant de la boulangerie
+        ÉMETTRICE — jamais par le récepteur qui a déclaré l'écart.
+
+        `POST /api/production/transfers/<id>/resolve_dispute/`
+        `{"resolution": "ALIGN_ON_RECEIVED" | "ALIGN_ON_SENT", "reason": "<motif>"}`
+
+        - `ALIGN_ON_RECEIVED` : la quantité reçue fait foi — l'envoi est
+          corrigé sur le reçu (l'émetteur récupère, ou se voit débiter, la
+          différence en stock).
+        - `ALIGN_ON_SENT` : la quantité envoyée fait foi — la réception est
+          corrigée sur l'envoi (le récepteur est crédité, ou débité, de la
+          différence).
+        Dans les deux cas la somme des stocks du groupe redevient nulle, les
+        lignes ne présentent plus d'écart (ce qui lève le blocage de clôture
+        du récepteur, `treasury._unresolved_incoming_transfer_gap`), le
+        transfert passe à `CONFIRMED`, l'opération est journalisée avec le
+        détail avant/après et le motif, et une notification INFO informe les
+        deux boulangeries. Le motif est obligatoire.
+        """
+        transfer = self.get_object()
+        # Seuls le siège/la direction et le gérant de la boulangerie émettrice.
+        self._check_node_involved(request, transfer.from_node_id)
+
+        bad_body = _body_not_object_response(request)
+        if bad_body is not None:
+            return bad_body
+        resolution = request.data.get('resolution')
+        reason = request.data.get('reason')
+        if resolution not in self.RESOLUTIONS:
+            return Response(
+                {'detail': "« resolution » doit être « ALIGN_ON_RECEIVED » (le reçu fait foi) "
+                           "ou « ALIGN_ON_SENT » (l'envoyé fait foi)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            return Response({'detail': "Le motif de la résolution (« reason ») est obligatoire."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        reason = reason.strip()[:500]
+
+        with transaction.atomic():
+            locked = BreadTransfer.objects.select_for_update().get(pk=transfer.pk)
+            if locked.transfer_status != BreadTransfer.TransferStatus.DISPUTED:
+                return Response(
+                    {'detail': f"Seul un transfert en litige peut être résolu (statut : {locked.get_transfer_status_display()})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            before = []
+            for line in transfer.lines.select_related('bread_price').select_for_update():
+                if line.quantity_received is None or line.quantity_received == line.quantity_sent:
+                    continue
+                sent, received = line.quantity_sent, line.quantity_received
+                before.append(f"{line.bread_price.label}: envoyé {sent}, reçu {received}")
+                if resolution == 'ALIGN_ON_RECEIVED':
+                    # L'émetteur avait en réalité envoyé `received` : on lui restitue (ou débite) la différence.
+                    _adjust_bread_stock(transfer.from_node, line.bread_price, sent=received - sent)
+                    line.quantity_sent = received
+                    line.save(update_fields=['quantity_sent'])
+                else:
+                    # Le récepteur a reçu `sent` : on le crédite (ou débite) de la différence.
+                    _adjust_bread_stock(transfer.to_node, line.bread_price, received=sent - received)
+                    line.quantity_received = sent
+                    line.save(update_fields=['quantity_received'])
+            label = 'reçu fait foi' if resolution == 'ALIGN_ON_RECEIVED' else 'envoyé fait foi'
+            stamp = timezone.localtime().strftime('%d/%m/%Y %H:%M')
+            transfer.notes = (
+                (transfer.notes + '\n' if transfer.notes else '')
+                + f"[Litige résolu le {stamp} par {request.user} — {label}] {reason} "
+                + f"(écart initial : {'; '.join(before) or 'aucun'})"
+            )
+            transfer.transfer_status = BreadTransfer.TransferStatus.CONFIRMED
+            transfer.save(update_fields=['transfer_status', 'notes', 'updated_at'])
+
+        details = '; '.join(before) or 'aucun écart restant'
+        for code in {transfer.from_node.code, transfer.to_node.code}:
+            create_notification(
+                title=f"Litige Transfert résolu — {transfer.from_node.code}→{transfer.to_node.code}",
+                message=f"Résolu ({label}) : {reason}. Écart initial : {details}.",
+                severity='INFO', node_origin=code,
+            )
+        log_activity(
+            request.user, "Résolution Litige Transfert",
+            f"Transfert {transfer.from_node.code}→{transfer.to_node.code} : {label}. "
+            f"Écart initial : {details}. Motif : {reason}",
+            node_origin=transfer.from_node.code,
+        )
+        return Response(BreadTransferSerializer(transfer).data)
+
+    def perform_update(self, serializer):
+        # BUG-223 : un transfert qui a déjà eu un effet sur les stocks
+        # (réponse, réception, litige) n'est plus modifiable directement.
+        if serializer.instance.transfer_status != BreadTransfer.TransferStatus.PENDING:
+            raise ValidationError({'detail': (
+                "Ce transfert a déjà un effet sur les stocks : il n'est plus modifiable "
+                "(utilisez la résolution de litige le cas échéant)."
+            )})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        # BUG-223 : supprimer un transfert répondu/confirmé/en litige laissait
+        # le stock du groupe déséquilibré et levait le blocage de clôture sans
+        # résolution. Seuls les transferts sans effet de stock (en attente,
+        # annulés) sont supprimables.
+        if instance.transfer_status in (
+            BreadTransfer.TransferStatus.RESPONDED,
+            BreadTransfer.TransferStatus.CONFIRMED,
+            BreadTransfer.TransferStatus.DISPUTED,
+        ):
+            raise ValidationError({'detail': (
+                "Ce transfert a déjà un effet sur les stocks : il ne peut pas être supprimé."
+            )})
+        instance.delete()
 
 
 class BreadStockViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1556,7 +1891,7 @@ class BreadStockByDateView(APIView):
         today = work_date_for(node)
         date_str = request.query_params.get('date')
         if date_str:
-            requested_date = parse_date(date_str)
+            requested_date = _safe_parse_date(date_str)
             if requested_date is None:
                 return Response(
                     {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
@@ -1684,7 +2019,39 @@ class BreadDisposalViewSet(viewsets.ModelViewSet):
                     "Clientèle, qui applique le prix réduit à 75 % et calcule la perte."
                 )
             })
-        serializer.save()
+        # BUG-221 : régularise `BreadStock.qty_disposed` — on contre-passe
+        # l'effet de l'ancienne version puis on applique celui de la nouvelle
+        # (seuls les types ≠ REMAINING touchent le stock), dans une transaction.
+        with transaction.atomic():
+            old_node, old_bp = instance.node, instance.bread_price
+            old_type, old_qty = instance.disposal_type, instance.quantity
+            disposal = serializer.save()
+            if old_type != BreadDisposal.DisposalType.REMAINING:
+                _adjust_bread_stock(old_node, old_bp, disposed=-old_qty)
+            if disposal.disposal_type != BreadDisposal.DisposalType.REMAINING:
+                _adjust_bread_stock(disposal.node, disposal.bread_price, disposed=disposal.quantity)
+            if (old_type, old_qty, old_bp.pk) != (disposal.disposal_type, disposal.quantity, disposal.bread_price_id):
+                log_activity(
+                    self.request.user, "Modification Disposition Pain",
+                    f"{disposal.node.code} : disposition {old_type} {old_qty}×{old_bp.label} "
+                    f"→ {disposal.disposal_type} {disposal.quantity}×{disposal.bread_price.label}.",
+                    node_origin=disposal.node.code,
+                )
+
+    def perform_destroy(self, instance):
+        # BUG-221 : les pains d'une disposition supprimée retournent au stock.
+        with transaction.atomic():
+            node, bp = instance.node, instance.bread_price
+            dtype, qty = instance.disposal_type, instance.quantity
+            instance.delete()
+            if dtype != BreadDisposal.DisposalType.REMAINING:
+                _adjust_bread_stock(node, bp, disposed=-qty)
+            log_activity(
+                self.request.user, "Suppression Disposition Pain",
+                f"{node.code} : disposition {dtype} {qty}×{bp.label} supprimée "
+                f"(pains remis en stock).",
+                node_origin=node.code,
+            )
 
 
 _MONEY_Q = Decimal('0.01')
@@ -2172,7 +2539,7 @@ class DailyClosureReportView(APIView):
             return Response({'detail': "Le paramètre `date` (AAAA-MM-JJ) est requis."}, status=status.HTTP_400_BAD_REQUEST)
 
         from django.utils.dateparse import parse_date
-        report_date = parse_date(date_str)
+        report_date = _safe_parse_date(date_str)
         if report_date is None:
             return Response({'detail': "Date invalide — format attendu AAAA-MM-JJ."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2400,7 +2767,7 @@ class DailyOpeningConfirmationView(APIView):
 
         date_str = request.query_params.get('date')
         if date_str:
-            report_date = parse_date(date_str)
+            report_date = _safe_parse_date(date_str)
             if report_date is None:
                 return Response(
                     {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
@@ -2538,7 +2905,7 @@ class DailyOpeningConfirmationView(APIView):
 
         date_str = data.get('date')
         if date_str:
-            confirmation_date = parse_date(date_str)
+            confirmation_date = _safe_parse_date(date_str)
             if confirmation_date is None:
                 return Response(
                     {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
@@ -2739,7 +3106,9 @@ class TeamAssignmentView(APIView):
         from core.workday import business_date, suggested_team
 
         return {
-            'work_date': business_date(node, now).isoformat(),
+            # BUG-227 : même journée que les autres routes (`work_date_for` :
+            # date calendaire hors rotation, journée de relève en rotation).
+            'work_date': work_date_for(node, now).isoformat(),
             'handover_time': node.handover_time.strftime('%H:%M'),
             'team': assignment.team if assignment else None,
             'suggested': suggested_team(node, now),
@@ -2759,7 +3128,7 @@ class TeamAssignmentView(APIView):
         now = timezone.now()
         assignment = (
             DailyTeamAssignment.objects.select_related('assigned_by')
-            .filter(node=node, work_date=business_date(node, now)).first()
+            .filter(node=node, work_date=work_date_for(node, now)).first()
         )
         return Response(self._payload(node, now, assignment))
 
@@ -2796,7 +3165,11 @@ class TeamAssignmentView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         now = timezone.now()
-        work_date = business_date(node, now)
+        # BUG-227 : hors rotation, la désignation n'a aucun effet sur la
+        # facturation ; elle reste acceptée (rétro-compatibilité) mais sur la
+        # date CALENDAIRE (comme le reste de l'API), jamais sur la journée de
+        # relève J-1 — plus de désignation « parasite » décalée au basculement.
+        work_date = work_date_for(node, now)
         for key in ('work_date', 'date'):
             requested = request.data.get(key)
             if requested not in (None, '') and str(requested) != work_date.isoformat():

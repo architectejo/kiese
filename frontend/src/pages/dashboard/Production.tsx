@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import axios from 'axios';
 import {
   FiGrid, FiPlus, FiAlertTriangle, FiArrowRight, FiCheckCircle,
   FiRefreshCw, FiPackage, FiTruck, FiX
@@ -16,6 +15,7 @@ import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
 import { OpeningConfirmationManualSection } from '@/components/production/OpeningConfirmationManualSection';
+import { TransferDisputeCard } from '@/components/production/TransferDisputeCard';
 import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 
 const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
@@ -194,6 +194,8 @@ export const Production: React.FC = () => {
   const [tError, setTError]       = useState<string | null>(null);
   const [tSending, setTSending]   = useState(false);
   const [tSuccess, setTSuccess]   = useState<string | null>(null);
+  const [transferNotice, setTransferNotice] = useState<string | null>(null);
+  const [transferActionError, setTransferActionError] = useState<string | null>(null);
   // respondQtys: transferId → { breadPriceId → qty_sent } (B fills when responding)
   const [respondQtys, setRespondQtys] = useState<Record<string, Record<number, number>>>({});
   // confirmQtys: transferId → { breadPriceId → qty_received } (A fills when confirming receipt)
@@ -406,10 +408,7 @@ export const Production: React.FC = () => {
         requestTeamAssignment();
         return;
       }
-      const d = axios.isAxiosError(err)
-        ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
-        : undefined;
-      setProdError(d?.detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur.');
+      setProdError(getErrorDetail(err, 'Erreur.'));
     }
   };
 
@@ -469,6 +468,7 @@ export const Production: React.FC = () => {
   const handleRespondToTransfer = async (transferId: string, approved: boolean) => {
     const transfer = transfers.find(t => t.id === transferId);
     if (!transfer) return;
+    setTransferActionError(null); setTransferNotice(null);
     if (approved) {
       const qtys = respondQtys[transferId] || {};
       const lines = (transfer.lines || []).map(line => ({
@@ -478,12 +478,12 @@ export const Production: React.FC = () => {
       try {
         await productionApi.transfers.respond(transferId, true, lines);
         await loadData();
-      } catch (err) { console.error('Respond to transfer failed', err); }
+      } catch (err: unknown) { setTransferActionError(getErrorDetail(err, "Impossible d'envoyer les pains.")); }
     } else {
       try {
         await productionApi.transfers.respond(transferId, false);
         await loadData();
-      } catch (err) { console.error('Reject transfer failed', err); }
+      } catch (err: unknown) { setTransferActionError(getErrorDetail(err, 'Impossible de refuser la demande.')); }
     }
   };
 
@@ -491,6 +491,7 @@ export const Production: React.FC = () => {
   const handleConfirmReceipt = async (transferId: string) => {
     const transfer = transfers.find(t => t.id === transferId);
     if (!transfer) return;
+    setTransferActionError(null); setTransferNotice(null);
     const qtys = confirmQtys[transferId] || {};
     const lines = (transfer.lines || []).map(line => ({
       bread_price: line.bread_price,
@@ -499,7 +500,7 @@ export const Production: React.FC = () => {
     try {
       await productionApi.transfers.confirm(transferId, lines);
       await loadData();
-    } catch (err) { console.error('Confirm receipt failed', err); }
+    } catch (err: unknown) { setTransferActionError(getErrorDetail(err, 'Impossible de confirmer la réception.')); }
   };
 
   const handleDisposal = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -1263,21 +1264,25 @@ export const Production: React.FC = () => {
             )}
 
             {/* DISPUTES */}
-            {disputedTrans.map(t => (
-              <div key={t.id} style={{ backgroundColor: 'hsl(var(--color-danger) / 0.06)', border: '1px solid hsl(var(--color-danger) / 0.4)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: '0.68rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                  <FiAlertTriangle style={{ color: 'hsl(var(--color-danger))' }} />
-                  <strong style={{ color: 'hsl(var(--color-danger))' }}>LITIGE D'ÉCART — Signalé à la Direction</strong>
-                </div>
-                <div style={{ color: 'hsl(var(--text-secondary))' }}>
-                  {t.from_node_display} → {t.to_node_display}
-                  {(t.lines || []).map(l => (
-                    <span key={l.bread_price} style={{ marginLeft: '6px' }}>
-                      {l.bread_price_display}: {l.quantity_sent}→{l.quantity_received ?? '?'}{l.quantity_gap !== 0 && l.quantity_gap !== undefined && <span style={{ color: 'hsl(var(--color-danger))' }}> (écart {l.quantity_gap})</span>}
-                    </span>
-                  ))}
-                </div>
+            {transferNotice && (
+              <div role="status" style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', backgroundColor: 'hsl(var(--color-success) / 0.1)', color: 'hsl(var(--color-success))', fontSize: '0.68rem', fontWeight: 700 }}>
+                {transferNotice}
               </div>
+            )}
+            {transferActionError && (
+              <div role="alert" style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', backgroundColor: 'hsl(var(--color-danger) / 0.1)', color: 'hsl(var(--color-danger))', fontSize: '0.68rem', fontWeight: 700 }}>
+                {transferActionError}
+              </div>
+            )}
+            {disputedTrans.map(t => (
+              <TransferDisputeCard
+                key={t.id}
+                transfer={t}
+                userNode={user?.node}
+                userRole={user?.role}
+                canAccessAllNodes={!!user?.can_access_all_nodes}
+                onChanged={async (msg) => { setTransferNotice(msg); setTransferActionError(null); await loadData(); }}
+              />
             ))}
 
             {/* Confirmed history */}

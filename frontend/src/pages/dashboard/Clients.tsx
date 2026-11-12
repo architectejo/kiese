@@ -207,6 +207,9 @@ export const Clients: React.FC = () => {
   const [saleClient, setSaleClient] = useState<ClientItem | null>(null);
   const [saleQtys, setSaleQtys] = useState<Record<number, number>>({});
   const [versementJour, setVersementJour] = useState<string>('');
+  // BUG-230 : vente « Client Occasionnel » (client non identifié) = paiement comptant obligatoire,
+  // versement égal à la valeur de la commande, pas de crédit (le serveur refuse sinon, en 400).
+  const isCasualSale = !!saleClient && (saleClient.name === 'Client Occasionnel' || saleClient.type === 'Occasionnel');
   // BUG-083 : date de commande rétroactive, optionnelle — vide = aujourd'hui (comportement par défaut).
   const [orderDate, setOrderDate] = useState<string>('');
   const [saleError, setSaleError] = useState<string | null>(null);
@@ -651,7 +654,17 @@ export const Clients: React.FC = () => {
     const valeurCommande = saleLines.reduce((s, bp) => s + saleQtys[bp.id] * effectiveUnitPrice(bp, venteSoldee), 0);
     const clientLimit = saleClient.creditLimit || debtCeiling;
     // Vente soldée : versement réel enregistré, manquant passé en perte (is_soldee flag)
-    const effectivePayment = parseFloat(versementJour) || 0;
+    const effectivePayment = isCasualSale ? valeurCommande : (parseFloat(versementJour) || 0);
+    if (saleLines.some(bp => !Number.isInteger(saleQtys[bp.id]) || saleQtys[bp.id] > 100000)) {
+      setSaleError('Chaque quantité doit être un nombre entier compris entre 1 et 100 000.');
+      setIsSubmitting(false);
+      return;
+    }
+    if (effectivePayment < 0) {
+      setSaleError('Le versement ne peut pas être négatif.');
+      setIsSubmitting(false);
+      return;
+    }
     if (!venteSoldee && saleClient.outstandingDebt >= clientLimit && effectivePayment < valeurCommande) {
       setSaleError(`Plafond de crédit atteint (${saleClient.outstandingDebt.toLocaleString('fr-FR')} FC ≥ ${clientLimit.toLocaleString('fr-FR')} FC). Réglez intégralement la commande ou remboursez la dette.`);
       setIsSubmitting(false);
@@ -701,8 +714,8 @@ export const Clients: React.FC = () => {
         const res = await salesApi.create({
           client: clientApiId,
           payment_amount: effectivePayment.toString(),
-          payment_type: effectivePayment >= valeurCommande ? 'CASH' : 'CREDIT',
-          commission_rate: commissionRate,
+          payment_type: isCasualSale || effectivePayment >= valeurCommande ? 'CASH' : 'CREDIT',
+          // BUG-230 : `commission_rate` n'est plus envoyé (le serveur applique le taux du client).
           ...(venteSoldee ? { is_soldee: true } : {}),
           // BUG-052 : exonération de commission dédiée, indépendante de « Vente Soldée » —
           // forcée côté serveur (comm_rate=0) même si combinée avec is_soldee (§ ci-dessus).
@@ -729,10 +742,8 @@ export const Clients: React.FC = () => {
           setIsSubmitting(false);
           return;
         }
-        const d = axios.isAxiosError(err)
-          ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
-          : undefined;
-        setSaleError(d?.detail || d?.non_field_errors?.[0] || (d ? JSON.stringify(d) : undefined) || 'Erreur.');
+        // BUG-230 : `detail` d'abord, puis erreurs par champ (helper commun).
+        setSaleError(getErrorDetail(err, 'Erreur lors de la facturation.'));
         setIsSubmitting(false);
         return;
       }
@@ -752,7 +763,8 @@ export const Clients: React.FC = () => {
       lines: saleLines.map(bp => ({ label: bp.label, qty: saleQtys[bp.id], unitPrice: effectiveUnitPrice(bp, venteSoldee) })),
       orderTotal: valeurCommande,
       versement: effectivePayment,
-      commissionRate,
+      // BUG-230 : taux appliqué par le serveur (facture livrée) ; repli sur l'estimation locale.
+      commissionRate: deliveredInvoice?.commission_rate != null ? parseFloat(deliveredInvoice.commission_rate) : commissionRate,
       debtBefore: balanceAnterieure,
       newDebt: nouvelleDette,
       isSoldee: venteSoldee,
@@ -1829,13 +1841,16 @@ export const Clients: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '12px', alignItems: 'center', borderTop: '1px dashed hsl(var(--border-color))', paddingTop: '12px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 800, color: 'hsl(var(--color-success))' }}>Versement du Jour (FC)</label>
-                  <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>Acompte en espèces versé ce jour</span>
+                  <span style={{ fontSize: '0.65rem', color: isCasualSale ? 'hsl(var(--color-info))' : 'hsl(var(--text-muted))' }}>
+                    {isCasualSale ? 'Vente sans client identifié : paiement comptant obligatoire, versement = valeur de la commande.' : 'Acompte en espèces versé ce jour'}
+                  </span>
                 </div>
                 <input
                   type="number"
                   min={0}
                   placeholder="0"
-                  value={versementJour}
+                  value={isCasualSale ? String(breadPrices.reduce((s, bp) => s + (saleQtys[bp.id] || 0) * effectiveUnitPrice(bp, venteSoldee), 0)) : versementJour}
+                  disabled={isCasualSale}
                   onChange={(e) => setVersementJour(e.target.value)}
                   className="form-input"
                   style={{ height: '36px', fontSize: '0.85rem', padding: '0 12px', fontWeight: 800, color: 'hsl(var(--color-success))', borderColor: 'hsl(var(--color-success) / 0.4)' }}
@@ -1867,7 +1882,7 @@ export const Clients: React.FC = () => {
                 const totalFc    = breadPrices.reduce((s, bp) => s + (saleQtys[bp.id] || 0) * effectiveUnitPrice(bp, venteSoldee), 0);
                 const catalogFc  = breadPrices.reduce((s, bp) => s + (saleQtys[bp.id] || 0) * bp.unit_price, 0);
                 const commRate   = (sansCommission || venteSoldee) ? 0 : saleClient.commissionRate;
-                const effectivePay = parseFloat(versementJour) || 0;
+                const effectivePay = isCasualSale ? totalFc : (parseFloat(versementJour) || 0);
                 // Vente soldée : manquant passé en perte, pas de dette supplémentaire
                 const nouvelEncours = venteSoldee
                   ? saleClient.outstandingDebt

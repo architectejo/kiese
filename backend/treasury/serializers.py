@@ -4,6 +4,26 @@ from .models import (
     DailySavings, DisbursementVoucher, DirectionCashCount,
 )
 from core.models import Node
+from decimal import Decimal
+
+# BUG-201 : borne par coupure de billet. 100 000 billets de 20 000 FC = 2 milliards
+# FC par coupure : très au-delà de toute caisse réelle, mais le total reste
+# représentable (DecimalField 14,2) -> plus d'InvalidOperation / 500.
+MAX_BILLS_PER_DENOMINATION = 100000
+_BILLS_FIELDS = ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                 'bills_500', 'bills_200', 'bills_100', 'bills_50')
+_BILLS_EXTRA_KWARGS = {
+    f: {
+        'min_value': 0,
+        'max_value': MAX_BILLS_PER_DENOMINATION,
+        'error_messages': {
+            'max_value': f"Quantité de billets trop élevée (maximum {MAX_BILLS_PER_DENOMINATION}).",
+            'min_value': "La quantité de billets ne peut pas être négative.",
+            'invalid': "Quantité de billets invalide (nombre entier attendu).",
+        },
+    }
+    for f in _BILLS_FIELDS
+}
 
 
 class LocalExpenseSerializer(serializers.ModelSerializer):
@@ -18,6 +38,12 @@ class LocalExpenseSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'node', 'gerant', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+
+    def validate_amount(self, value):
+        # BUG-205 : une dépense est strictement positive.
+        if value is None or value <= 0:
+            raise serializers.ValidationError("Le montant de la dépense doit être strictement positif.")
+        return value
 
 
 class FacturierReportSerializer(serializers.ModelSerializer):
@@ -38,6 +64,9 @@ class FacturierReportSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'validated_at', 'node_origin', 'is_synced', 'created_at', 'updated_at',
+            # BUG-203 : totaux calculés par `generate` — jamais saisis par l'API.
+            'total_cash_sales', 'total_credit_sales', 'theoretical_cash',
+            'is_validated', 'validated_by',
             'sacks_consumed', 'breads_produced_by_category',
             'breads_sold_by_category', 'sacks_value_gap',
         ]
@@ -71,6 +100,7 @@ class CashClosureSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
             'has_cashbook_entry',
         ]
+        extra_kwargs = _BILLS_EXTRA_KWARGS
 
     def get_gerant_display(self, obj):
         return obj.gerant.get_full_name() if obj.gerant else None
@@ -106,6 +136,12 @@ class JournalEntrySerializer(serializers.ModelSerializer):
             'running_balance', 'month_carried', 'created_at',
             'is_reconciled', 'reconciliation_gap', 'reconciled_closure',
         ]
+        # BUG-202 : montants jamais négatifs (une « sortie » négative
+        # augmenterait le solde).
+        extra_kwargs = {
+            'entry_amount': {'min_value': Decimal('0')},
+            'exit_amount': {'min_value': Decimal('0')},
+        }
 
     def get_recorded_by_display(self, obj):
         return obj.recorded_by.get_full_name() if obj.recorded_by else None
@@ -127,8 +163,11 @@ class DailySavingsSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = ['id', 'savings_amount', 'recorded_by', 'node_display', 'created_at']
+        # BUG-206 : valeurs bornées (revenu >= 0, taux entre 0 et 1, sacs >= 0).
         extra_kwargs = {
-            'savings_rate': {'required': False},
+            'savings_rate': {'required': False, 'min_value': Decimal('0'), 'max_value': Decimal('1')},
+            'daily_revenue': {'min_value': Decimal('0')},
+            'flour_sacks': {'min_value': Decimal('0')},
         }
         # Remove auto-generated UniqueTogetherValidator so perform_create can upsert
         validators = []
@@ -179,6 +218,7 @@ class DisbursementVoucherSerializer(serializers.ModelSerializer):
             'id', 'created_by', 'created_by_display', 'physical_cash_total', 'piece_number',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
+        extra_kwargs = _BILLS_EXTRA_KWARGS
 
     def get_created_by_display(self, obj):
         return obj.created_by.get_full_name() if obj.created_by else None
@@ -206,6 +246,7 @@ class DirectionCashCountSerializer(serializers.ModelSerializer):
             'physical_cash_total', 'reference_entry', 'theoretical_balance',
             'cash_gap', 'created_at',
         ]
+        extra_kwargs = _BILLS_EXTRA_KWARGS
 
     def get_counted_by_display(self, obj):
         return obj.counted_by.get_full_name() if obj.counted_by else None

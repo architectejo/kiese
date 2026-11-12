@@ -91,6 +91,26 @@ class InvoiceSerializer(serializers.ModelSerializer):
         return obj.livreur.get_full_name() if obj.livreur else None
 
 
+# BUG-208 : borne haute raisonnable d'une ligne (aucune vente réelle ne dépasse
+# ce volume ; protège contre les valeurs absurdes / dépassements numériques).
+MAX_LINE_QUANTITY = 100000
+
+
+class InvoiceLineInputSerializer(serializers.Serializer):
+    """BUG-208 : ligne de saisie validée (pain existant côté vue, quantité entière >= 1)."""
+    bread_price = serializers.IntegerField(
+        min_value=1, error_messages={'invalid': "Identifiant de pain invalide."},
+    )
+    quantity = serializers.IntegerField(
+        min_value=1, max_value=MAX_LINE_QUANTITY,
+        error_messages={
+            'invalid': "La quantité doit être un nombre entier.",
+            'min_value': "La quantité d'une ligne doit être au moins 1.",
+            'max_value': f"La quantité d'une ligne ne peut pas dépasser {MAX_LINE_QUANTITY}.",
+        },
+    )
+
+
 class InvoiceCreateSerializer(serializers.Serializer):
     """Create an invoice with its lines in a single request."""
     # `Node` a une clé entière (BigAutoField, core/migrations/0001_initial.py),
@@ -101,7 +121,11 @@ class InvoiceCreateSerializer(serializers.Serializer):
     node            = serializers.IntegerField(required=False)
     client          = serializers.UUIDField(required=False, allow_null=True)
     payment_type    = serializers.ChoiceField(choices=Invoice.PaymentType.choices)
-    payment_amount  = serializers.DecimalField(max_digits=14, decimal_places=2)
+    # BUG-209 : un versement n'est jamais négatif.
+    payment_amount  = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal('0.00'),
+        error_messages={'min_value': "Le versement ne peut pas être négatif."},
+    )
     # BUG-083 : date antérieure optionnelle (« ventes passées »). La
     # validation métier (Config.allow_backdated_sales, jamais de date
     # future) est faite dans InvoiceViewSet._create_once — pas ici — car
@@ -117,12 +141,22 @@ class InvoiceCreateSerializer(serializers.Serializer):
         choices=['', 'NV', 'RG', 'NS'], required=False, default=''
     )
     lines = serializers.ListField(
-        child=serializers.DictField(),
+        child=InvoiceLineInputSerializer(),
         min_length=0,
         required=False,
         default=list,
         help_text="[{bread_price: uuid, quantity: int}, ...] — vide pour un remboursement BP"
     )
+
+    def validate_commission_rate(self, value):
+        # BUG-210 : valeur acceptée seulement si c'est un taux légitime
+        # (CLAUDE.md §5.3 : 0, 0,25 ou 0,30). Elle n'est ensuite jamais
+        # utilisée : le taux appliqué vient du client (voir `_create_once`).
+        if value not in (Decimal('0.00'), Decimal('0.25'), Decimal('0.30')):
+            raise serializers.ValidationError(
+                "Taux de commission invalide : seuls 0 %, 25 % et 30 % sont admis."
+            )
+        return value
 
 
 class InvoiceAdjustSerializer(serializers.Serializer):

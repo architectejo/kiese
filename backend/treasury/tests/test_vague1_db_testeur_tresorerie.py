@@ -139,17 +139,14 @@ class Bug200GerantSelfValidationTests(TestCase):
             total_entries=Decimal('1000'), total_expenses=Decimal('0'), net_cash=Decimal('1000'),
         )
 
-    @unittest.expectedFailure  # BUG-200
     def test_gerant_cannot_validate_own_closure(self):
         r = _api(self.gerant).post(f'/api/treasury/closures/{self.closure.id}/validate/', {}, format='json')
         self.assertEqual(r.status_code, 403, r.content)
 
-    @unittest.expectedFailure  # BUG-200
     def test_gerant_cannot_reject_own_closure(self):
         r = _api(self.gerant).post(f'/api/treasury/closures/{self.closure.id}/reject/', {'reason': 'x'}, format='json')
         self.assertEqual(r.status_code, 403, r.content)
 
-    @unittest.expectedFailure  # BUG-200
     def test_gerant_cannot_push_to_cashbook(self):
         CashClosure.objects.filter(pk=self.closure.pk).update(is_validated=True)
         r = _api(self.gerant).post(f'/api/treasury/closures/{self.closure.id}/push_to_cashbook/', {}, format='json')
@@ -164,7 +161,6 @@ class Bug201OversizedBillsTests(TestCase):
         self.node = make_node(code='K3', name='ATHENEE')
         self.gerant = make_user('GERANT', node=self.node, username='g_201')
 
-    @unittest.expectedFailure  # BUG-201
     def test_oversized_bills_rejected_with_400_and_nothing_persisted(self):
         api = _api(self.gerant)
         api.raise_request_exception = False
@@ -185,17 +181,14 @@ class Bug202JournalMutabilityTests(TestCase):
         self.assertEqual(r.status_code, 201, r.content)
         self.entry_id = r.json()['id']
 
-    @unittest.expectedFailure  # BUG-202
     def test_facturier_cannot_patch_journal_entry(self):
         r = _api(self.fac).patch(f'/api/treasury/journal/{self.entry_id}/', {'entry_amount': '99999'}, format='json')
         self.assertIn(r.status_code, (403, 405), r.content)
 
-    @unittest.expectedFailure  # BUG-202
     def test_facturier_cannot_delete_journal_entry(self):
         r = _api(self.fac).delete(f'/api/treasury/journal/{self.entry_id}/')
         self.assertIn(r.status_code, (403, 405), r.content)
 
-    @unittest.expectedFailure  # BUG-202
     def test_negative_exit_amount_rejected(self):
         r = _api(self.gerant).post('/api/treasury/journal/', {
             'date': '2026-11-08', 'imput': 'PAY_BLG', 'label': 'neg', 'exit_amount': '-5000'}, format='json')
@@ -222,13 +215,11 @@ class Bug203ReportTamperTests(TestCase):
         self.api.post('/api/treasury/reports/generate/', {}, format='json')
         self.report = FacturierReport.objects.get(node=self.node, team='A')
 
-    @unittest.expectedFailure  # BUG-203
     def test_report_totals_are_read_only(self):
         r = self.api.patch(f'/api/treasury/reports/{self.report.id}/', {'total_cash_sales': '5.00'}, format='json')
         self.report.refresh_from_db()
         self.assertEqual(self.report.total_cash_sales, Decimal('1500.00'), r.content)
 
-    @unittest.expectedFailure  # BUG-203
     def test_validated_report_is_frozen_against_patch(self):
         self.api.post(f'/api/treasury/reports/{self.report.id}/validate/')
         r = self.api.patch(f'/api/treasury/reports/{self.report.id}/', {'total_cash_sales': '7.00'}, format='json')
@@ -238,7 +229,6 @@ class Bug203ReportTamperTests(TestCase):
 class Bug204CorrectionPieceNumberTests(TestCase):
     """BUG-204 : n° de pièce de correction (31 caractères) > max_length=30 (PostgreSQL : DataError)."""
 
-    @unittest.expectedFailure  # BUG-204
     def test_correction_piece_number_fits_column(self):
         from treasury.services import record_backdated_correction
 
@@ -265,13 +255,11 @@ class Bug205NegativeExpenseTests(TestCase):
         self.gerant = make_user('GERANT', node=self.node, username='g_205')
         self.cat = ExpenseCategory.objects.create(code='ZZ_205', label='ZZ')
 
-    @unittest.expectedFailure  # BUG-205
     def test_negative_expense_rejected(self):
         r = _api(self.gerant).post('/api/treasury/expenses/', {
             'description': 'neg', 'amount': '-500', 'category': self.cat.id, 'date': '2026-11-09'}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @unittest.expectedFailure  # BUG-205
     def test_zero_expense_rejected(self):
         r = _api(self.gerant).post('/api/treasury/expenses/', {
             'description': 'zero', 'amount': '0', 'category': self.cat.id, 'date': '2026-11-09'}, format='json')
@@ -290,24 +278,20 @@ class Bug206SavingsTests(TestCase):
             node=self.k1, date=date(2026, 11, 8), flour_sacks=Decimal('1'),
             daily_revenue=Decimal('1000'), savings_rate=Decimal('0.1'), savings_amount=Decimal('100'))
 
-    @unittest.expectedFailure  # BUG-206
     def test_gerant_cannot_read_other_node_savings_with_node_param(self):
         r = _api(self.g3).get('/api/treasury/savings/', {'node': self.k1.id})
         ids = [x['id'] for x in r.json().get('results', r.json())]
         self.assertNotIn(self.other.id, ids)
 
-    @unittest.expectedFailure  # BUG-206
     def test_gerant_cannot_modify_other_node_savings_with_node_param(self):
         r = _api(self.g3).patch(f'/api/treasury/savings/{self.other.id}/?node={self.k1.id}', {'daily_revenue': '1'}, format='json')
         self.assertIn(r.status_code, (403, 404), r.content)
 
-    @unittest.expectedFailure  # BUG-206
     def test_negative_revenue_or_absurd_rate_rejected(self):
         r = _api(self.g3).post('/api/treasury/savings/', {
             'date': '2026-11-07', 'flour_sacks': 1, 'daily_revenue': '-1000', 'savings_rate': '5'}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @unittest.expectedFailure  # BUG-206
     def test_livreur_cannot_create_savings(self):
         r = _api(self.livreur).post('/api/treasury/savings/', {
             'date': '2026-11-06', 'flour_sacks': 1, 'daily_revenue': '1000', 'savings_rate': '0.1'}, format='json')
@@ -317,7 +301,6 @@ class Bug206SavingsTests(TestCase):
 class Bug207PeriodSummaryFloatTests(TestCase):
     """BUG-207 : `period_summary` renvoie des montants en nombres flottants JSON."""
 
-    @unittest.expectedFailure  # BUG-207
     def test_period_summary_amounts_are_decimal_strings(self):
         from treasury.views import append_cashbook_entry
 
