@@ -18,7 +18,8 @@ après avoir traité ce cas (ex. division de la vacation, correction
 manuelle) plutôt que de voir ses totaux déjà communiqués changer sous lui.
 BUG-083 (« ventes passées », remarque.md l.360, décision client §4/point f) :
 quand `Config.allow_backdated_sales=True` ET que la livraison cible
-réellement une date PASSÉE (`delivered_at.date() < aujourd'hui` — jamais une
+réellement une date PASSÉE (date de travail de `delivered_at` < date de travail
+courante, BUG-189/BUG-161 B3 — jamais une
 simple re-livraison du jour même déjà rapportée, qui reste bloquée comme
 avant), on ne lève plus `ValidationError` : on laisse la sauvegarde se
 poursuivre et on planifie, APRÈS COMMIT de la transaction englobante
@@ -68,7 +69,13 @@ def block_delivery_on_already_reported_vacation(sender, instance, **kwargs):
 
     from .models import FacturierReport
 
-    delivery_date = instance.delivered_at.date()
+    # BUG-189 : jamais `delivered_at.date()` (datetime aware = date UTC, fausse
+    # entre 00:00 et 01:00 à Kinshasa). Date de travail du nœud à l'instant de
+    # la livraison : date locale hors rotation, journée de relève à relève en
+    # mode rotation (BUG-161 B3).
+    from core.workday import work_date_for
+
+    delivery_date = work_date_for(instance.node, instance.delivered_at)
     already_reported = FacturierReport.objects.filter(
         node_id=instance.node_id,
         team=instance.team,
@@ -79,7 +86,7 @@ def block_delivery_on_already_reported_vacation(sender, instance, **kwargs):
 
     from core.models import Config
     config = Config.get_instance()
-    is_backdated = delivery_date < timezone.localdate()
+    is_backdated = delivery_date < work_date_for(instance.node)
 
     if config.allow_backdated_sales and is_backdated:
         # Ne bloque plus : régénération du rapport + correction éventuelle

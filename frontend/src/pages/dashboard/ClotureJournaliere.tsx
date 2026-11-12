@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { FiRefreshCw, FiAlertTriangle, FiCalendar, FiDownload, FiPrinter } from 'react-icons/fi';
 import { coreApi, productionApi, BakeryNode, DailyClosureReport } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
+import { useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
@@ -32,8 +33,6 @@ export const REGULARISATION_HELP =
 export const NON_SERVI_HELP =
   'Non Servi : montant des commandes non servies du jour (code NS) ; retranché du total du jour, aucun pain n\'a été remis.';
 
-const todayIso =() => new Date().toISOString().slice(0, 10);
-
 type RepartitionMode = 'QUANTITE' | 'VALEUR';
 
 export const ClotureJournaliere: React.FC = () => {
@@ -43,7 +42,8 @@ export const ClotureJournaliere: React.FC = () => {
   // Le backend accepte un code boulangerie (`?node=K1`) — on travaille toujours avec le
   // code plutôt que le pk interne, qui n'est jamais exposé à l'utilisateur.
   const [selectedNodeCode, setSelectedNodeCode] = useState('');
-  const [date, setDate] = useState(todayIso());
+  // BUG-161 (F3) : jour affiché = journée de travail du serveur tant que l'utilisateur n'en choisit pas un autre.
+  const [date, setDate] = useSelectedWorkDay();
   const [report, setReport] = useState<DailyClosureReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

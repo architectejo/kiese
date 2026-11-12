@@ -46,6 +46,51 @@ def business_date(node, instant=None):
     return local.date()
 
 
+def work_date_for(node, instant=None):
+    """
+    BUG-161 (B3) : SOURCE UNIQUE de la « date de travail » côté serveur.
+
+    - Boulangerie en mode rotation (`Node.team_rotation_enabled`) : journée de
+      relève à relève, `business_date(node, instant)`.
+    - Sinon (comportement historique, strictement inchangé) : date LOCALE du
+      calendrier (`TIME_ZONE`), comme `timezone.localdate()`.
+
+    Dans les deux cas la date est calculée en heure locale du projet : jamais
+    de `.date()` sur un datetime aware non converti (BUG-189). `node=None`
+    (utilisateur HQ sans boulangerie) retombe sur la date locale.
+    """
+    if node is not None and getattr(node, 'team_rotation_enabled', False):
+        return business_date(node, instant)
+    return _local_instant(instant).date()
+
+
+def work_time_info(node, instant=None):
+    """
+    BUG-161 (B3) : `{"work_date": "AAAA-MM-JJ", "server_now": "<ISO>"}` à
+    ajouter (de façon additive) aux réponses consommées par le frontend, pour
+    qu'il n'utilise plus `new Date().toISOString().slice(0, 10)` (date UTC,
+    fausse entre 00:00 et 01:00 à Kinshasa).
+    """
+    local = _local_instant(instant)
+    return {
+        'work_date': work_date_for(node, instant).isoformat(),
+        'server_now': local.isoformat(),
+    }
+
+
+def delivered_on_work_date_filter(node, work_date, field='delivered_at'):
+    """
+    BUG-161 (B3) : filtre ORM (dict de lookups) des enregistrements dont
+    `field` (datetime aware) tombe dans la journée de travail `work_date` de
+    `node`. Hors rotation : `<field>__date` (conversion locale par Django,
+    comportement historique) ; en rotation : bornes de relève à relève.
+    """
+    if node is not None and getattr(node, 'team_rotation_enabled', False):
+        start, end = workday_bounds(node, work_date)
+        return {f'{field}__gte': start, f'{field}__lt': end}
+    return {f'{field}__date': work_date}
+
+
 def workday_bounds(node, work_date):
     """
     (début, fin) de la journée de travail `work_date` : début inclus
@@ -79,6 +124,21 @@ def current_team(node, instant=None):
     return (
         DailyTeamAssignment.objects
         .filter(node=node, work_date=business_date(node, instant))
+        .values_list('team', flat=True)
+        .first()
+    )
+
+
+def team_for_work_date(node, work_date):
+    """
+    BUG-161 (B4/B5) : équipe désignée pour la journée de travail `work_date`
+    (quelconque, passée ou courante), ou `None`. Lecture seule.
+    """
+    from production.models import DailyTeamAssignment
+
+    return (
+        DailyTeamAssignment.objects
+        .filter(node=node, work_date=work_date)
         .values_list('team', flat=True)
         .first()
     )

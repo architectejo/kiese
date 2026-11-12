@@ -36,7 +36,7 @@ def create_notification(title, message, severity='INFO', node_origin='CLOUD'):
     )
 
 
-def validate_requested_date(requested_date, config, *, field_label: str):
+def validate_requested_date(requested_date, config, *, field_label: str, node=None):
     """
     BUG-083 (« ventes passées », remarque.md l.360) : règle serveur commune à
     toute date métier librement saisissable dans un payload — `invoice_date`/
@@ -52,9 +52,17 @@ def validate_requested_date(requested_date, config, *, field_label: str):
       est actif (sinon le comportement par défaut — refus — reste strictement
       celui d'avant ce ticket).
 
+    BUG-161 (B3) : « aujourd'hui » = la date de travail du nœud
+    (`core.workday.work_date_for`) : date locale hors rotation (comportement
+    historique), journée de relève à relève en mode rotation — une date
+    « future » est alors une date postérieure à la journée de travail
+    courante. `node=None` : date locale.
+
     Retourne un message d'erreur (str) si la date est invalide, sinon `None`.
     """
-    today = timezone.localdate()
+    from .workday import work_date_for
+
+    today = work_date_for(node)
     if requested_date > today:
         return f"{field_label} ne peut pas être une date future ({requested_date} > {today})."
     if requested_date != today and not config.allow_backdated_sales:

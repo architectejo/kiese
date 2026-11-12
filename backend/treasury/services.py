@@ -106,10 +106,15 @@ def regenerate_facturier_reports(node, target_date):
     # dette, CM 0 — BUG-177) et un non-servi (NS) n'est jamais livré : ni
     # l'un ni l'autre ne doit compter dans le cash, le crédit, la valeur
     # vendue ni le détail par catégorie du rapport facturier.
+    # BUG-161 (B3) : « livrées ce jour-là » = dans la journée de travail
+    # `target_date` du nœud (date locale hors rotation, relève à relève en
+    # mode rotation) — jamais la date UTC (BUG-189).
+    from core.workday import delivered_on_work_date_filter
+
     invoices = Invoice.objects.filter(
         node=node,
-        delivered_at__date=target_date,
         status=Invoice.Status.DELIVERED,
+        **delivered_on_work_date_filter(node, target_date),
     ).exclude(
         special_code__in=[Invoice.SpecialCode.RG, Invoice.SpecialCode.NS],
     ).select_related('facturier')

@@ -3,6 +3,7 @@ import datetime
 from decimal import Decimal
 from django.db.models import Sum, Count, Q, F, ExpressionWrapper, DecimalField as DjDecimalField
 from django.http import StreamingHttpResponse
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -113,7 +114,7 @@ def _cashflow_for_year(year: int) -> dict:
     total_in  = totals['total_in']  or Decimal('0')
     total_out = totals['total_out'] or Decimal('0')
     net = total_in - total_out
-    last = entries.order_by('-date', '-created_at').first()
+    last = entries.order_by(*CashbookEntry.chain_order_desc()).first()
     return {
         'year': year,
         'total_entries': total_in,
@@ -134,7 +135,7 @@ def _balance_sheet_for_year(year: int) -> dict:
     )['t'] or Decimal('0')
 
     # Cash position
-    last_entry = CashbookEntry.objects.order_by('-date', '-created_at').first()
+    last_entry = CashbookEntry.objects.order_by(*CashbookEntry.chain_order_desc()).first()
     cash = last_entry.running_balance if last_entry else Decimal('0')
 
     return {
@@ -224,7 +225,7 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
         error = _validate_month_year(None, year_param)
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
-        year = int(year_param) if year_param is not None else datetime.date.today().year
+        year = int(year_param) if year_param is not None else timezone.localdate().year
         node_id = request.query_params.get('node')
         qs = CommissionPeriod.objects.filter(year=year).select_related('node')
         if node_id:

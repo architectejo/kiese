@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FiUsers, FiClock, FiRefreshCw } from 'react-icons/fi';
 import { Modal } from '@/components/shared/Modal';
-import { getErrorDetail } from '@/api/errors';
+import { getErrorDetail, isPreviousWorkdayOpenError } from '@/api/errors';
 import { productionApi, ServiceTeam, TeamAssignment } from '@/api/services';
 
 // BUG-161 (F2) : désignation quotidienne de l'équipe de service (rotation de 24 h).
@@ -41,21 +41,44 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
     setError(null);
   }, [assignment.work_date, assignment.team, assignment.suggested]);
 
-  const submit = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    setError(null);
+  // BUG-196 : le serveur refuse (400 PREVIOUS_WORKDAY_OPEN) tant que le reste du jour précédent
+  // n'est pas confirmé. Message dédié (pas d'erreur générique) + relance automatique.
+  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  const inFlight = useRef(false);
+
+  const attempt = async (silent: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    if (!silent) { setSubmitting(true); setError(null); }
     try {
       await productionApi.teamAssignment.set(selected);
       // Relecture : le serveur reste la source de vérité (journée, désignant, suggestion).
       const { data } = await productionApi.teamAssignment.get();
+      setBlockedMessage(null);
       onAssigned(data);
     } catch (err: unknown) {
-      setError(getErrorDetail(err, "Impossible d'enregistrer l'équipe de service."));
+      if (isPreviousWorkdayOpenError(err)) {
+        setError(null);
+        setBlockedMessage(getErrorDetail(err, "Confirmez d'abord le reste du jour précédent."));
+      } else if (!silent) {
+        setBlockedMessage(null);
+        setError(getErrorDetail(err, "Impossible d'enregistrer l'équipe de service."));
+      }
     } finally {
-      setSubmitting(false);
+      inFlight.current = false;
+      if (!silent) setSubmitting(false);
     }
   };
+  const submit = () => attempt(false);
+
+  // Tant que le refus persiste, on retente toutes les 5 s : dès que la clôture (forcée ou
+  // confirmée) a eu lieu, la désignation passe sans action de l'utilisateur.
+  useEffect(() => {
+    if (!blockedMessage) return;
+    const id = setInterval(() => { void attempt(true); }, 5000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockedMessage, selected]);
 
   const teamButton = (team: ServiceTeam) => {
     const active = selected === team;
@@ -87,7 +110,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
 
   const submitLabel = submitting
     ? 'Enregistrement...'
-    : error
+    : error || blockedMessage
       ? 'Réessayer'
       : assignment.team === null
         ? `Confirmer l'équipe ${selected}`
@@ -120,7 +143,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             }}
           >
-            {error ? <FiRefreshCw /> : <FiUsers />}
+            {error || blockedMessage ? <FiRefreshCw /> : <FiUsers />}
             {submitLabel}
           </button>
         </>
@@ -144,6 +167,20 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
         <FiClock />
         Relève des équipes à {formatHandover(assignment.handover_time)} chaque jour.
       </p>
+
+      {blockedMessage && (
+        <div role="status" style={{
+          marginTop: '12px', fontSize: '0.8rem', color: 'hsl(var(--color-warning))',
+          backgroundColor: 'hsl(var(--color-warning) / 0.1)', border: '1px solid hsl(var(--color-warning) / 0.4)',
+          padding: '10px', borderRadius: 'var(--radius-sm)', lineHeight: 1.4,
+        }}>
+          <strong>Confirmez d'abord le reste du jour précédent.</strong>
+          <div style={{ marginTop: '4px' }}>{blockedMessage}</div>
+          <div style={{ marginTop: '4px', fontSize: '0.72rem' }}>
+            Nouvelle tentative automatique toutes les 5 secondes ; vous pouvez aussi appuyer sur « Réessayer ».
+          </div>
+        </div>
+      )}
 
       {error && (
         <div role="alert" style={{

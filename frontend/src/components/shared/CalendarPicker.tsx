@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { useWorkDate } from '@/store/workDateStore';
 
 // BUG-128 (docs/qa/REGISTRE_BUGS.md) : calendrier mensuel léger, sans dépendance npm,
 // destiné à remplacer le sélecteur natif `<input type="date">` à l'intérieur d'une
@@ -39,11 +40,11 @@ const parseIso = (iso: string): Date => {
   return new Date(y, (m || 1) - 1, d || 1);
 };
 
-const todayIso = (): string => toIso(new Date());
-
 export const CalendarPicker: React.FC<CalendarPickerProps> = ({ value, onSelect, maxDate }) => {
   const selected = value ? parseIso(value) : new Date();
-  const effectiveMaxDate = maxDate ?? todayIso();
+  // BUG-161 (F3) : par défaut, dernier jour sélectionnable = journée de travail du serveur.
+  const workDate = useWorkDate();
+  const effectiveMaxDate = maxDate ?? workDate;
   const [viewYear, setViewYear] = useState(selected.getFullYear());
   const [viewMonth, setViewMonth] = useState(selected.getMonth());
 
@@ -65,7 +66,7 @@ export const CalendarPicker: React.FC<CalendarPickerProps> = ({ value, onSelect,
     if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0); } else { setViewMonth(m => m + 1); }
   };
 
-  const today = todayIso();
+  const today = workDate;
 
   return (
     <div style={{ width: '100%', userSelect: 'none' }}>

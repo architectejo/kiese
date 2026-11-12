@@ -37,7 +37,7 @@ def _verify_full_chain():
     """
     from treasury.models import CashbookEntry
 
-    entries = list(CashbookEntry.objects.select_related('node').order_by('date', 'created_at'))
+    entries = list(CashbookEntry.chain_queryset().select_related('node'))
     return verify_cashbook_chain(entries)
 
 
@@ -133,7 +133,7 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
             # Persist snapshot
             snapshot, _ = BlockchainSnapshot.objects.update_or_create(
                 node=node,
-                snapshot_date=date.today(),
+                snapshot_date=timezone.localdate(),
                 defaults={
                     'total_entries':    stats['total_entries'],
                     'tampered_entries': stats['tampered_count'],
@@ -186,7 +186,7 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({
             'checked_nodes': len(results),
-            'check_date':    date.today(),
+            'check_date':    timezone.localdate(),
             'results':       results,
             'all_intact':    all(r['is_intact'] for r in results),
         })

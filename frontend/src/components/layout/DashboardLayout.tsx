@@ -19,6 +19,7 @@ import { useOpeningConfirmationStore } from '@/store/openingConfirmationStore';
 import { AutoClosedNoticeModal } from '@/components/production/AutoClosedNoticeModal';
 import { TeamAssignmentModal } from '@/components/production/TeamAssignmentModal';
 import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
+import { useWorkDateStore } from '@/store/workDateStore';
 import { AutoClosedNotice, isAutoClosedStorageKey, useShiftEndStore } from '@/store/shiftEndStore';
 
 interface SidebarItemProps {
@@ -163,11 +164,17 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const { data } = await productionApi.sessions.shiftEndStatus();
       if (data.pending_validation) {
-        setShiftEndPending({ team: data.team, session: data.session, remaining: data.remaining });
+        // Rotation (B5) : `work_date` = journée de travail à clôturer, `current_work_date` n'existe
+        // qu'en rotation. Hors rotation ces clés sont absentes : comportement inchangé.
+        setShiftEndPending({
+          team: data.team, session: data.session, remaining: data.remaining,
+          ...(data.current_work_date ? { workDate: data.work_date, rotation: true } : {}),
+        });
       } else if (data.auto_closed) {
         // BUG-157 : annonce ajoutée à la file ET persistée — le backend ne
         // renverra plus `auto_closed: true` pour cette fournée.
-        if (shiftEndNodeKey) notifyAutoClosed(shiftEndNodeKey, data.team);
+        // Rotation : date de l'annonce = `work_date` de la journée clôturée (serveur), pas la date du poste.
+        if (shiftEndNodeKey) notifyAutoClosed(shiftEndNodeKey, data.team, data.current_work_date ? data.work_date : undefined);
         if (allowImmediateRetry) {
           await fetchShiftEndStatus(false);
         }
@@ -212,6 +219,10 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   // `team: null` tardive) est ignoré : il ne doit pas rouvrir la boîte.
   const teamReqSeqRef = useRef(0);
   const teamAssignedSeqRef = useRef(0);
+  // BUG-161 : compteur de sondage transmis à la boîte « stock de départ » (rotation seulement)
+  // pour qu'elle relise `opening-confirmation` à l'heure de relève sans rechargement de page.
+  // Incrémenté par le sondage de 10 s existant, après désignation et après clôture forcée.
+  const [openingPollTick, setOpeningPollTick] = useState(0);
 
   const fetchTeamAssignment = useCallback(async (forceFlagRefresh = false): Promise<void> => {
     if (!canSeeShiftEnd || !user?.node) return;
@@ -229,6 +240,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       if (seq <= teamAssignedSeqRef.current) return;
       if (!enabled) {
         setTeamAssignment(null);
+        // Plus de rotation : l'annonce de journée « rotation » du serveur n'est plus valable.
+        if (useWorkDateStore.getState().rotation) useWorkDateStore.getState().clearWorkDate();
         return;
       }
       const { data } = await productionApi.teamAssignment.get();
@@ -250,13 +263,19 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestTick]);
 
-  // Priorité des boîtes forcées : la DÉSIGNATION D'ÉQUIPE passe d'abord. Tant qu'elle est
-  // requise (équipe du jour non désignée), les autres boîtes forcées (stock de départ,
-  // clôture forcée BUG-156, annonce BUG-157) restent MONTÉES mais « suspendues » (masquées et
-  // neutralisées, prop `suspended` de `Modal`) : BUG-188, leur saisie en cours (y compris
-  // négative) n'est jamais perdue. Elles réapparaissent telles quelles après la désignation.
+  // Priorité des boîtes forcées (BUG-188 + BUG-161) : tant que l'équipe du jour n'est pas
+  // désignée, la boîte « stock de départ » reste MONTÉE mais « suspendue » (masquée et
+  // neutralisée, prop `suspended` de `Modal`), sa saisie n'est jamais perdue. Ordre en rotation
+  // à la relève : reste du jour -> désignation -> stock de départ (voir `restStepActive`).
   const teamAssignmentRequired = canSeeShiftEnd && rotationEnabled && teamAssignment !== null && teamAssignment.team === null;
-  const teamAssignmentOpen = teamAssignmentRequired || (canSeeShiftEnd && rotationEnabled && teamAssignment !== null && teamEditOpen);
+  // BUG-161 : ordre à la relève, en rotation : (1) reste du jour de la journée qui se termine
+  // (boîte forcée BUG-156 ou annonce de clôture automatique BUG-157), (2) désignation de l'équipe
+  // de service, (3) stock de départ. La désignation attend donc la fin de l'étape (1) ; les boîtes
+  // (1) ne sont plus suspendues par la désignation (leur saisie, y compris négative, est ainsi
+  // préservée : BUG-188). Hors rotation, `teamAssignmentRequired` est toujours faux : inchangé.
+  const restStepActive = canSeeShiftEnd && rotationEnabled && (shiftEndPending !== null || autoClosedNotices.length > 0);
+  const teamAssignmentBlocking = teamAssignmentRequired && !restStepActive;
+  const teamAssignmentOpen = teamAssignmentBlocking || (canSeeShiftEnd && rotationEnabled && teamAssignment !== null && teamEditOpen);
 
   const handleAutoClosedConfirm = (notice: AutoClosedNotice) => {
     if (shiftEndNodeKey) confirmAutoClosedNotice(shiftEndNodeKey, notice);
@@ -264,6 +283,9 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   const handleForcedClosed = () => {
     setShiftEndPending(null);
+    // BUG-161 : le reste du jour confirmé devient le stock de départ proposé (snapshot) : la
+    // boîte « stock de départ » relit tout de suite sa proposition.
+    setOpeningPollTick(t => t + 1);
     // Re-sonde immédiatement : l'autre équipe peut elle aussi être en
     // attente (ou déjà clôturée automatiquement) au moment où celle-ci
     // vient d'être traitée.
@@ -284,6 +306,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       fetchNotifications();
       fetchShiftEndStatus();
       fetchTeamAssignment();
+      // BUG-161 : même cycle (pas de second `setInterval`) ; sans effet hors rotation.
+      if (rotationEnabledRef.current) setOpeningPollTick(t => t + 1);
     }, 10000);
     return () => clearInterval(interval);
   }, [fetchShiftEndStatus, fetchTeamAssignment]);
@@ -1099,13 +1123,18 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           changement de route via `routeKey`. */}
       {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
         <OpeningStockConfirmationModal
-          suspended={teamAssignmentRequired}
+          // BUG-161 : ordre à la relève = reste du jour de la journée qui se termine (boîte forcée
+          // BUG-156) -> désignation d'équipe -> stock de départ. En rotation, la boîte reste montée
+          // mais masquée tant que la désignation est requise OU qu'un reste du jour est à confirmer.
+          suspended={teamAssignmentRequired || restStepActive}
+          pollKey={rotationEnabled ? openingPollTick : undefined}
+          handoverTime={teamAssignment?.handover_time ? teamAssignment.handover_time.slice(0, 5) : null}
           routeKey={location.pathname}
           // BUG-151 : déclenchement manuel depuis « Production & Stocks »
           // (`OpeningConfirmationManualSection.tsx`), porté par un petit
           // store partagé plutôt que par des props — le composant reste
           // monté une seule fois ici (consigne inchangée, BUG-134).
-          forceOpenForTeam={forceOpenForTeam}
+          forceOpenForTeam={rotationEnabled ? null : forceOpenForTeam}
           onManualClose={clearManualConfirmation}
         />
       )}
@@ -1116,7 +1145,6 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           `shiftEndStore.ts` rempli par le sondage périodique ci-dessus. */}
       {canSeeShiftEnd && shiftEndPending && (
         <CloseSessionModal
-          suspended={teamAssignmentRequired}
           isOpen={true}
           session={null}
           onClose={() => { /* non fermable sans soumission en mode forcé */ }}
@@ -1136,7 +1164,6 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           la main à la modale forcée restée montée (saisie conservée). */}
       {canSeeShiftEnd && autoClosedNotices.length > 0 && (
         <AutoClosedNoticeModal
-          suspended={teamAssignmentRequired}
           notice={autoClosedNotices[0]}
           pendingCount={autoClosedNotices.length}
           onConfirm={handleAutoClosedConfirm}
@@ -1146,7 +1173,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
       {/* BUG-161 (F2) : désignation de l'équipe de service du jour (rotation de 24 h).
           Montée une seule fois ici. Obligatoire (non fermable) tant que `team` est nul ;
           fermable en mode correction (indicateur « Équipe de service » de la barre
-          latérale). Passe AVANT les autres boîtes forcées (voir `teamAssignmentRequired`). */}
+          latérale). Passe APRÈS le reste du jour de la journée qui se termine (boîte forcée /
+          annonce) et AVANT le stock de départ (voir `restStepActive`). */}
       {teamAssignmentOpen && teamAssignment && (
         <TeamAssignmentModal
           assignment={teamAssignment}
@@ -1155,6 +1183,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
             teamAssignedSeqRef.current = teamReqSeqRef.current;
             setTeamAssignment(a);
             setTeamEditOpen(false);
+            // BUG-161 : l'équipe désignée déclenche la demande du stock de départ sans attendre 10 s.
+            setOpeningPollTick(t => t + 1);
           }}
           onClose={() => setTeamEditOpen(false)}
         />

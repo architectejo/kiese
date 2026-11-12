@@ -6,10 +6,12 @@ import {
 } from 'react-icons/fi';
 import {
   productionApi, coreApi, ConsumableStock, ConsumableCount, FlourHistoryEntry,
-  ProductionSession, BreadTransfer, BreadDisposal, BreadStock, BakeryNode, BreadPrice
+  ProductionSession, BreadTransfer, BreadDisposal, BreadStock, BakeryNode, BreadPrice, ServiceTeam
 } from '@/api/services';
-import { getErrorDetail } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
+import { useTeamAssignmentStore, TEAM_NOT_ASSIGNED_MESSAGE } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
+import { getWorkDate, localIsoDate, useRotationActive, useSelectedWorkDay, useWorkDateStore } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
@@ -20,28 +22,29 @@ const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT
 
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
-
-const isTodayUtc = (iso?: string): boolean =>
-  !!iso && iso.startsWith(new Date().toISOString().split('T')[0]);
+// BUG-161 (F3) : plus de date UTC. Un horodatage `created_at` (UTC) est converti en date LOCALE
+// avant comparaison à la date du jour ; en rotation de 24 h c'est une approximation de la
+// journée de travail (les sorties n'ont pas de `work_date` côté API).
+const isOnDay = (iso: string | undefined, day: string): boolean =>
+  !!iso && localIsoDate(new Date(iso)) === day;
 
 // BUG-164 : au lieu de lire TOUTES les sorties puis de garder les 20 premières, on demande
 // 20 lignes au serveur (tri -created_at). Le KPI « Pains non valorisés » (sorties du jour)
 // reste exact : si la dernière ligne lue est encore d'aujourd'hui, on lit la page suivante
 // (les sorties du jour forment un préfixe de la liste triée), jamais de total partiel.
-async function fetchDisposalsPage(scoped: Record<string, string>): Promise<{ shown: BreadDisposal[]; todayQty: number }> {
+async function fetchDisposalsPage(scoped: Record<string, string>, day: string): Promise<{ shown: BreadDisposal[]; todayQty: number }> {
   let page = 1;
   const first = await productionApi.disposals.page({ ...scoped, page: '1', page_size: '20' });
   const shown = (first.data.results ?? []).slice(0, 20);
   let all: BreadDisposal[] = first.data.results ?? [];
   let next = first.data.next;
-  while (next && isTodayUtc(all[all.length - 1]?.created_at)) {
+  while (next && isOnDay(all[all.length - 1]?.created_at, day)) {
     page += 1;
     const r = await productionApi.disposals.page({ ...scoped, page: String(page), page_size: '20' });
     all = all.concat(r.data.results ?? []);
     next = r.data.next;
   }
-  const todayQty = all.filter(d => isTodayUtc(d.created_at)).reduce((a, d) => a + (d.quantity || 0), 0);
+  const todayQty = all.filter(d => isOnDay(d.created_at, day)).reduce((a, d) => a + (d.quantity || 0), 0);
   return { shown, todayQty };
 }
 
@@ -139,7 +142,26 @@ export const Production: React.FC = () => {
   // ET « Historique des Fournées ». `sessions` (KPI, formulaire de sortie non standard —
   // filtré à "aujourd'hui" indépendamment de ce sélecteur) reste intentionnellement
   // inchangé ; seul l'affichage de l'historique des fournées utilise `historySessions`.
-  const [selectedDate, setSelectedDate] = useState(todayIso());
+  const [selectedDate, setSelectedDate, workDate] = useSelectedWorkDay();
+  const rotationActive = useRotationActive();
+  // BUG-195 : en rotation, l'équipe de la fournée est l'équipe de service désignée du jour
+  // (le serveur la lit ; le formulaire n'envoie ni `team` ni `date`). `undefined` = pas encore
+  // lue ; `null` = aucune équipe désignée.
+  const [serviceTeam, setServiceTeam] = useState<ServiceTeam | null | undefined>(undefined);
+  const requestTeamAssignment = useTeamAssignmentStore(st => st.requestAssignment);
+  const assignmentTick = useTeamAssignmentStore(st => st.requestTick);
+  useEffect(() => {
+    if (!rotationActive) { setServiceTeam(undefined); return; }
+    let cancelled = false;
+    const read = () => {
+      productionApi.teamAssignment.get()
+        .then(({ data }) => { if (!cancelled) setServiceTeam(data.team); })
+        .catch(() => { /* le sondage du layout réessaie ; la création relit de toute façon */ });
+    };
+    read();
+    const id = setInterval(read, 10000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [rotationActive, assignmentTick]);
   const [historySessions, setHistorySessions] = useState<ProductionSession[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -205,7 +227,7 @@ export const Production: React.FC = () => {
         // BUG-164 : 15 fournées demandées directement au serveur (tri -date).
         productionApi.sessions.page({ ...scopedStrings, page: '1', page_size: '15' }),
         fetchTransfersScoped(nodeFilter || user?.node || undefined),
-        fetchDisposalsPage(scopedStrings),
+        fetchDisposalsPage(scopedStrings, getWorkDate()),
         coreApi.nodes.list(),
         coreApi.breadPrices.list(),
         coreApi.config.get(),
@@ -313,7 +335,7 @@ export const Production: React.FC = () => {
     const entries = Object.entries(countValues).filter(([, v]) => v !== '');
     if (entries.length === 0) { setCountError('Saisissez au moins une quantité physique.'); return; }
     setCountSubmitting(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getWorkDate();
     const nodeId = viewNode || user?.node || '';
     try {
       await Promise.all(entries.map(([ct, qty]) =>
@@ -352,14 +374,26 @@ export const Production: React.FC = () => {
       .filter(bp => (quantities[bp.id] || 0) > 0)
       .map(bp => ({ bread_price: bp.id, quantity: quantities[bp.id] }));
     if (lines.length === 0) { setProdError('Déclarez au moins une catégorie de pains.'); return; }
+    const inRotation = useWorkDateStore.getState().rotation;
     try {
+      if (inRotation) {
+        // Relecture : l'équipe a pu être désignée/corrigée depuis la dernière lecture.
+        const { data: assignment } = await productionApi.teamAssignment.get();
+        setServiceTeam(assignment.team);
+        if (assignment.team === null) {
+          setProdError(TEAM_NOT_ASSIGNED_MESSAGE.replace('avant de facturer', 'avant de déclarer une fournée'));
+          requestTeamAssignment();
+          return;
+        }
+      }
       const consumablesPayload = Object.entries(consumablesUsed)
         .filter(([, qty]) => qty !== '' && parseFloat(qty.replace(',', '.')) > 0)
         .map(([ct, qty]) => ({ consumable_type: ct, quantity: parseFloat(qty.replace(',', '.')) }));
       await productionApi.sessions.create({
         flour_sacks_used: flourSacks.toString(),
-        date: new Date().toISOString().split('T')[0],
-        team: selTeam,
+        // Rotation : le serveur décide de la journée de travail et de l'équipe désignée
+        // (ni `date` ni `team`, BUG-195) ; sinon date locale et équipe choisie.
+        ...(inRotation ? {} : { date: getWorkDate(), team: selTeam }),
         lines,
         consumables_used: consumablesPayload,
       });
@@ -367,6 +401,11 @@ export const Production: React.FC = () => {
       setConsumablesUsed({ SALT: '', YEAST: '', OIL: '' });
       await loadData();
     } catch (err: unknown) {
+      if (isTeamNotAssignedError(err)) {
+        setProdError(TEAM_NOT_ASSIGNED_MESSAGE.replace('avant de facturer', 'avant de déclarer une fournée'));
+        requestTeamAssignment();
+        return;
+      }
       const d = axios.isAxiosError(err)
         ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
         : undefined;
@@ -696,10 +735,24 @@ export const Production: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Équipe</label>
-                  <select value={selTeam} onChange={e => setSelTeam(e.target.value as 'A' | 'B')} className="form-input" style={{ fontSize: '0.75rem', height: '30px' }}>
-                    <option value="A">Équipe A</option>
-                    <option value="B">Équipe B</option>
-                  </select>
+                  {rotationActive ? (
+                    <div
+                      className="form-input"
+                      data-testid="service-team-locked"
+                      style={{ fontSize: '0.75rem', minHeight: '30px', display: 'flex', alignItems: 'center', fontWeight: 700 }}
+                    >
+                      {serviceTeam === undefined
+                        ? 'Équipe de service : chargement…'
+                        : serviceTeam === null
+                          ? 'Équipe de service : non désignée'
+                          : `Équipe de service : ${serviceTeam}`}
+                    </div>
+                  ) : (
+                    <select value={selTeam} onChange={e => setSelTeam(e.target.value as 'A' | 'B')} className="form-input" style={{ fontSize: '0.75rem', height: '30px' }}>
+                      <option value="A">Équipe A</option>
+                      <option value="B">Équipe B</option>
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Nbre sac farine consommer *</label>
@@ -832,7 +885,9 @@ export const Production: React.FC = () => {
           {/* BUG-151 : accès manuel à la confirmation du reste d'hier pour une AUTRE
               équipe que celle déjà confirmée (même garde de rôle que la boîte modale
               automatique dans DashboardLayout.tsx). */}
-          {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
+          {/* BUG-161 : en rotation, une seule équipe de service par journée : confirmation pour
+              « l'autre équipe » (BUG-151) sans objet, section masquée. */}
+          {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && !rotationActive && (
             <OpeningConfirmationManualSection onConfirmed={() => loadData(viewNode || undefined)} />
           )}
 
@@ -1275,7 +1330,7 @@ export const Production: React.FC = () => {
                 <label style={{ display: 'block', fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '3px', textTransform: 'uppercase' }}>Session de Production *</label>
                 <select value={dSession} onChange={e => setDSession(e.target.value)} className="form-input" style={{ fontSize: '0.68rem', height: '30px' }}>
                   <option value="">— Sélectionner la fournée —</option>
-                  {sessions.filter(s => s.date === new Date().toISOString().slice(0, 10)).map(s => (
+                  {sessions.filter(s => s.date === workDate).map(s => (
                     <option key={s.id} value={s.id}>
                       Éq.{s.team} · {s.node_display || s.node} · {s.total_breads} pains
                     </option>

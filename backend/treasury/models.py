@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import F, Max
 from django.utils.translation import gettext_lazy as _
 
 from core.models import SyncableModel, Node
@@ -289,8 +290,12 @@ class CashbookEntry(SyncableModel):
     entry_amount    = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Entrée (FC)"))
     exit_amount     = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Sortie (FC)"))
     running_balance = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Solde Cumulé (FC)"))
+    # BUG-198 : PROTECT (et non SET_NULL) — `source_closure` est couvert par le
+    # hash (BUG-003) : supprimer une clôture versée passait ce champ à NULL et
+    # cassait la chaîne. Le livre de caisse doit être supprimé AVANT ses
+    # clôtures (core/reset.py respecte déjà cet ordre).
     source_closure  = models.ForeignKey(
-        CashClosure, on_delete=models.SET_NULL,
+        CashClosure, on_delete=models.PROTECT,
         null=True, blank=True, related_name='cashbook_entries',
         verbose_name=_("Clôture source")
     )
@@ -313,6 +318,15 @@ class CashbookEntry(SyncableModel):
     # rapport ingenieur-blockchain-2026-10-22.md).
     previous_hash = models.CharField(max_length=64, blank=True, default='', unique=True, verbose_name=_("Hash Précédent"))
     is_tampered   = models.BooleanField(default=False, verbose_name=_("Altéré (Alerte Blockchain)"))
+
+    # BUG-199 : rang de chaînage. Le chaînage (`previous_hash`) suit l'ordre
+    # d'AJOUT ; l'ancien tri (date, created_at) pouvait en différer (versement
+    # de la journée J après la journée J+1 d'une autre boulangerie) et
+    # produisait une fausse falsification. `chain_seq` (monotone, unique) est
+    # l'ordre de référence unique pour l'écriture, le solde précédent et la
+    # vérification. Hors formule de hash (les chaînes existantes restent
+    # valides). Rempli par `save()` ; backfill par la migration 0016.
+    chain_seq = models.BigIntegerField(null=True, blank=True, unique=True, editable=False, verbose_name=_("Rang dans la chaîne"))
 
     # BUG-083 : écriture de correction (« ventes passées », CLAUDE.md §5.5 —
     # point non négociable : aucune `CashbookEntry` existante n'est jamais
@@ -365,6 +379,26 @@ class CashbookEntry(SyncableModel):
 
     def __str__(self):
         return f"{self.piece_number} | {self.date} | {self.label} | {self.running_balance} FC"
+
+    # Ordre de chaînage de référence (BUG-199). Les lignes sans rang (cas
+    # théorique avant backfill) sont considérées comme les plus anciennes.
+    @staticmethod
+    def chain_order():
+        return [F('chain_seq').asc(nulls_first=True), 'date', 'created_at', 'pk']
+
+    @staticmethod
+    def chain_order_desc():
+        return [F('chain_seq').desc(nulls_last=True), '-date', '-created_at', '-pk']
+
+    @classmethod
+    def chain_queryset(cls):
+        return cls.objects.order_by(*cls.chain_order())
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.chain_seq is None:
+            last = CashbookEntry.objects.aggregate(m=Max('chain_seq'))['m'] or 0
+            self.chain_seq = last + 1
+        super().save(*args, **kwargs)
 
 
 class DirectionCashCount(models.Model):

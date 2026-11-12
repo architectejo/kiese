@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Modal } from '@/components/shared/Modal';
 import { SignedIntegerField } from '@/components/production/SignedIntegerField';
-import { getErrorDetail } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
+import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
 import {
   productionApi,
@@ -54,6 +55,15 @@ interface OpeningStockConfirmationModalProps {
   onManualClose?: () => void;
   /** BUG-188 : masquée mais montée (saisie conservée) pendant la désignation d'équipe. */
   suspended?: boolean;
+  /**
+   * BUG-161 (rotation de 24 h) : compteur incrémenté par le layout dans son cycle de sondage
+   * existant (pas de second `setInterval`). Un changement relit le GET en silence (sans écraser
+   * une saisie) : la boîte s'ouvre d'elle-même à l'heure de relève, sans rechargement de page.
+   * `undefined` hors rotation : aucun sondage supplémentaire, comportement inchangé.
+   */
+  pollKey?: number;
+  /** BUG-161 : heure de relève de la boulangerie (« HH:MM »), rappelée dans la boîte en rotation. */
+  handoverTime?: string | null;
 }
 
 type DraftLines = Record<number, string>;
@@ -107,7 +117,7 @@ function resolveDefaultTeam(
 }
 
 export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationModalProps> = ({
-  routeKey, forceOpenForTeam = null, onManualClose, suspended = false,
+  routeKey, forceOpenForTeam = null, onManualClose, suspended = false, pollKey, handoverTime = null,
 }) => {
   const { user } = useAuthStore();
   // `UserProfile.team` est `'A' | 'B' | ''` (facturiers/livreurs) — on ne
@@ -138,22 +148,56 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
     };
   }, []);
 
-  const fetchReport = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const requestTeamAssignment = useTeamAssignmentStore(st => st.requestAssignment);
+  // BUG-161 : en rotation, la proposition (`qty_proposed`) = reste de l'équipe précédente ; elle
+  // n'écrase jamais une saisie en cours (`touchedRef`), seulement un formulaire intact.
+  const proposalKeyRef = useRef('');
+  const touchedRef = useRef(false);
+
+  const fetchReport = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const response = await productionApi.openingConfirmation.get();
-      setReport(response.data);
-      const defaultTeam = resolveDefaultTeam(response.data, userTeam);
-      setSelectedTeam(defaultTeam);
-      setDraft(buildDraftFromProposed(response.data));
+      const data = response.data;
+      setReport(data);
+      if (data.rotation) {
+        // Rotation : une seule équipe de service par journée (celle désignée), plus de choix A/B.
+        const workDay = data.work_date ?? data.date;
+        const key = `${workDay}|${data.categories.map(c => `${c.bread_price}:${c.qty_proposed}`).join(',')}`;
+        if (!proposalKeyRef.current.startsWith(`${workDay}|`)) touchedRef.current = false;
+        if (key !== proposalKeyRef.current) {
+          proposalKeyRef.current = key;
+          if (!touchedRef.current) setDraft(buildDraftFromProposed(data));
+        }
+        setSelectedTeam(data.team ?? data.opening_team ?? 'A');
+      } else {
+        proposalKeyRef.current = '';
+        const defaultTeam = resolveDefaultTeam(data, userTeam);
+        setSelectedTeam(defaultTeam);
+        setDraft(buildDraftFromProposed(data));
+      }
     } catch (err: unknown) {
-      setError(getErrorDetail(err, "Erreur lors du chargement du stock de départ."));
+      if (!silent) setError(getErrorDetail(err, "Erreur lors du chargement du stock de départ."));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userTeam]);
+
+  // BUG-161 : relecture silencieuse à chaque tick du sondage du layout (rotation seulement).
+  const lastPollKeyRef = useRef(pollKey);
+  useEffect(() => {
+    if (pollKey === undefined || pollKey === lastPollKeyRef.current) {
+      lastPollKeyRef.current = pollKey;
+      return;
+    }
+    lastPollKeyRef.current = pollKey;
+    void fetchReport(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollKey]);
 
   // Montage + chaque changement de route (routeKey).
   useEffect(() => {
@@ -186,7 +230,10 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
   // l'affichage automatique).
   const isOpen = isManualMode || ((needsConfirmation || hasVisibleAdjustmentMessage) && dismissedForRoute !== routeKey);
 
+  const isRotation = report?.rotation === true;
+
   const handleQtyChange = (breadPriceId: number, value: string) => {
+    touchedRef.current = true;
     setDraft(prev => ({ ...prev, [breadPriceId]: value }));
   };
 
@@ -206,7 +253,12 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
         // BUG-162 : un stock de départ négatif est enregistré tel quel (décision client).
         return { bread_price: category.bread_price, qty: Number.isFinite(parsed) ? parsed : 0 };
       });
-      const { data } = await productionApi.openingConfirmation.submit({ team: selectedTeam, lines });
+      // Rotation : le serveur décide de l'équipe (désignée) et de la journée ; ni `team` ni `date`.
+      const { data } = await productionApi.openingConfirmation.submit(
+        isRotation ? { lines } : { team: selectedTeam, lines },
+      );
+      touchedRef.current = false;
+      proposalKeyRef.current = '';
       // BUG-137 : la boîte modale confirme toujours UNE catégorie à la fois
       // pour l'équipe sélectionnée au moment de la soumission — on résout
       // les libellés avant que `fetchReport` ne remplace `report`.
@@ -233,6 +285,10 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
         onManualClose?.();
       }
     } catch (err: unknown) {
+      if (isTeamNotAssignedError(err)) {
+        // BUG-161 : équipe de service non désignée — la boîte de désignation se rouvre.
+        requestTeamAssignment();
+      }
       setError(getErrorDetail(err, "Erreur lors de la validation du stock de départ."));
     } finally {
       setSubmitting(false);
@@ -265,7 +321,9 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       subtitle={
         isManualMode
           ? `Confirmation volontaire du reste d'hier pour l'équipe ${selectedTeam} (demande manuelle depuis Production & Stocks).`
-          : "Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
+          : isRotation
+            ? `Équipe de service : ${selectedTeam}${handoverTime ? ` — relève de ${handoverTime}` : ''}. Confirmez ou corrigez le reste de l'équipe précédente pour démarrer la journée de travail.`
+            : "Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
       }
       maxWidth="560px"
       closeOnBackdropClick={false}
@@ -286,7 +344,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
               style={{ padding: '10px 18px', fontSize: '0.85rem' }}
               disabled={submitting || loading || !report}
             >
-              {submitting ? 'Validation...' : `Valider pour l'équipe ${selectedTeam}`}
+              {submitting ? 'Validation...' : isRotation && !isManualMode ? 'Valider le stock de départ' : `Valider pour l'équipe ${selectedTeam}`}
             </button>
           </>
         ) : (
@@ -346,6 +404,14 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
 
       {report && (needsConfirmation || isManualMode) && (
         <>
+          {isRotation && !isManualMode ? (
+            <div style={{ marginBottom: '16px', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid hsl(var(--border-color))', fontSize: '0.85rem' }}>
+              <strong>Équipe de service du jour : {selectedTeam}</strong>
+              <div style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))', marginTop: '4px' }}>
+                Les quantités proposées sont le reste de l'équipe précédente.
+              </div>
+            </div>
+          ) : (
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Équipe concernée
@@ -374,6 +440,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
               </p>
             )}
           </div>
+          )}
 
           <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Pains restants par catégorie

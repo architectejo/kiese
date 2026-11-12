@@ -180,7 +180,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         """Clients who placed at least one order in the last 30 days."""
         from datetime import date, timedelta
         from django.db.models import Count, Q
-        cutoff = date.today() - timedelta(days=30)
+        cutoff = timezone.localdate() - timedelta(days=30)
         qs = self.get_queryset().annotate(
             recent_orders=Count('invoices', filter=Q(invoices__invoice_date__gte=cutoff))
         ).filter(recent_orders__gt=0)

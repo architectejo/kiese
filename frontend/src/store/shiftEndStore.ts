@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ShiftEndRemainingLine, ShiftEndTeam } from '@/api/services';
+import { localIsoDate } from '@/store/workDateStore';
 
 /**
  * BUG-156 (docs/qa/REGISTRE_BUGS.md, volet frontend de BUG-155) : petit état
@@ -28,6 +29,10 @@ export interface ShiftEndPendingState {
   team: ShiftEndTeam;
   session: string;
   remaining: ShiftEndRemainingLine[];
+  /** BUG-161 (B5), rotation seulement : journée de travail À CLÔTURER (AAAA-MM-JJ, fournie par le serveur). */
+  workDate?: string;
+  /** BUG-161 : vrai si la boulangerie est en rotation de 24 h (textes « journée de travail »). */
+  rotation?: boolean;
 }
 
 /** Comparaison en profondeur (équipe, session, lignes `remaining`). */
@@ -35,6 +40,7 @@ const samePending = (a: ShiftEndPendingState | null, b: ShiftEndPendingState | n
   if (a === b) return true;
   if (a === null || b === null) return false;
   if (a.team !== b.team || a.session !== b.session) return false;
+  if (a.workDate !== b.workDate || a.rotation !== b.rotation) return false;
   if (a.remaining.length !== b.remaining.length) return false;
   return a.remaining.every((line, i) => {
     const other = b.remaining[i];
@@ -47,9 +53,12 @@ const samePending = (a: ShiftEndPendingState | null, b: ShiftEndPendingState | n
 /** Annonce de clôture automatique en attente de confirmation (BUG-157). */
 export interface AutoClosedNotice {
   team: ShiftEndTeam;
-  /** Jour (heure locale du poste) où la clôture automatique a été constatée,
-   *  au format `AAAA-MM-JJ`. */
+  /** Jour où la clôture automatique a été constatée, au format `AAAA-MM-JJ` : en rotation
+   *  (BUG-161) la `work_date` de la journée clôturée fournie par le serveur, sinon la date
+   *  locale du poste. */
   date: string;
+  /** BUG-161 : annonce d'une boulangerie en rotation de 24 h (textes « journée de travail »). */
+  rotation?: boolean;
 }
 
 const STORAGE_PREFIX = 'kiese_shift_end_auto_closed:';
@@ -61,7 +70,8 @@ const isNotice = (value: unknown): value is AutoClosedNotice => {
   const candidate = value as Record<string, unknown>;
   return (candidate.team === 'A' || candidate.team === 'B')
     && typeof candidate.date === 'string'
-    && /^\d{4}-\d{2}-\d{2}$/.test(candidate.date);
+    && /^\d{4}-\d{2}-\d{2}$/.test(candidate.date)
+    && (candidate.rotation === undefined || typeof candidate.rotation === 'boolean');
 };
 
 const sameNotice = (a: AutoClosedNotice, b: AutoClosedNotice): boolean =>
@@ -78,7 +88,7 @@ const readNotices = (nodeKey: string): AutoClosedNotice[] => {
     const notices: AutoClosedNotice[] = [];
     parsed.forEach((item: unknown) => {
       if (isNotice(item) && !notices.some(n => sameNotice(n, item))) {
-        notices.push({ team: item.team, date: item.date });
+        notices.push(item.rotation ? { team: item.team, date: item.date, rotation: true } : { team: item.team, date: item.date });
       }
     });
     return notices;
@@ -101,13 +111,6 @@ const writeNotices = (nodeKey: string, notices: AutoClosedNotice[]): void => {
   }
 };
 
-const localToday = (): string => {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
-};
-
 /** Vrai si l'événement `storage` (autre onglet) concerne cette boulangerie. */
 export const isAutoClosedStorageKey = (key: string | null, nodeKey: string): boolean =>
   key === null || key === storageKey(nodeKey);
@@ -124,7 +127,7 @@ interface ShiftEndStoreState {
    *  (montage du layout, rechargement de page, changement dans un autre onglet). */
   loadAutoClosedNotices: (nodeKey: string) => void;
   /** Ajoute une annonce (en fin de file) et la persiste. */
-  notifyAutoClosed: (nodeKey: string, team: ShiftEndTeam) => void;
+  notifyAutoClosed: (nodeKey: string, team: ShiftEndTeam, workDate?: string) => void;
   /** Confirmation explicite : seul chemin qui retire une annonce. */
   confirmAutoClosedNotice: (nodeKey: string, notice: AutoClosedNotice) => void;
 }
@@ -139,8 +142,11 @@ export const useShiftEndStore = create<ShiftEndStoreState>((set) => ({
     samePending(state.pending, pending) ? state : { pending }
   )),
   loadAutoClosedNotices: (nodeKey) => set({ autoClosedNotices: readNotices(nodeKey) }),
-  notifyAutoClosed: (nodeKey, team) => set((state) => {
-    const notice: AutoClosedNotice = { team, date: localToday() };
+  // `workDate` (rotation, fourni par le serveur) = journée clôturée ; sinon date LOCALE du poste.
+  notifyAutoClosed: (nodeKey, team, workDate) => set((state) => {
+    const notice: AutoClosedNotice = workDate
+      ? { team, date: workDate, rotation: true }
+      : { team, date: localIsoDate() };
     // Relit le stockage (source de vérité partagée entre onglets) avant
     // d'ajouter, pour ne perdre aucune annonce déjà en attente.
     const notices = readNotices(nodeKey);

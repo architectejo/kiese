@@ -308,6 +308,30 @@ class DailyBreadStockSnapshot(models.Model):
         return -previous.qty_at_close
 
     @classmethod
+    def last_snapshot_before(cls, node, bread_price, date):
+        """
+        BUG-161 (B4, rotation) : dernier instantané du nœud pour cette
+        catégorie STRICTEMENT avant la journée `date`, TOUTES ÉQUIPES
+        CONFONDUES (le reste de l'équipe A devient le départ de l'équipe B),
+        ou None. Lecture seule ; hors rotation, `reste_du_hier` (par équipe)
+        reste la seule source utilisée.
+        """
+        return (
+            cls.objects
+            .filter(node=node, bread_price=bread_price, date__lt=date)
+            .order_by('-date', '-updated_at', '-pk')
+            .first()
+        )
+
+    @classmethod
+    def reste_du_hier_chained(cls, node, bread_price, date):
+        """Convention de `reste_du_hier` (négatif) sur le chaînage inter-équipes."""
+        previous = cls.last_snapshot_before(node, bread_price, date)
+        if previous is None:
+            return 0
+        return -previous.qty_at_close
+
+    @classmethod
     def record_snapshot(cls, session):
         """
         Capture (upsert) le solde DÉCLARÉ par l'équipe de `session` (une

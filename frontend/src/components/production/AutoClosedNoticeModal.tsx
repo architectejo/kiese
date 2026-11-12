@@ -54,7 +54,9 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
     suspended={suspended}
     onClose={() => { /* non fermable sans confirmation explicite (Échap inclus) */ }}
     title={`Clôture automatique — Équipe ${notice.team}`}
-    subtitle={`Constatée le ${formatNoticeDate(notice.date)}`}
+    subtitle={notice.rotation
+      ? `Journée de travail du ${formatNoticeDate(notice.date)}`
+      : `Constatée le ${formatNoticeDate(notice.date)}`}
     maxWidth="440px"
     closeOnBackdropClick={false}
     showCloseButton={false}
@@ -86,8 +88,18 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
     >
       <FiClock style={{ color: 'hsl(var(--color-warning))', flexShrink: 0, marginTop: '3px' }} />
       <span>
-        Le créneau de l'équipe <strong>{notice.team}</strong> est dépassé depuis plus de 30 minutes
-        sans validation : la fournée a été <strong>clôturée automatiquement</strong> par le système.
+        {notice.rotation ? (
+          <>
+            La journée de travail de l'équipe <strong>{notice.team}</strong> (du {formatNoticeDate(notice.date)}) s'est
+            terminée à l'heure de relève, sans validation depuis plus de 30 minutes : la fournée a été{' '}
+            <strong>clôturée automatiquement</strong> par le système.
+          </>
+        ) : (
+          <>
+            Le créneau de l'équipe <strong>{notice.team}</strong> est dépassé depuis plus de 30 minutes
+            sans validation : la fournée a été <strong>clôturée automatiquement</strong> par le système.
+          </>
+        )}{' '}
         Le reste du jour a été calculé à partir du stock physique enregistré.
       </span>
     </div>

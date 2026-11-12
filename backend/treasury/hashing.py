@@ -175,7 +175,7 @@ GENESIS_HASH = '0' * 64
 
 
 def verify_cashbook_chain(entries):
-    """Parcourt une suite ordonnée (date, created_at) de `CashbookEntry` et
+    """Parcourt une suite ordonnée par rang de chaînage (`chain_seq`, BUG-199) de `CashbookEntry` et
     recalcule le hash attendu de chacune avec la formule canonique.
 
     Fonction UNIQUE de vérification, utilisée à la fois par

@@ -1,6 +1,5 @@
 import random
 import time
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError, OperationalError, transaction
@@ -15,6 +14,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from core.models import Node, BreadPrice, Config
 from core.permissions import IsFacturier, IsLivreur, IsGerant, IsFacturierOrLivreur
 from core.utils import log_activity, create_notification, validate_requested_date as _validate_requested_date
+from core.workday import work_date_for
 from clients.models import Client
 from production.models import _adjust_bread_stock
 from sync.models import DebtMovement
@@ -65,26 +65,66 @@ def _effective_credit_limit(client, node, config):
 # appels existants plus bas dans ce fichier.
 
 
-def _combine_date_with_now_time(target_date):
+def _combine_date_with_now_time(target_date, node=None):
     """
     Construit un `datetime` aware pour `target_date`, en conservant l'heure
     courante (plutôt que minuit) — utilisé pour `delivered_at` quand une
     date antérieure est choisie mais qu'aucune heure de livraison explicite
     n'est fournie (BUG-083). Si `target_date` est aujourd'hui, équivalent à
     `timezone.now()`.
+
+    BUG-161 (B3) : en mode rotation (`node.team_rotation_enabled`),
+    « aujourd'hui » est la journée de travail courante et l'horodatage
+    construit doit RESTER dans la journée de travail `target_date` (de relève
+    à relève) : si l'heure courante est antérieure à la relève, elle
+    appartient au jour calendaire suivant. Hors rotation : comportement
+    historique inchangé.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
     now = timezone.localtime(timezone.now())
+    if node is not None and node.team_rotation_enabled:
+        if target_date == work_date_for(node):
+            return timezone.now()
+        calendar_day = target_date + timedelta(days=1) if now.time() < node.handover_time else target_date
+        return timezone.make_aware(datetime.combine(calendar_day, now.time()), now.tzinfo)
     if target_date == now.date():
         return timezone.now()
     combined = datetime.combine(target_date, now.time())
     return timezone.make_aware(combined, now.tzinfo)
 
 
-def _make_receipt_number(node_code: str) -> str:
-    today = date.today().strftime('%Y%m%d')
-    count = Invoice.objects.filter(node__code=node_code, invoice_date=date.today()).count() + 1
-    return f"{node_code}-{today}-{count:04d}"
+def _default_work_date(user):
+    """
+    BUG-161 (B3) : date de travail par défaut des listes (« du jour ») = celle
+    du nœud de l'utilisateur ; sans nœud (HQ) : date locale. Remplace
+    `date.today()` (fuseau du système, BUG-189).
+    """
+    node = user.node if getattr(user, 'node_id', None) else None
+    return work_date_for(node)
+
+
+def _make_receipt_number(node_code: str, receipt_date=None) -> str:
+    """
+    Numéro de reçu `<code>-<AAAAMMJJ>-<NNNN>`. `receipt_date` = `invoice_date`
+    de la facture (BUG-197 : préfixe ET compteur portent sur le MÊME jour, y
+    compris pour une vente rétroactive) ; défaut : date locale (jamais
+    `date.today()`, BUG-189). Format inchangé.
+
+    Unicité (BUG-197) : le compteur est `nombre de factures du (nœud, jour) + 1`,
+    puis on avance tant que le numéro existe déjà (numéros hérités d'avant le
+    correctif dont le préfixe ne suivait pas `invoice_date`). La concurrence
+    reste couverte comme avant : appel dans la transaction de création
+    (verrou d'écriture SQLite + retentative BUG-062) ; sur un SGBD à verrous
+    de lignes, on verrouille en plus la ligne du nœud.
+    """
+    receipt_date = receipt_date or timezone.localdate()
+    if transaction.get_connection().in_atomic_block:
+        list(Node.objects.select_for_update().filter(code=node_code).values_list('pk', flat=True))
+    count = Invoice.objects.filter(node__code=node_code, invoice_date=receipt_date).count() + 1
+    prefix = f"{node_code}-{receipt_date.strftime('%Y%m%d')}-"
+    while Invoice.objects.filter(receipt_number=f"{prefix}{count:04d}").exists():
+        count += 1
+    return f"{prefix}{count:04d}"
 
 
 def _record_debt_movement_after_commit(client, amount, kind, node_origin, invoice, note):
@@ -264,7 +304,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice_team = request.user.team
         if node.team_rotation_enabled:
             requested_date_raw = data.get('invoice_date')
-            if requested_date_raw and requested_date_raw != timezone.localdate():
+            if requested_date_raw and requested_date_raw != work_date_for(node):
                 from production.models import DailyTeamAssignment
                 past_team = (
                     DailyTeamAssignment.objects
@@ -298,13 +338,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         # optionnelle dans le payload. Comportement par défaut strictement
         # inchangé (date du jour) tant que ni `invoice_date` n'est fourni ni
         # différent d'aujourd'hui.
-        requested_invoice_date = data.get('invoice_date') or timezone.localdate()
+        # BUG-161 (B3) : date de travail du nœud (date locale hors rotation).
+        current_work_date = work_date_for(node)
+        requested_invoice_date = data.get('invoice_date') or current_work_date
         date_error = _validate_requested_date(
-            requested_invoice_date, config, field_label="La date de facturation (invoice_date)"
+            requested_invoice_date, config, field_label="La date de facturation (invoice_date)", node=node,
         )
         if date_error:
             return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
-        is_backdated_invoice = requested_invoice_date != timezone.localdate()
+        is_backdated_invoice = requested_invoice_date < current_work_date
 
         is_debt_repayment  = data.get('is_debt_repayment', False)
         is_soldee          = data.get('is_soldee', False)
@@ -347,10 +389,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 is_debt_repayment=True,
                 special_code=special_code,
                 node_origin=node.code,
-                receipt_number=_make_receipt_number(node.code),
+                receipt_number=_make_receipt_number(node.code, requested_invoice_date),
                 status=Invoice.Status.DELIVERED,
                 invoice_date=requested_invoice_date,
-                delivered_at=_combine_date_with_now_time(requested_invoice_date),
+                delivered_at=_combine_date_with_now_time(requested_invoice_date, node),
             )
             invoice.debt_after = debt_before - payment_amount
             invoice.save(update_fields=['debt_after', 'status', 'delivered_at'])
@@ -432,7 +474,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             # sont actives — la commission du mois ne neutralise jamais le blocage
             # basé sur la dette brute). Le même plafond effectif (réduit en mode
             # dégradé, SYNC.md §6 H2) s'applique ici aussi.
-            today_ = date.today()
+            today_ = current_work_date
             # BUG-180 : les RG livrées n'entrent pas dans le déficit du mois.
             period_agg = Invoice.objects.filter(
                 client=client, status=Invoice.Status.DELIVERED,
@@ -484,7 +526,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             is_debt_repayment=False,
             special_code=special_code,
             node_origin=node.code,
-            receipt_number=_make_receipt_number(node.code),
+            receipt_number=_make_receipt_number(node.code, requested_invoice_date),
             invoice_date=requested_invoice_date,
         )
 
@@ -564,11 +606,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 return Response({'detail': "delivered_at invalide — format attendu AAAA-MM-JJ."}, status=status.HTTP_400_BAD_REQUEST)
             config = Config.get_instance()
             date_error = _validate_requested_date(
-                requested_delivery_date, config, field_label="La date de livraison (delivered_at)"
+                requested_delivery_date, config, field_label="La date de livraison (delivered_at)",
+                node=invoice.node,
             )
             if date_error:
                 return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
-            delivered_at_dt = _combine_date_with_now_time(requested_delivery_date)
+            delivered_at_dt = _combine_date_with_now_time(requested_delivery_date, invoice.node)
 
         invoice.deliver(request.user, delivered_at=delivered_at_dt)
         log_activity(
@@ -727,9 +770,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     )
 
         config = Config.get_instance()
-        requested_invoice_date = data.get('invoice_date') or timezone.localdate()
+        current_work_date = work_date_for(original.node)
+        requested_invoice_date = data.get('invoice_date') or current_work_date
         date_error = _validate_requested_date(
-            requested_invoice_date, config, field_label="La date de l'ajustement (invoice_date)"
+            requested_invoice_date, config, field_label="La date de l'ajustement (invoice_date)",
+            node=original.node,
         )
         if date_error:
             return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
@@ -772,13 +817,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 is_debt_repayment=False,
                 special_code='',
                 node_origin=original.node.code,
-                receipt_number=_make_receipt_number(original.node.code),
+                receipt_number=_make_receipt_number(original.node.code, requested_invoice_date),
                 invoice_date=requested_invoice_date,
                 adjusts=original,
                 is_adjustment=True,
                 adjustment_sign=adjustment_sign,
                 status=Invoice.Status.DELIVERED,
-                delivered_at=_combine_date_with_now_time(requested_invoice_date),
+                delivered_at=_combine_date_with_now_time(requested_invoice_date, original.node),
             )
 
             for ld in lines_data:
@@ -872,7 +917,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     def pending_deliveries(self, request):
         """Livreur screen: all PENDING invoices for today."""
         qs = self.get_queryset().filter(
-            status=Invoice.Status.PENDING, invoice_date=date.today(),
+            status=Invoice.Status.PENDING, invoice_date=_default_work_date(request.user),
         ).exclude(special_code=Invoice.SpecialCode.NS)  # BUG-177 : NS jamais livrable
         return Response(InvoiceSerializer(qs, many=True).data)
 
@@ -888,7 +933,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         nominal payment_type, which used to hide any cash collected on a
         CREDIT invoice.
         """
-        target_date = request.query_params.get('date', str(date.today()))
+        target_date = request.query_params.get('date', str(_default_work_date(request.user)))
         qs = self.get_queryset().filter(invoice_date=target_date, status=Invoice.Status.DELIVERED)
         per_node = qs.values('node__code').annotate(
             cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id')
@@ -904,7 +949,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def bread_summary(self, request):
         """Pains vendus par catégorie (unit_price) pour les factures livrées à une date donnée."""
-        date_str = request.query_params.get('date', str(date.today()))
+        date_str = request.query_params.get('date', str(_default_work_date(request.user)))
         node_id  = request.query_params.get('node')
         qs = InvoiceLine.objects.filter(invoice__status='DELIVERED')
         if date_str:

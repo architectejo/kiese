@@ -7,6 +7,7 @@ import {
 import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
+import { localIsoDate } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
 
@@ -218,7 +219,7 @@ export const Commissions: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ristournes_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `ristournes_${localIsoDate()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

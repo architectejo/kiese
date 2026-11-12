@@ -12,8 +12,10 @@ import {
   SocialContribution, SocialDistribution, SocialDistributionLine,
   BassinRow, ClientImportResult,
 } from '@/api/services';
-import { getErrorDetail } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
+import { useWorkDate } from '@/store/workDateStore';
+import { TEAM_NOT_ASSIGNED_MESSAGE, useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
 
@@ -56,6 +58,9 @@ const mapApiClient = (c: ApiClient): ClientItem => ({
 
 export const Clients: React.FC = () => {
   const { user } = useAuthStore();
+  // BUG-161 : journée de travail du serveur (jamais la date UTC du navigateur) ; 403 TEAM_NOT_ASSIGNED.
+  const workDate = useWorkDate();
+  const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
   const [clients, setClients] = useState<ClientItem[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [debtCeiling, setDebtCeiling] = useState<number>(50000);
@@ -669,7 +674,7 @@ export const Clients: React.FC = () => {
 
     // BUG-083 : date rétroactive optionnelle (réglage ADMIN/DIRECTION). Vide ou date du jour
     // → comportement inchangé (aucun champ envoyé, le serveur date normalement).
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = workDate;
     const retroactiveDate = allowBackdatedSales && orderDate && orderDate !== todayStr ? orderDate : null;
 
     // Determine client API ID — for occasional sale, find or auto-create one
@@ -716,6 +721,14 @@ export const Clients: React.FC = () => {
         }
         await loadClients();
       } catch (err: unknown) {
+        if (isTeamNotAssignedError(err)) {
+          // BUG-161 : équipe de service non désignée — aucune facture, aucun reçu ;
+          // la boîte de désignation du tableau de bord se rouvre (comme Sales.tsx).
+          setSaleError(TEAM_NOT_ASSIGNED_MESSAGE);
+          requestTeamAssignment();
+          setIsSubmitting(false);
+          return;
+        }
         const d = axios.isAxiosError(err)
           ? (err.response?.data as { detail?: string; non_field_errors?: string[] } | undefined)
           : undefined;
@@ -796,7 +809,13 @@ export const Clients: React.FC = () => {
       setRepaymentAmount('');
       setRepaymentClient(null);
     } catch (err: unknown) {
-      setRepaymentError(getErrorDetail(err, 'Erreur lors du remboursement.'));
+      if (isTeamNotAssignedError(err)) {
+        // BUG-161 : aucune facture ni reçu ; on rouvre la désignation d'équipe.
+        setRepaymentError(TEAM_NOT_ASSIGNED_MESSAGE);
+        requestTeamAssignment();
+      } else {
+        setRepaymentError(getErrorDetail(err, 'Erreur lors du remboursement.'));
+      }
     } finally {
       setRepaymentLoading(false);
     }
@@ -832,7 +851,7 @@ export const Clients: React.FC = () => {
     setAdjustLoading(true);
     setAdjustError(null);
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       const res = await salesApi.adjust(adjustTarget.id, {
         adjustment_sign: adjustSign,
         payment_amount: paymentAmount.toString(),
@@ -874,7 +893,7 @@ export const Clients: React.FC = () => {
       address: 'Vente directe au comptoir',
       creditLimit: 0, outstandingDebt: 0, commissionRate: 0, riskScore: 'Low', active: true,
       avatarColor: 'hsl(200, 10%, 40%)',
-      lastPaymentDate: new Date().toISOString().split('T')[0],
+      lastPaymentDate: workDate,
       createdAt: new Date().toISOString(),
     };
     setSaleClient(casualClient);
@@ -1832,7 +1851,7 @@ export const Clients: React.FC = () => {
                   </div>
                   <input
                     type="date"
-                    max={new Date().toISOString().split('T')[0]}
+                    max={workDate}
                     value={orderDate}
                     onChange={(e) => setOrderDate(e.target.value)}
                     className="form-input"

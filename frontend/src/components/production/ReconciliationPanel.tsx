@@ -1,15 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FiAlertTriangle, FiRefreshCw } from 'react-icons/fi';
+import { useWorkDate } from '@/store/workDateStore';
 import { productionApi, ProductionReconciliation, ProductionClosureSummary, BakeryNode } from '@/api/services';
 
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const firstOfMonthIso = () => {
-  const d = new Date();
-  d.setDate(1);
-  return d.toISOString().slice(0, 10);
-};
 
 interface ReconciliationPanelProps {
   /** Boulangerie actuellement affichée par le reste de la page (Direction : sélecteur en-tête ; gérant : fixe). */
@@ -27,8 +22,13 @@ interface ReconciliationPanelProps {
  */
 export const ReconciliationPanel: React.FC<ReconciliationPanelProps> = ({ effectiveNode, canPickNode, nodes }) => {
   const [recNode, setRecNode]       = useState(effectiveNode);
-  const [dateFrom, setDateFrom]     = useState(firstOfMonthIso());
-  const [dateTo, setDateTo]         = useState(todayIso());
+  // BUG-161 (F3) : bornes par défaut = 1er du mois et jour de la journée de travail du serveur
+  // (plus de date UTC du navigateur) ; une date choisie par l'utilisateur prime.
+  const workDate = useWorkDate();
+  const [dateFromPicked, setDateFrom] = useState<string | null>(null);
+  const [dateToPicked, setDateTo]     = useState<string | null>(null);
+  const dateFrom = dateFromPicked ?? `${workDate.slice(0, 8)}01`;
+  const dateTo   = dateToPicked ?? workDate;
   const [data, setData]             = useState<ProductionReconciliation | null>(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);

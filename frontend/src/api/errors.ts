@@ -79,3 +79,13 @@ export function isTeamNotAssignedError(err: unknown): boolean {
   const data = err.response.data as { code?: unknown } | undefined;
   return data?.code === 'TEAM_NOT_ASSIGNED';
 }
+
+/**
+ * BUG-196 : vrai si l'API a refusé la désignation de l'équipe parce qu'une fournée d'une
+ * journée précédente est encore ouverte (400 `{"detail": "...", "code": "PREVIOUS_WORKDAY_OPEN"}`).
+ */
+export function isPreviousWorkdayOpenError(err: unknown): boolean {
+  if (!axios.isAxiosError(err) || err.response?.status !== 400) return false;
+  const data = err.response.data as { code?: unknown } | undefined;
+  return data?.code === 'PREVIOUS_WORKDAY_OPEN';
+}

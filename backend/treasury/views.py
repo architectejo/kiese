@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import ProtectedError
 from django.db.models import Sum, F
 from django.utils import timezone
 from rest_framework import viewsets, mixins, status, filters
@@ -16,6 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from core.models import Node, Config
 from core.permissions import IsGerant, IsHeadquarters
 from core.utils import log_activity, create_notification, validate_requested_date
+from core.workday import work_date_for
 from .hashing import compute_cashbook_entry_hash, verify_cashbook_chain, GENESIS_HASH
 from .models import (
     LocalExpense, FacturierReport, CashClosure, CashbookEntry, JournalEntry,
@@ -50,6 +52,18 @@ _APPEND_MAX_RETRIES = 25
 # historiques légitimes.
 _JOURNAL_YEAR_MIN = 2000
 _JOURNAL_YEAR_MAX = 2100
+
+
+def _default_work_date(request):
+    """
+    BUG-161 (B3) : date de travail par défaut d'une requête (mois/année par
+    défaut des rapports) = date de travail du nœud de l'utilisateur (date
+    locale hors rotation) ; sans nœud : date locale (jamais `date.today()`,
+    qui dépend du fuseau du système — BUG-189).
+    """
+    user = request.user
+    node = user.node if getattr(user, 'node_id', None) else None
+    return work_date_for(node)
 
 
 def _validate_month_year(month, year):
@@ -127,7 +141,7 @@ def _get_last_balance() -> tuple:
     doit donc toujours être appelée depuis `append_cashbook_entry`, qui
     retente l'opération en cas de collision.
     """
-    last = CashbookEntry.objects.select_for_update().order_by('-date', '-created_at').first()
+    last = CashbookEntry.objects.select_for_update().order_by(*CashbookEntry.chain_order_desc()).first()
     if last:
         return last.running_balance, last.block_hash
     return Decimal('0'), GENESIS_HASH
@@ -293,6 +307,18 @@ class FacturierReportViewSet(viewsets.ModelViewSet):
 
         from .services import regenerate_facturier_reports
 
+        # BUG-161 (B3) : le nœud est résolu AVANT la date (la date de travail
+        # en dépend) ; l'absence de nœud reste signalée après la date, comme avant.
+        user = request.user
+        node = user.node
+        if user.can_access_all_nodes:
+            node_id = request.data.get('node')
+            if node_id:
+                try:
+                    node = Node.objects.get(pk=node_id)
+                except Node.DoesNotExist:
+                    pass
+
         requested_date_raw = request.data.get('date')
         if requested_date_raw:
             target_date = parse_date(str(requested_date_raw)[:10])
@@ -303,22 +329,12 @@ class FacturierReportViewSet(viewsets.ModelViewSet):
                 )
             config = Config.get_instance()
             date_error = validate_requested_date(
-                target_date, config, field_label="La date du rapport (date)"
+                target_date, config, field_label="La date du rapport (date)", node=node,
             )
             if date_error:
                 return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            target_date = date.today()
-
-        user = request.user
-        node = user.node
-        if user.can_access_all_nodes:
-            node_id = request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            target_date = work_date_for(node)
 
         if not node:
             return Response({'detail': 'Aucune boulangerie assignée. Sélectionnez une succursale dans le filtre.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -384,7 +400,7 @@ class CashClosureViewSet(viewsets.ModelViewSet):
                     pass
         if not node:
             raise ValidationError({'node': 'Boulangerie requise. Sélectionnez une succursale dans le filtre.'})
-        target_date = serializer.validated_data.get('date', date.today())
+        target_date = serializer.validated_data.get('date', work_date_for(node))
 
         # BUG-086 (remarque.md l.362 — extension de BUG-083) : `date` était
         # déjà acceptée librement dans le payload (trou préexistant, voir
@@ -397,7 +413,7 @@ class CashClosureViewSet(viewsets.ModelViewSet):
         # ce réglage n'étant pas un contournement de permission.
         config = Config.get_instance()
         date_error = validate_requested_date(
-            target_date, config, field_label="La date de clôture (date)"
+            target_date, config, field_label="La date de clôture (date)", node=node,
         )
         if date_error:
             raise ValidationError({'detail': date_error})
@@ -457,6 +473,36 @@ class CashClosureViewSet(viewsets.ModelViewSet):
                 node_origin=closure.node.code
             )
 
+    def destroy(self, request, *args, **kwargs):
+        """BUG-198 : une clôture confirmée, versée au Livre de Caisse ou liée à
+        une de ses écritures ne peut JAMAIS être supprimée (écart physique/
+        théorique journalisé et non modifiable, CLAUDE.md §5.5 ; `source_closure`
+        est couvert par le hash). Une clôture non confirmée et non versée peut
+        être supprimée par le gérant de son nœud (get_queryset filtre le nœud)
+        ou un rôle siège : le gérant peut ainsi recommencer une saisie erronée.
+        """
+        closure = self.get_object()
+        if (closure.is_validated or closure.cashbook_entries.exists()):
+            return Response(
+                {'detail': (
+                    "Suppression interdite : cette clôture est confirmée par le comptable "
+                    "ou déjà versée au Livre de Caisse Direction. Elle est figée "
+                    "(l'écart de caisse est journalisé et non modifiable)."
+                )},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            with transaction.atomic():
+                label = f"{closure.node.code} {closure.date}"
+                closure.delete()
+        except ProtectedError:
+            return Response(
+                {'detail': "Suppression interdite : cette clôture est référencée par le Livre de Caisse."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        log_activity(request.user, 'Suppression Clôture', f"Clôture non confirmée supprimée : {label}", node_origin=request.user.node.code if request.user.node_id else 'CLOUD')
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     def perform_update(self, serializer):
         from rest_framework.exceptions import ValidationError
 
@@ -480,7 +526,8 @@ class CashClosureViewSet(viewsets.ModelViewSet):
         target_date = serializer.validated_data.get('date', serializer.instance.date)
         config = Config.get_instance()
         date_error = validate_requested_date(
-            target_date, config, field_label="La date de clôture (date)"
+            target_date, config, field_label="La date de clôture (date)",
+            node=serializer.instance.node,
         )
         if date_error:
             raise ValidationError({'detail': date_error})
@@ -621,7 +668,7 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         fonction de vérification que `blockchain.views._verify_chain_for_node`
         — il n'existe plus qu'une seule logique de vérification de la chaîne.
         """
-        entries = list(CashbookEntry.objects.order_by('date', 'created_at'))
+        entries = list(CashbookEntry.chain_queryset())
         tampered = []
         for i, (entry, _expected, is_valid) in enumerate(verify_cashbook_chain(entries)):
             if not is_valid:
@@ -643,8 +690,8 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def period_summary(self, request):
         """Aggregate cashbook by node for a date range."""
-        date_from = request.query_params.get('date_from', str(date.today().replace(day=1)))
-        date_to   = request.query_params.get('date_to',   str(date.today()))
+        date_from = request.query_params.get('date_from', str(timezone.localdate().replace(day=1)))
+        date_to   = request.query_params.get('date_to',   str(timezone.localdate()))
         qs = self.get_queryset().filter(date__gte=date_from, date__lte=date_to)
         summary = qs.values('node__code', 'node__name').annotate(
             total_entries=Sum('entry_amount'),
@@ -759,7 +806,7 @@ class DirectionCashCountViewSet(
     permission_classes = [IsHeadquarters]
 
     def perform_create(self, serializer):
-        target_date = serializer.validated_data.get('date', date.today())
+        target_date = serializer.validated_data.get('date', timezone.localdate())
 
         config = Config.get_instance()
         date_error = validate_requested_date(
@@ -876,7 +923,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
         if not node:
             raise ValidationError({'node': 'Boulangerie requise.'})
 
-        target_date = serializer.validated_data.get('date', date.today())
+        target_date = serializer.validated_data.get('date', work_date_for(node))
         entry_amount = serializer.validated_data.get('entry_amount', Decimal('0'))
         exit_amount  = serializer.validated_data.get('exit_amount',  Decimal('0'))
 
@@ -1039,8 +1086,8 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     def monthly_report(self, request):
         """Totals for a given month/year and node."""
         params  = request.query_params
-        month   = params.get('month', str(date.today().month))
-        year    = params.get('year',  str(date.today().year))
+        month   = params.get('month', str(_default_work_date(request).month))
+        year    = params.get('year',  str(_default_work_date(request).year))
 
         # BUG-114 : valeurs hors plage (ex. year=20000) → 400 propre au lieu
         # d'une ValueError non interceptée remontant en 500.
@@ -1163,8 +1210,8 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
     def monthly_total(self, request):
         """Total savings per node for a given month/year."""
         params  = request.query_params
-        month   = params.get('month', str(date.today().month))
-        year    = params.get('year',  str(date.today().year))
+        month   = params.get('month', str(_default_work_date(request).month))
+        year    = params.get('year',  str(_default_work_date(request).year))
         node_id = params.get('node')
 
         # BUG-115 : même défaut que BUG-114 — valider avant tout

@@ -1,8 +1,10 @@
 from decimal import Decimal, ROUND_HALF_UP
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -14,6 +16,10 @@ from django_filters.rest_framework import DjangoFilterBackend
 from core.models import Config, Node, BreadPrice
 from core.permissions import IsGerant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
+from core.workday import (
+    work_date_for, work_time_info, current_team, team_for_work_date,
+    business_date, workday_bounds, delivered_on_work_date_filter,
+)
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, DailyTeamAssignment, _adjust_bread_stock
 from .serializers import (
     ProductionSessionSerializer, BreadStockSerializer, ConsumableTypeSerializer, ConsumableStockSerializer,
@@ -24,6 +30,21 @@ _SESSION_COMPUTED_FIELDS = [
     'total_breads', 'total_fc_produced', 'theoretical_yield', 'yield_gap',
     'breads_300', 'breads_400', 'breads_500', 'breads_1000', 'sac_value_fc_used',
 ]
+
+
+def _body_not_object_response(request):
+    """
+    BUG-194 : garde commune des vues qui lisent `request.data.get(...)` sans
+    passer par un serializer. Un corps JSON qui n'est pas un objet (liste,
+    chaîne, nombre) provoquait un `AttributeError` (HTTP 500) ; on répond 400.
+    Retourne None si le corps est exploitable (dict ou QueryDict).
+    """
+    if hasattr(request.data, 'get'):
+        return None
+    return Response(
+        {'detail': "Corps de requête invalide : un objet JSON est attendu."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def _effective_sac_value(node, config):
@@ -224,7 +245,69 @@ def _current_bread_stocks(node):
     )
 
 
-def _close_production_session(session, remaining_entries, request_user):
+def _remaining_suggestions(stocks):
+    """Reste suggéré par catégorie (BUG-158 : valeur réelle, y compris négative)."""
+    return [
+        {
+            'bread_price': bs.bread_price_id,
+            'label': str(bs.bread_price),
+            'quantity_suggested': bs.qty_available,
+        }
+        for bs in stocks
+    ]
+
+
+def _force_close_session(session, stocks, node, user):
+    """
+    BUG-155/158/165 : clôture forcée automatique d'une session au stock
+    physique courant. Partagée par la détection A/B (hors rotation) et par la
+    détection de relève (BUG-161 B5). Retourne False si une requête
+    concurrente a déjà clôturé la session (rien n'est fait : ni notification
+    ni log, pas de revendication de la clôture).
+    """
+    # BUG-158 (instruction client, 2026-11-10) : le reste du jour est
+    # enregistré tel quel, y compris négatif (sorties au-delà du disponible).
+    # Une notification WARNING signale chaque catégorie négative — `BreadStock`
+    # n'est pas corrigé ici.
+    remaining_entries = [(bs.bread_price_id, bs.qty_available) for bs in stocks]
+    negative_stocks = [bs for bs in stocks if bs.qty_available < 0]
+    with transaction.atomic():
+        # BUG-165 : relecture verrouillée.
+        locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
+        if locked.is_closed:
+            return False
+        session = locked
+        _close_production_session(session, remaining_entries, user)
+        if negative_stocks:
+            details = ", ".join(f"{bs.bread_price} ({bs.qty_available})" for bs in negative_stocks)
+            create_notification(
+                title=f"Stock de pain négatif à la clôture automatique — {node.code}",
+                message=(
+                    f"Session Éq.{session.team} du {session.date} clôturée "
+                    f"automatiquement : stock physique négatif pour {details}. "
+                    f"Le reste du jour a été enregistré avec cette valeur négative ; "
+                    f"le stock n'a pas été corrigé, écart à investiguer."
+                ),
+                severity='WARNING', node_origin=node.code,
+            )
+    return True
+
+
+def _close_leftover_session(session, user):
+    """
+    BUG-190 : clôture silencieuse d'une session « restante » (même journée de
+    travail qu'une session déjà clôturée avec son snapshot) : pas de reste
+    déclaré, pas de snapshot. Retourne False si déjà clôturée entre-temps.
+    """
+    with transaction.atomic():
+        locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
+        if locked.is_closed:
+            return False
+        _close_production_session(locked, [], user, record_snapshot=False)
+    return True
+
+
+def _close_production_session(session, remaining_entries, request_user, record_snapshot=True):
     """
     BUG-093/BUG-152/BUG-155 : cœur de la clôture d'une fournée, factorisé
     pour être partagé À L'IDENTIQUE par l'action `close()` (clôture
@@ -289,7 +372,12 @@ def _close_production_session(session, remaining_entries, request_user):
                     quantity=qty_int,
                 )
 
-        DailyBreadStockSnapshot.record_snapshot(session)
+        # BUG-190 : `record_snapshot=False` pour une session « restante » d'une
+        # journée dont le reste a déjà été enregistré par une autre session
+        # (désignation corrigée en rotation) : aucun second reste, donc rien
+        # de perdu ni de compté deux fois.
+        if record_snapshot:
+            DailyBreadStockSnapshot.record_snapshot(session)
 
     if is_anomaly:
         create_notification(
@@ -348,6 +436,83 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         if params.get('date_to'):
             qs = qs.filter(date__lte=params['date_to'])
         return qs
+
+    def create(self, request, *args, **kwargs):
+        """
+        BUG-161 (B3) : en mode rotation (`Node.team_rotation_enabled`), `date`
+        et `team` absents du payload sont complétés côté serveur par la
+        journée de travail courante et l'équipe de service désignée
+        (`core.workday`). Un payload explicite est conservé tel quel ; hors
+        rotation (ou sans équipe désignée) le comportement est inchangé
+        (champs obligatoires).
+        """
+        data = self._with_workday_defaults(request)
+        if isinstance(data, Response):
+            return data  # BUG-192 : refus (400 équipe non désignée / 403 sans désignation)
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def _with_workday_defaults(self, request):
+        data = request.data
+        if not hasattr(data, 'get') or not hasattr(data, 'copy'):
+            return data
+        user = request.user
+        if not user.can_access_all_nodes:
+            node = user.node
+        else:
+            node_ref = data.get('node')
+            node = None
+            if node_ref not in (None, ''):
+                try:
+                    node = Node.objects.filter(pk=node_ref).first()
+                except (TypeError, ValueError, DjangoValidationError):
+                    node = None
+            node = node or user.node
+        if node is None or not node.team_rotation_enabled:
+            return data
+        current_wd = work_date_for(node)
+
+        # BUG-192 : en rotation, une fournée de la journée de travail COURANTE
+        # ne peut être déclarée que pour l'équipe désignée (même règle que
+        # `opening-confirmation`, B4). Une date explicite passée/future (saisie
+        # rétroactive) reste inchangée.
+        raw_date = data.get('date')
+        if raw_date in (None, ''):
+            target_date = current_wd
+        else:
+            try:
+                target_date = parse_date(str(raw_date))
+            except ValueError:
+                target_date = None
+        if target_date == current_wd:
+            designated = current_team(node)
+            if designated is None:
+                return Response(
+                    {'detail': "Désignez l'équipe de service du jour avant de déclarer une fournée.",
+                     'code': 'TEAM_NOT_ASSIGNED'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            requested_team = data.get('team')
+            if requested_team not in (None, '') and requested_team != designated:
+                return Response(
+                    {'detail': (
+                        f"En rotation d'équipes, la fournée est déclarée pour l'équipe de "
+                        f"service du jour (équipe {designated})."
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        patched = data.copy()
+        if not data.get('date'):
+            patched['date'] = current_wd.isoformat()
+        if not data.get('team'):
+            service_team = current_team(node)
+            if service_team:
+                patched['team'] = service_team
+        return patched
 
     def perform_create(self, serializer):
         """
@@ -622,6 +787,9 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        bad_body = _body_not_object_response(request)
+        if bad_body is not None:
+            return bad_body
         remaining_payload = request.data.get('remaining')
         remaining_entries = []
         if remaining_payload is not None:
@@ -737,6 +905,15 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         now = timezone.localtime()
         today = now.date()
         current_time = now.time()
+        # BUG-161 (B3) : date de travail et heure serveur pour le frontend
+        # (additif ; la détection de fin de créneau reste celle de B5).
+        # Uniquement en mode rotation : hors rotation, la réponse reste
+        # strictement identique à l'existante (contrat figé par les tests
+        # BUG-155/158 qui comparent le corps exact).
+        time_info = work_time_info(node) if node.team_rotation_enabled else {}
+
+        if node.team_rotation_enabled:
+            return self._handover_shift_end_response(node, user, now, time_info)
 
         for team, end_time in (('A', node.team_a_end_time), ('B', node.team_b_end_time)):
             if end_time is None or current_time < end_time:
@@ -753,57 +930,94 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
             stocks = _current_bread_stocks(node)
 
             if elapsed >= timedelta(minutes=SHIFT_END_GRACE_MINUTES):
-                # BUG-158 (instruction client, 2026-11-10) : le reste du jour
-                # est enregistré tel quel, y compris négatif (sorties au-delà
-                # du disponible). Une notification WARNING signale chaque
-                # catégorie négative — `BreadStock` n'est pas corrigé ici.
-                remaining_entries = [(bs.bread_price_id, bs.qty_available) for bs in stocks]
-                negative_stocks = [bs for bs in stocks if bs.qty_available < 0]
-                with transaction.atomic():
-                    # BUG-165 : relecture verrouillée — si une requête
-                    # concurrente a déjà clôturé la session, on ne fait rien
-                    # (ni notification ni log) et on ne revendique pas la
-                    # clôture (`auto_closed` absent) pour ne pas dupliquer
-                    # l'annonce côté frontend (BUG-157).
-                    locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
-                    if locked.is_closed:
-                        continue
-                    session = locked
-                    _close_production_session(session, remaining_entries, user)
-                    if negative_stocks:
-                        details = ", ".join(
-                            f"{bs.bread_price} ({bs.qty_available})" for bs in negative_stocks
-                        )
-                        create_notification(
-                            title=f"Stock de pain négatif à la clôture automatique — {node.code}",
-                            message=(
-                                f"Session Éq.{session.team} du {session.date} clôturée "
-                                f"automatiquement : stock physique négatif pour {details}. "
-                                f"Le reste du jour a été enregistré avec cette valeur négative ; "
-                                f"le stock n'a pas été corrigé, écart à investiguer."
-                            ),
-                            severity='WARNING', node_origin=node.code,
-                        )
-                return Response({'pending_validation': False, 'auto_closed': True, 'team': team})
+                if not _force_close_session(session, stocks, node, user):
+                    continue
+                return Response({'pending_validation': False, 'auto_closed': True, 'team': team, **time_info})
 
-            remaining = [
-                {
-                    'bread_price': bs.bread_price_id,
-                    'label': str(bs.bread_price),
-                    # BUG-158 : valeur réelle, y compris négative (acceptée par `close()`).
-                    'quantity_suggested': bs.qty_available,
-                }
-                for bs in stocks
-            ]
             return Response({
                 'team': team,
                 'session': session.pk,
                 'pending_validation': True,
-                'remaining': remaining,
+                'remaining': _remaining_suggestions(stocks),
                 'auto_closed': False,
+                **time_info,
             })
 
-        return Response({'pending_validation': False})
+        return Response({'pending_validation': False, **time_info})
+
+    @staticmethod
+    def _handover_shift_end_response(node, user, now, time_info):
+        """
+        BUG-161 (B5) : fin de journée de travail = heure de RELÈVE. La session
+        à clôturer est celle d'une journée de travail PRÉCÉDENTE
+        (`date < business_date(now)`), de l'équipe désignée ce jour-là, non
+        close. Plusieurs journées passées ouvertes : traitées par ordre
+        chronologique, UNE par appel (la plus ancienne d'abord). Délai de
+        grâce et clôture forcée : mêmes règles et même fonction que hors
+        rotation (BUG-155/158/165). `work_date` = journée concernée par
+        l'action (la journée courante si rien à faire) ; `current_work_date`
+        = journée de travail courante.
+        """
+        from datetime import timedelta
+
+        current_wd = business_date(node, now)
+        base = {'server_now': time_info['server_now'], 'current_work_date': current_wd.isoformat()}
+
+        open_dates = (
+            ProductionSession.objects
+            .filter(node=node, is_closed=False, date__lt=current_wd)
+            .order_by('date').values_list('date', flat=True).distinct()
+        )
+        for work_date in list(open_dates):
+            designated = team_for_work_date(node, work_date)
+            candidates = ProductionSession.objects.filter(node=node, date=work_date, is_closed=False)
+
+            # BUG-190 : la désignation a pu être corrigée après une fournée
+            # (A -> B) : la session ouverte de la journée est clôturée quelle
+            # que soit son équipe (l'équipe désignée d'abord, sinon la
+            # première par équipe).
+            #
+            # Si le reste de cette journée est DÉJÀ enregistré (snapshot par
+            # une autre session de la même journée, clôturée avant), les
+            # sessions encore ouvertes sont de simples « restantes » : on les
+            # clôture sans second snapshot ni validation, pour ne jamais
+            # compter le reste deux fois.
+            if DailyBreadStockSnapshot.objects.filter(node=node, date=work_date).exists():
+                leftover = candidates.order_by('team').first()
+                if leftover is not None and _close_leftover_session(leftover, user):
+                    return Response({
+                        'pending_validation': False, 'auto_closed': True, 'team': leftover.team,
+                        **base, 'work_date': work_date.isoformat(),
+                    })
+                continue
+
+            session = (
+                (designated and candidates.filter(team=designated).first())
+                or candidates.order_by('team').first()
+            )
+            if session is None:
+                continue
+
+            handover_dt = workday_bounds(node, work_date)[1]  # relève de fin de cette journée
+            elapsed = now - handover_dt
+            stocks = _current_bread_stocks(node)
+            info = {**base, 'work_date': work_date.isoformat()}
+
+            if elapsed >= timedelta(minutes=SHIFT_END_GRACE_MINUTES):
+                if not _force_close_session(session, stocks, node, user):
+                    continue
+                return Response({'pending_validation': False, 'auto_closed': True, 'team': session.team, **info})
+
+            return Response({
+                'team': session.team,
+                'session': session.pk,
+                'pending_validation': True,
+                'remaining': _remaining_suggestions(stocks),
+                'auto_closed': False,
+                **info,
+            })
+
+        return Response({'pending_validation': False, 'work_date': current_wd.isoformat(), **base})
 
 
 class ConsumableTypeViewSet(viewsets.ModelViewSet):
@@ -1103,6 +1317,9 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        bad_body = _body_not_object_response(request)
+        if bad_body is not None:
+            return bad_body
         approved = bool(request.data.get('approved', True))
 
         if not approved:
@@ -1175,6 +1392,9 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        bad_body = _body_not_object_response(request)
+        if bad_body is not None:
+            return bad_body
         lines_data = request.data.get('lines', [])
         if not lines_data:
             return Response({'detail': '`lines` est requis.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1331,7 +1551,9 @@ class BreadStockByDateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        today = timezone.localdate()
+        # BUG-161 (B3) : « aujourd'hui » = date de travail du nœud (date locale
+        # hors rotation, relève à relève en mode rotation).
+        today = work_date_for(node)
         date_str = request.query_params.get('date')
         if date_str:
             requested_date = parse_date(date_str)
@@ -1397,6 +1619,7 @@ class BreadStockByDateView(APIView):
             'date': requested_date.isoformat(),
             'source': source,
             'categories': categories,
+            **work_time_info(node),
         })
 
 
@@ -1497,7 +1720,7 @@ def _resolve_node(node_param):
     return Node.objects.filter(code__iexact=str(node_param)).first()
 
 
-def _build_daily_closure_report(node, report_date):
+def _build_daily_closure_report(node, report_date=None):
     """
     BUG-120 : construit le rapport de clôture journalier consolidé pour
     `node`/`report_date`, décomposé par catégorie de pain (CLAUDE.md §5.4),
@@ -1519,6 +1742,9 @@ def _build_daily_closure_report(node, report_date):
     from sales.models import Invoice, InvoiceLine
 
     config = Config.get_instance()
+    if report_date is None:
+        # BUG-161 (B3) : par défaut, la journée de travail courante du nœud.
+        report_date = work_date_for(node)
 
     sessions_qs = ProductionSession.objects.filter(node=node, date=report_date)
     sacs_produits = sessions_qs.aggregate(t=Sum('flour_sacks_used'))['t'] or Decimal('0.00')
@@ -1648,18 +1874,32 @@ def _build_daily_closure_report(node, report_date):
         BreadTransferLine.objects.filter(
             transfer__from_node=node,
             transfer__transfer_status=BreadTransfer.TransferStatus.CONFIRMED,
-            transfer__updated_at__date=report_date,
+            # BUG-193 : journée de travail (rotation) ; hors rotation = `__date` inchangé.
+            **delivered_on_work_date_filter(node, report_date, 'transfer__updated_at'),
         ).values('bread_price_id').annotate(qty=Sum('quantity_sent')).values_list('bread_price_id', 'qty')
     )
     appro_recu_by_bp = dict(
         BreadTransferLine.objects.filter(
             transfer__to_node=node,
             transfer__transfer_status=BreadTransfer.TransferStatus.CONFIRMED,
-            transfer__updated_at__date=report_date,
+            **delivered_on_work_date_filter(node, report_date, 'transfer__updated_at'),
         ).values('bread_price_id').annotate(qty=Sum('quantity_received')).values_list('bread_price_id', 'qty')
     )
 
     team_choices = [c[0] for c in ProductionSession.Team.choices]
+
+    # BUG-161 (B4) : équipe de service de `report_date` (rotation seulement) :
+    # désignation, sinon équipe de la session du jour, sinon de la
+    # confirmation du stock de départ, sinon aucune (reste du hier à 0).
+    rotation = bool(getattr(node, 'team_rotation_enabled', False))
+    day_team = None
+    if rotation:
+        day_team = (
+            team_for_work_date(node, report_date)
+            or sessions_qs.order_by('team').values_list('team', flat=True).first()
+            or DailyOpeningConfirmation.objects.filter(node=node, date=report_date)
+            .order_by('team').values_list('team', flat=True).first()
+        )
 
     # BUG-133 : si le gérant a explicitement confirmé le stock de départ
     # (RESTE DU HIER) pour (node, équipe, report_date) via la boîte modale
@@ -1675,6 +1915,7 @@ def _build_daily_closure_report(node, report_date):
     ).prefetch_related('lines'):
         for line in confirmation.lines.all():
             confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
+    confirmed_bp_ids_any_team = {bp_id for (_team, bp_id) in confirmed_reste_du_hier_by_team_bp}
 
     category_ids = (
         set(BreadPrice.objects.filter(is_active=True).values_list('id', flat=True))
@@ -1729,11 +1970,29 @@ def _build_daily_closure_report(node, report_date):
         # le calcul auto-dérivé, pour que `reste_du_hier_by_team` (exposé
         # tel quel au frontend, `ClotureJournaliere.tsx`) reste cohérent en
         # signe entre jours confirmés et jours non confirmés.
+        def _auto_reste_du_hier(team):
+            if not rotation:
+                return DailyBreadStockSnapshot.reste_du_hier(node, bp, report_date, team)
+            # BUG-161 (B4) : en rotation, le départ d'une journée est le
+            # dernier reste du nœud TOUTES ÉQUIPES CONFONDUES (A -> B -> A),
+            # porté par la seule équipe de service du jour (sinon doublon
+            # dans la somme `reste_du_hier_fc`). Jamais écrit : lecture seule.
+            if team != day_team:
+                return 0
+            # BUG-191 : une seule source par journée de travail. Si le stock de
+            # départ de cette catégorie a été confirmé par une équipe (celle
+            # désignée au moment de la confirmation, éventuellement corrigée
+            # depuis), la valeur confirmée fait foi : le chaînage automatique
+            # ne la double pas sur l'équipe désignée aujourd'hui.
+            if bp_id in confirmed_bp_ids_any_team:
+                return 0
+            return DailyBreadStockSnapshot.reste_du_hier_chained(node, bp, report_date)
+
         reste_du_hier_by_team = {
             team: (
                 -confirmed_reste_du_hier_by_team_bp[(team, bp_id)]
                 if (team, bp_id) in confirmed_reste_du_hier_by_team_bp
-                else DailyBreadStockSnapshot.reste_du_hier(node, bp, report_date, team)
+                else _auto_reste_du_hier(team)
             )
             for team in team_choices
         }
@@ -1865,6 +2124,7 @@ def _build_daily_closure_report(node, report_date):
     return {
         'node': node.code,
         'date': str(report_date),
+        **work_time_info(node),
         'categories': categories_payload,
         'totals': {
             'total_du_jour_fc': str(_m(total_du_jour_fc)),
@@ -2147,7 +2407,9 @@ class DailyOpeningConfirmationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            report_date = timezone.localdate()
+            # BUG-161 (B3) : journée de travail courante du nœud (date locale
+            # hors rotation).
+            report_date = work_date_for(node)
 
         categories = list(BreadPrice.objects.filter(is_active=True).order_by('unit_price'))
         # `qty_available` est une propriété Python (produced+received-sent-
@@ -2157,6 +2419,16 @@ class DailyOpeningConfirmationView(APIView):
             bs.bread_price_id: bs.qty_available
             for bs in BreadStock.objects.filter(node=node, bread_price__in=categories)
         }
+        rotation = node.team_rotation_enabled
+        if rotation:
+            # BUG-161 (B4) : chaînage inter-équipes — la quantité proposée est
+            # le dernier reste déclaré à une clôture du nœud avant cette
+            # journée, toutes équipes confondues (le reste de A = départ de B).
+            # Sans instantané antérieur pour la catégorie : stock courant.
+            for bp in categories:
+                previous = DailyBreadStockSnapshot.last_snapshot_before(node, bp, report_date)
+                if previous is not None:
+                    proposed_by_bp[bp.id] = previous.qty_at_close
 
         categories_payload = [
             {
@@ -2204,6 +2476,26 @@ class DailyOpeningConfirmationView(APIView):
         # soit l'heure à laquelle cette requête est faite (NE PAS utiliser
         # `active_team_at()` ici : il répond à une autre question, « qui
         # travaille EN CE MOMENT ? »).
+        if rotation:
+            # BUG-161 (B4) : une confirmation par JOURNÉE DE TRAVAIL, quelle
+            # que soit l'équipe ; l'équipe concernée est l'équipe désignée
+            # (plus de choix d'équipe dans la boîte). Sans désignation, la
+            # désignation passe d'abord (pas de boîte de stock de départ).
+            designated = team_for_work_date(node, report_date)
+            confirmed_any = any(t['confirmed'] for t in teams_payload.values())
+            return Response({
+                'node': node.code,
+                'date': str(report_date),
+                **work_time_info(node),
+                'categories': categories_payload,
+                'teams': teams_payload,
+                'opening_team': designated,
+                'team': designated,
+                'rotation': True,
+                'team_assignment_required': designated is None,
+                'needs_confirmation': designated is not None and not confirmed_any,
+            })
+
         opening_team = node.opening_team()
         if opening_team in teams_payload:
             needs_confirmation = not teams_payload[opening_team]['confirmed']
@@ -2217,6 +2509,7 @@ class DailyOpeningConfirmationView(APIView):
         return Response({
             'node': node.code,
             'date': str(report_date),
+            **work_time_info(node),
             'categories': categories_payload,
             'teams': teams_payload,
             'opening_team': opening_team,
@@ -2227,6 +2520,9 @@ class DailyOpeningConfirmationView(APIView):
         from django.db import transaction
         from django.utils.dateparse import parse_date
 
+        bad_body = _body_not_object_response(request)
+        if bad_body is not None:
+            return bad_body
         data = request.data
         node, err = _opening_confirmation_resolve_node(request, data.get('node'))
         if err is not None:
@@ -2234,7 +2530,7 @@ class DailyOpeningConfirmationView(APIView):
 
         team = data.get('team')
         valid_teams = ProductionSession.Team.values
-        if team not in valid_teams:
+        if not node.team_rotation_enabled and team not in valid_teams:
             return Response(
                 {'detail': f"Le champ `team` doit être l'une des valeurs : {valid_teams}."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -2249,7 +2545,40 @@ class DailyOpeningConfirmationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            confirmation_date = timezone.localdate()
+            confirmation_date = work_date_for(node)
+
+        # BUG-161 (B3, risque (e) de la conception) : en mode rotation, une
+        # confirmation de stock de départ ne peut viser QUE la journée de
+        # travail courante — jamais une journée passée (elle réécrirait un
+        # stock/une fournée de départ déjà figés) ni une journée future.
+        if node.team_rotation_enabled and confirmation_date != work_date_for(node):
+            return Response(
+                {'detail': (
+                    f"En rotation d'équipes, le stock de départ ne peut être confirmé que pour "
+                    f"la journée de travail courante ({work_date_for(node)})."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if node.team_rotation_enabled:
+            # BUG-161 (B4) : l'équipe est celle désignée pour la journée de
+            # travail courante ; un `team` différent est refusé, absent toléré.
+            designated = current_team(node)
+            if designated is None:
+                return Response(
+                    {'detail': "Désignez l'équipe de service du jour avant de confirmer le stock de départ.",
+                     'code': 'TEAM_NOT_ASSIGNED'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if team not in (None, '') and team != designated:
+                return Response(
+                    {'detail': (
+                        f"En rotation d'équipes, le stock de départ est confirmé pour l'équipe de "
+                        f"service du jour (équipe {designated})."
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            team = designated
 
         lines = data.get('lines')
         if not isinstance(lines, list) or not lines:
@@ -2380,6 +2709,7 @@ class DailyOpeningConfirmationView(APIView):
             {
                 'detail': "Stock de départ confirmé.",
                 'node': node.code, 'team': team, 'date': str(confirmation_date),
+                **work_time_info(node),
                 'stock_adjustments': stock_adjustments,
             },
             status=status.HTTP_200_OK,
@@ -2483,6 +2813,27 @@ class TeamAssignmentView(APIView):
                 DailyTeamAssignment.objects.select_for_update()
                 .filter(node=node, work_date=work_date).first()
             )
+            # BUG-196 : en rotation, on ne désigne pas l'équipe d'une NOUVELLE
+            # journée de travail tant que le reste d'une journée précédente
+            # n'est pas confirmé/clôturé (clôture manuelle ou automatique
+            # après le délai de grâce) : sinon le reste de la veille serait
+            # amputé des ventes du lendemain. Corriger la désignation de la
+            # journée COURANTE (`existing`) reste permis. Hors rotation :
+            # inchangé.
+            if (
+                existing is None and node.team_rotation_enabled
+                and ProductionSession.objects.filter(
+                    node=node, is_closed=False, date__lt=work_date,
+                ).exists()
+            ):
+                return Response(
+                    {'detail': (
+                        "Confirmez d'abord le reste du jour précédent : la désignation de "
+                        "l'équipe de service sera possible dès que la clôture de la journée "
+                        "précédente aura été confirmée."
+                    ), 'code': 'PREVIOUS_WORKDAY_OPEN'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if existing is None:
                 try:
                     with transaction.atomic():

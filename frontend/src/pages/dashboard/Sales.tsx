@@ -8,6 +8,7 @@ import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdju
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
+import { useWorkDate } from '@/store/workDateStore';
 import { ThermalReceipt, ReceiptData, ReceiptLine } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
 
@@ -88,6 +89,9 @@ const TEAM_NOT_ASSIGNED_MESSAGE =
 export const Sales: React.FC = () => {
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
   const { user } = useAuthStore();
+  // BUG-161 (F3) : journée de travail fournie par le serveur (repli : date locale, jamais UTC).
+  // Un changement de journée (relève) relance le chargement de la file du jour (`loadData`).
+  const workDate = useWorkDate();
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [bpMap, setBpMap] = useState<Record<string, BreadPrice>>({});
@@ -186,7 +190,7 @@ export const Sales: React.FC = () => {
       // Charge les factures du JOUR (PENDING + DELIVERED), pas seulement PENDING :
       // une commande livrée doit rester comptée dans les stats de la page tant
       // qu'elle n'est pas annulée — seul un statut CANCELLED doit l'en exclure.
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       const [invoicesRes, bpRes, configRes] = await Promise.all([
         salesApi.listPage({ invoice_date: todayStr, page: '1', page_size: '100' }),
         coreApi.breadPrices.list(),
@@ -252,7 +256,7 @@ export const Sales: React.FC = () => {
     } finally {
       if (seq === queueLoadSeqRef.current) setIsLoading(false);
     }
-  }, []);
+  }, [workDate]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -344,7 +348,7 @@ export const Sales: React.FC = () => {
     setRepaymentLoading(true);
     setRepaymentError(null);
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       const retroactiveDate = allowBackdatedSales && repaymentDate && repaymentDate !== todayStr ? repaymentDate : undefined;
       const res = await salesApi.createRepayment(selectedClient.id, amount, retroactiveDate);
       const inv = res.data;
@@ -424,7 +428,7 @@ export const Sales: React.FC = () => {
     setAdjustLoading(true);
     setAdjustError(null);
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       const payload: InvoiceAdjustPayload = {
         adjustment_sign: adjustSign,
         payment_amount: paymentAmount.toString(),
@@ -464,7 +468,7 @@ export const Sales: React.FC = () => {
     try {
       // BUG-083 : date de commande rétroactive optionnelle (réglage ADMIN/DIRECTION). Vide ou
       // date du jour → comportement inchangé (aucun champ envoyé, le serveur date normalement).
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       const retroactiveDate = allowBackdatedSales && invoiceDate && invoiceDate !== todayStr ? invoiceDate : null;
       const res = await salesApi.create({
         client: isOccasional ? null : selectedClient?.id,
@@ -562,7 +566,7 @@ export const Sales: React.FC = () => {
       // BUG-083 : le rechargement habituel est filtré sur la date du jour (`invoice_date`). Une
       // facture rétroactive livrée disparaîtrait donc de la file au lieu d'afficher "Livré" —
       // on met simplement à jour l'entrée locale dans ce cas, sans toucher au comportement normal.
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = workDate;
       if (item.invoiceDate && item.invoiceDate !== todayStr) {
         setQueue(prev => prev.map(q => q._apiId === item._apiId ? mapInvoice(inv, bpMap) : q));
       } else {
@@ -997,7 +1001,7 @@ export const Sales: React.FC = () => {
                 </span>
                 <input
                   type="date"
-                  max={new Date().toISOString().split('T')[0]}
+                  max={workDate}
                   value={invoiceDate}
                   onChange={e => setInvoiceDate(e.target.value)}
                   className="form-input"
@@ -1302,7 +1306,7 @@ export const Sales: React.FC = () => {
               </span>
               <input
                 type="date"
-                max={new Date().toISOString().split('T')[0]}
+                max={workDate}
                 value={deliverDate}
                 onChange={e => setDeliverDate(e.target.value)}
                 className="form-input"
@@ -1326,7 +1330,7 @@ export const Sales: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  const todayStr = new Date().toISOString().split('T')[0];
+                  const todayStr = workDate;
                   const d = deliverDate && deliverDate !== todayStr ? deliverDate : undefined;
                   confirmDelivery(deliverModalItem, d);
                 }}
@@ -1396,7 +1400,7 @@ export const Sales: React.FC = () => {
                 </span>
                 <input
                   type="date"
-                  max={new Date().toISOString().split('T')[0]}
+                  max={workDate}
                   value={repaymentDate}
                   onChange={e => setRepaymentDate(e.target.value)}
                   className="form-input"
@@ -1518,7 +1522,7 @@ export const Sales: React.FC = () => {
                   </span>
                   <input
                     type="date"
-                    max={new Date().toISOString().split('T')[0]}
+                    max={workDate}
                     value={adjustDate}
                     onChange={e => setAdjustDate(e.target.value)}
                     className="form-input"

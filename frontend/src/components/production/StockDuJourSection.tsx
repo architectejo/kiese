@@ -4,6 +4,7 @@ import { productionApi, BreadStock, BreadStockByDate } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
+import { useWorkDate } from '@/store/workDateStore';
 
 // BUG-145 (docs/qa/REGISTRE_BUGS.md, demande client remarque.md l.397) : « Stock Pains
 // Actuel » devient « Stock Pains du Jour » et peut être consulté pour n'importe quel jour
@@ -12,8 +13,6 @@ import { CalendarPicker } from '@/components/shared/CalendarPicker';
 // Contrat API : docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md.
 
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
-
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const formatDateLong = (iso: string): string => {
   const [y, m, d] = iso.split('-').map(Number);
@@ -45,7 +44,9 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isToday = selectedDate === todayIso();
+  // BUG-161 (F3) : « jour courant » = journée de travail du serveur (repli : date locale).
+  const workDate = useWorkDate();
+  const isToday = selectedDate === workDate;
 
   useEffect(() => {
     if (isToday) {

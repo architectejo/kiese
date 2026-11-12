@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import {
@@ -13,6 +13,7 @@ import {
 } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
+import { useWorkDate } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { useProgressiveList, type ProgressiveList } from '@/hooks/useProgressiveList';
 
@@ -104,7 +105,8 @@ const renderReportCategoryDetail = (r: FacturierReport) => {
 
 export const Treasury: React.FC = () => {
   const { user } = useAuthStore();
-  const today = new Date().toISOString().split('T')[0];
+  // BUG-161 (F3) : « aujourd'hui » = journée de travail du serveur (repli : date locale, jamais UTC).
+  const today = useWorkDate();
 
   // ── Data state ─────────────────────────────────────────────────────────────
   // BUG-164 : les listes (rapports, clôtures, dépenses, livre de caisse, bons, journal,
@@ -168,11 +170,7 @@ export const Treasury: React.FC = () => {
   const [detailEntry, setDetailEntry] = useState<CashbookEntry | null>(null);
 
   // §5.1.3 Cashbook filter
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().split('T')[0];
-  });
+  const [dateFrom, setDateFrom] = useState(() => `${today.slice(0, 8)}01`);
   const [dateTo, setDateTo] = useState(today);
   const [integrityResult, setIntegrityResult] = useState<{chain_valid: boolean; tampered_count: number} | null>(null);
   const [checkingIntegrity, setCheckingIntegrity] = useState(false);
@@ -326,6 +324,19 @@ export const Treasury: React.FC = () => {
 
   // BUG-175 : changement de boulangerie ou de jour => aucun rapport rétroactif résiduel.
   useEffect(() => { setExtraReports([]); }, [nodeFilter, today]);
+
+  // BUG-161 (F3) : à la relève (changement de journée de travail), les sélecteurs de jour qui
+  // étaient sur l'ancienne journée courante suivent la nouvelle.
+  const prevTodayRef = useRef(today);
+  useEffect(() => {
+    const previous = prevTodayRef.current;
+    if (previous === today) return;
+    prevTodayRef.current = today;
+    setDateTo(d => (d === previous ? today : d));
+    setDccDate(d => (d === previous ? today : d));
+    setJDate(d => (d === previous ? today : d));
+    setSDate(d => (d === previous ? today : d));
+  }, [today]);
 
   // Totaux « du jour » : fiables seulement quand rapports ET dépenses sont complets.
   const reportsReady = reportsQ.isComplete;

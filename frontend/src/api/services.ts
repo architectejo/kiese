@@ -1,4 +1,17 @@
 import { apiClient } from './client';
+import { useWorkDateStore } from '@/store/workDateStore';
+
+// BUG-161 (F3) : la « date de travail » vient du serveur. Chaque réponse qui la porte alimente
+// le petit store partagé (aucun appel ni minuteur supplémentaire) ; le navigateur ne calcule
+// plus « aujourd'hui » lui-même. `rotation` : vrai/faux quand la réponse le dit, sinon omis.
+function feedWorkDate<R extends { data: unknown }>(
+  res: R,
+  pick: (data: R['data']) => { workDate?: string | null; rotation?: boolean },
+): R {
+  const { workDate, rotation } = pick(res.data);
+  useWorkDateStore.getState().setWorkDate(workDate, rotation);
+  return res;
+}
 
 // Unwrap DRF paginated ({count, next, results}) or plain array responses,
 // following "next" until exhausted so callers always get the FULL matching
@@ -384,6 +397,9 @@ export interface DailyClosureTotals {
 export interface DailyClosureReport {
   node: string;
   date: string;
+  /** BUG-161 (B3) : journée de travail COURANTE du serveur (distincte de `date`). */
+  work_date?: string;
+  server_now?: string;
   categories: DailyClosureCategory[];
   totals: DailyClosureTotals;
 }
@@ -411,6 +427,10 @@ export interface ShiftEndStatusPending {
   pending_validation: true;
   remaining: ShiftEndRemainingLine[];
   auto_closed: false;
+  /** BUG-161 (B5), rotation seulement : journée de travail à clôturer. */
+  work_date?: string;
+  current_work_date?: string;
+  server_now?: string;
 }
 
 /** `auto_closed=true` : le serveur a déjà clôturé la fournée de l'équipe
@@ -420,12 +440,20 @@ export interface ShiftEndStatusAutoClosed {
   pending_validation: false;
   auto_closed: true;
   team: ShiftEndTeam;
+  /** BUG-161 (B5), rotation seulement : journée de travail clôturée. */
+  work_date?: string;
+  current_work_date?: string;
+  server_now?: string;
 }
 
 /** Rien à signaler (aucune équipe concernée, ou déjà close). */
 export interface ShiftEndStatusNone {
   pending_validation: false;
   auto_closed?: false;
+  /** BUG-161 (B5), rotation seulement : journée courante s'il n'y a rien à faire. */
+  work_date?: string;
+  current_work_date?: string;
+  server_now?: string;
 }
 
 export type ShiftEndStatus = ShiftEndStatusPending | ShiftEndStatusAutoClosed | ShiftEndStatusNone;
@@ -465,10 +493,19 @@ export interface OpeningConfirmationReport {
    *  modale (remplace l'ancien calcul frontend `!teams.A.confirmed ||
    *  !teams.B.confirmed`). */
   needs_confirmation: boolean;
+  /** BUG-161 (B3) : journée de travail et heure du serveur (AAAA-MM-JJ / ISO). */
+  work_date?: string;
+  server_now?: string;
+  /** BUG-161 (B4), rotation seulement : `rotation: true`, équipe désignée (ou null),
+   *  `team_assignment_required` tant que la désignation manque. */
+  rotation?: boolean;
+  team?: OpeningConfirmationTeam | null;
+  team_assignment_required?: boolean;
 }
 
 export interface OpeningConfirmationSubmitPayload {
-  team: OpeningConfirmationTeam;
+  /** Facultatif en rotation (le serveur utilise l'équipe désignée). */
+  team?: OpeningConfirmationTeam;
   lines: Array<{ bread_price: number; qty: number }>;
 }
 
@@ -487,6 +524,8 @@ export interface OpeningConfirmationSubmitResponse {
   node: string;
   team: OpeningConfirmationTeam;
   date: string;
+  work_date?: string;
+  server_now?: string;
   stock_adjustments: OpeningConfirmationStockAdjustment[];
 }
 
@@ -519,6 +558,9 @@ export interface BreadStockByDate {
   node: number;
   node_display?: string;
   date: string;
+  /** BUG-161 (B3) : journée de travail courante du serveur. */
+  work_date?: string;
+  server_now?: string;
   /** "live" = date = aujourd'hui (identique au solde courant `BreadStock`) ;
    *  "snapshot" = date passée reconstituée à partir de `DailyBreadStockSnapshot`. */
   source: 'live' | 'snapshot';
@@ -1290,9 +1332,11 @@ export const productionApi = {
   // `node` : seulement pour un rôle Siège (ignoré côté serveur pour un non-HQ).
   teamAssignment: {
     get: (params?: { node?: string }) =>
-      apiClient.get<TeamAssignment>('/api/production/team-assignment/', { params }),
+      apiClient.get<TeamAssignment>('/api/production/team-assignment/', { params })
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true }))),
     set: (team: ServiceTeam, node?: string) =>
-      apiClient.post<TeamAssignment>('/api/production/team-assignment/', node ? { team, node } : { team }),
+      apiClient.post<TeamAssignment>('/api/production/team-assignment/', node ? { team, node } : { team })
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true }))),
   },
   sessions: {
     list: (params?: Record<string, string>) =>
@@ -1318,7 +1362,9 @@ export const productionApi = {
     // optionnel, ignoré/forcé côté serveur pour un GERANT/FACTURIER non-HQ
     // (même règle que `openingConfirmation.get()`).
     shiftEndStatus: (params?: { node?: string }) =>
-      apiClient.get<ShiftEndStatus>('/api/production/sessions/shift-end-status/', { params }),
+      apiClient.get<ShiftEndStatus>('/api/production/sessions/shift-end-status/', { params })
+        // `current_work_date` n'existe qu'en rotation ; `work_date` peut être la journée À CLÔTURER.
+        .then(res => feedWorkDate(res, d => ({ workDate: d.current_work_date, rotation: true }))),
   },
   breadStocks: {
     list: (params?: Record<string, string>) =>
@@ -1327,7 +1373,8 @@ export const productionApi = {
     // `date` optionnel (défaut aujourd'hui) ; `node` requis explicitement pour un
     // utilisateur HQ, ignoré/forcé à `user.node` côté serveur sinon.
     byDate: (params?: { node?: string; date?: string }) =>
-      apiClient.get<BreadStockByDate>('/api/production/bread-stocks/by-date/', { params }),
+      apiClient.get<BreadStockByDate>('/api/production/bread-stocks/by-date/', { params })
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date }))),
   },
   consumableTypes: {
     list: (params?: Record<string, string>) =>
@@ -1380,15 +1427,18 @@ export const productionApi = {
   // BUG-120 : rapport de clôture journalier consolidé (lecture seule).
   dailyClosure: {
     get: (node: string, date: string) =>
-      apiClient.get<DailyClosureReport>('/api/production/daily-closure/', { params: { node, date } }),
+      apiClient.get<DailyClosureReport>('/api/production/daily-closure/', { params: { node, date } })
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date }))),
   },
   // BUG-133/134 : boîte modale « stock de départ » — pas de paramètre `node`
   // pour un GERANT non-HQ (le backend le force à son nœud, jamais forgeable).
   openingConfirmation: {
     get: () =>
-      apiClient.get<OpeningConfirmationReport>('/api/production/opening-confirmation/'),
+      apiClient.get<OpeningConfirmationReport>('/api/production/opening-confirmation/')
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: d.rotation === true }))),
     submit: (payload: OpeningConfirmationSubmitPayload) =>
-      apiClient.post<OpeningConfirmationSubmitResponse>('/api/production/opening-confirmation/', payload),
+      apiClient.post<OpeningConfirmationSubmitResponse>('/api/production/opening-confirmation/', payload)
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date }))),
   },
 };
 
