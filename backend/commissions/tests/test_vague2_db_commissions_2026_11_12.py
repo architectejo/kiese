@@ -4,7 +4,6 @@ rejoués sur K4 (comptes zz_clients_*) et reproduits sur une base de test fictiv
 calculées à la main (en Decimal). Défauts constatés : @expectedFailure + ticket du registre.
 """
 from decimal import Decimal as D
-from unittest import expectedFailure
 
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -32,6 +31,12 @@ class Base(TestCase):
         self.direction = make_user('DIRECTION', node=None, team='')
         self.gerant = make_user('GERANT', node=self.node, team='')
         self.facturier = make_user('FACTURIER', node=self.node, team='A')
+
+    def sans_cotisation(self):
+        c = make_client(self.node)
+        Client.objects.filter(pk=c.pk).update(cotisation_sociale=D('0'))
+        c.refresh_from_db()
+        return c
 
     def invoice(self, client, qty, pay=0, month=2, year=2026, **kw):
         inv = Invoice.objects.create(
@@ -164,7 +169,7 @@ class DefautsConstatesTests(Base):
             self.assertEqual(api.patch(f'{COMM}{cc.pk}/', payload, format='json').status_code, 400, payload)
 
     def test_bug263_commission_payee_ou_periode_cloturee_non_modifiable(self):
-        c = make_client(self.node)
+        c = self.sans_cotisation()
         self.invoice(c, 2)
         p = self.generate()
         cc = self.row(p, c)
@@ -188,7 +193,7 @@ class DefautsConstatesTests(Base):
         self.assertEqual(cc.deduction_social, D('1000.00'), 'la retenue sociale saisie est écrasée par la régénération')
 
     def test_bug264_regeneration_saute_les_lignes_payees_et_rafraichit_les_champs_derives(self):
-        pay, open_ = make_client(self.node), make_client(self.node)
+        pay, open_ = self.sans_cotisation(), make_client(self.node)
         self.invoice(pay, 2)                                           # 1000 -> CM 250
         self.invoice(open_, 2)
         p = self.generate()
@@ -208,31 +213,32 @@ class DefautsConstatesTests(Base):
         self.assertEqual(b.net_payable, D('500') - D('3255.00'))
 
     def test_bug265_mark_paid_et_set_manuel_reserves_a_la_direction(self):
-        c = make_client(self.node)
+        c = self.sans_cotisation()
         self.invoice(c, 2)
         cc = self.row(self.generate(), c)
         self.assertEqual(_api(self.comptable).patch(f'{COMM}{cc.pk}/set_manuel/', {'manuel_adjustment': '100'}, format='json').status_code, 403)
         self.assertEqual(_api(self.comptable).post(f'{COMM}{cc.pk}/mark_paid/').status_code, 403)
         self.assertEqual(_api(self.direction).post(f'{COMM}{cc.pk}/mark_paid/').status_code, 200)
 
-    @expectedFailure  # BUG-266 (À CLARIFIER : que faire d'un net négatif au paiement ?)
     def test_bug266_net_negatif_non_marquable_paye(self):
         c = make_client(self.node, current_debt=D('5000'))
         self.invoice(c, 10)
         cc = self.row(self.generate(), c)
         self.assertLess(cc.net_payable, 0)
-        self.assertEqual(_api(self.direction).post(f'{COMM}{cc.pk}/mark_paid/').status_code, 400)
+        r = _api(self.direction).post(f'{COMM}{cc.pk}/mark_paid/')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('négatif', r.data['detail'])
+        cc.refresh_from_db()
+        self.assertFalse(cc.is_paid)
 
-    @expectedFailure  # BUG-267 (À CLARIFIER : épargne client)
     def test_bug267_client_epargne_cm_zero_ne_recoit_pas_son_epargne_en_net_a_payer(self):
         c = make_client(self.node, current_debt=D('-7000'))
         Invoice.objects.create(node=self.node, client=c, payment_type='CASH', status='DELIVERED',
                                payment_amount=D('7000'), is_debt_repayment=True, invoice_date='2026-02-10', node_origin='C4')
-        cc = self.row(self.generate(), c)
-        self.assertEqual(cc.commission_gross, D('0.00'))
-        self.assertLessEqual(cc.net_payable, D('0.00'), 'net de +4000 FC pour une CM de 0 (épargne restituée comme commission)')
+        p = self.generate()
+        self.assertFalse(ClientCommission.objects.filter(period=p, client=c).exists(),
+                         'un client épargne (CM 0) ne reçoit pas son épargne comme commission')
 
-    @expectedFailure  # BUG-268 (À CLARIFIER : double comptage dette BP + report)
     def test_bug268_report_de_deficit_ne_recompte_pas_la_dette_bp_deja_retenue(self):
         c = make_client(self.node, current_debt=D('10000'))
         self.invoice(c, 20)                                           # CM 2500, net fév. -10525
@@ -245,9 +251,12 @@ class DefautsConstatesTests(Base):
         # Net maximal admissible : 250 (CM) - 2,50 (carte) - 10000 (dette, une fois) - 3000 - 3000 (2 cotisations).
         self.assertGreaterEqual(cc.net_payable, D('-16000'), f'net observé {cc.net_payable}')
 
-    @expectedFailure  # BUG-253 (À CLARIFIER)
     def test_bug253_facturier_ne_lit_pas_les_commissions_et_retenues_des_clients(self):
         c = make_client(self.node)
         self.invoice(c, 2)
         self.generate()
         self.assertEqual(_api(self.facturier).get(COMM).status_code, 403)
+        self.assertEqual(_api(self.facturier).get('/api/commissions/periods/').status_code, 403)
+        livreur = make_user('LIVREUR', node=self.node, team='A')
+        self.assertEqual(_api(livreur).get(COMM).status_code, 403)
+        self.assertEqual(_api(self.gerant).get(COMM).status_code, 200)

@@ -237,10 +237,9 @@ class RapportFacturierEtClotureTests(Base):
             self.assertEqual(c2.status_code, 201, c2.content)
             self.assertEqual(c2.data['date'], str(D + timedelta(days=1)))   # une cloture par (noeud, date)
 
-    @expectedFailure  # BUG-273
-    def test_deux_facturiers_meme_equipe_meme_date_un_seul_rapport(self):
-        # Rotation : la facture porte l'equipe de SERVICE ; deux comptes facturier
-        # d'une meme equipe produisent aujourd'hui 2 rapports pour (equipe, date).
+    def test_deux_facturiers_meme_equipe_meme_date_un_rapport_par_facturier(self):
+        # BUG-273 (decision client) : un rapport par (facturier, equipe, date) ; la
+        # cloture de caisse reste unique par (noeud, date) et additionne tout.
         self.assign(D, 'A')
         with _now(13, 0):
             for u in (self.fa, self.fa2):
@@ -249,7 +248,14 @@ class RapportFacturierEtClotureTests(Base):
         with _now(20, 0):
             r = _api(self.gerant).post('/api/treasury/reports/generate/', {}, format='json')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len([x for x in r.data if x['team'] == 'A']), 1)
+        rows = [x for x in r.data if x['team'] == 'A']
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len({x['facturier'] for x in rows}), 2)
+        self.assertEqual(sum(Decimal(x['total_cash_sales']) for x in rows), Decimal('1000'))
+        with _now(20, 5):
+            c = _api(self.gerant).post('/api/treasury/closures/', {'date': str(D), 'bills_500': 2}, format='json')
+        self.assertEqual(c.status_code, 201, c.content)
+        self.assertEqual(Decimal(c.data['total_entries']), Decimal('1000'))   # somme des deux rapports
 
     def test_rapport_journalier_consolide_ns_rg_facture_jr_cm(self):
         self.assign(PREV, 'A')
@@ -321,7 +327,15 @@ class FrontiereDeMinuitTests(Base):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual([(x['date'], x['total_cash_sales']) for x in r.data], [(str(D), '500.00')])
 
-    @expectedFailure  # BUG-275
+    def test_vente_solde_exclue_du_credit_de_daily_summary(self):
+        # BUG-275 (complément) : la décote d'une VENTE SOLDE n'est jamais une créance.
+        with _now(10, 0):
+            iid = self.sale(qty=2, pay=500, is_soldee=True).data['id']   # 2 x 75 % du prix, paiement partiel
+            self.assertEqual(self.deliver(iid).status_code, 200)
+            rows = _api(self.gerant).get(INV + 'daily_summary/', {'date': str(D)}).data
+        credit = [r for r in rows if r['payment_type'] == 'CREDIT']
+        self.assertTrue(all(Decimal(str(r['total'])) == 0 for r in credit), rows)
+
     def test_recaps_ventes_et_rapports_s_accordent_sur_le_jour_d_une_facture_livree_apres_minuit(self):
         with _now(23, 55, PREV):
             iid = self.sale(pay=500).data['id']
@@ -335,3 +349,4 @@ class FrontiereDeMinuitTests(Base):
         jour_daily = [d for d in (PREV, D) if any(r['count'] for r in ds[d])]
         jour_pains = [d for d in (PREV, D) if bs[d]]
         self.assertEqual(jour_daily, jour_pains)
+        self.assertEqual(jour_daily, [D])   # BUG-275 : jour de LIVRAISON

@@ -4,7 +4,7 @@ from datetime import date as _date_cls
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError, OperationalError, transaction
-from django.db.models import F, Sum, Count
+from django.db.models import F, Q, Sum, Count
 from django.utils import timezone
 from rest_framework import viewsets, status, filters, mixins
 from rest_framework.decorators import action
@@ -1041,14 +1041,20 @@ class InvoiceViewSet(
         CREDIT invoice.
         """
         target_date = request.query_params.get('date', str(_default_work_date(request.user)))
-        qs = self.get_queryset().filter(invoice_date=target_date, status=Invoice.Status.DELIVERED)
+        # BUG-275 : date de référence d'une vente = date de LIVRAISON (jour
+        # calendaire), comme bread_summary, le rapport facturier et la clôture.
+        qs = self.get_queryset().filter(delivered_at__date=target_date, status=Invoice.Status.DELIVERED)
+        # Décote d'une VENTE SOLDE/CASH : jamais une créance, exclue du CREDIT
+        # (cohérent avec debt_delta = 0 pour is_soldee).
         per_node = qs.values('node__code').annotate(
-            cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id')
+            cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id'),
+            solde_cash=Sum('payment_amount', filter=Q(is_soldee=True)),
+            solde_value=Sum('order_total', filter=Q(is_soldee=True)),
         )
         summary = []
         for row in per_node:
             cash = row['cash'] or 0
-            credit = (row['order_value'] or 0) - cash
+            credit = ((row['order_value'] or 0) - (row['solde_value'] or 0)) - (cash - (row['solde_cash'] or 0))
             summary.append({'node__code': row['node__code'], 'payment_type': 'CASH', 'total': cash, 'count': row['count']})
             summary.append({'node__code': row['node__code'], 'payment_type': 'CREDIT', 'total': credit, 'count': 0})
         return Response(summary)

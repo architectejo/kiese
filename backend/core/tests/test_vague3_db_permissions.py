@@ -54,8 +54,8 @@ READS = [
     ("/api/core/users/", HQ),
     ("/api/clients/clients/", ALL),
     ("/api/clients/contributions/", GERANT_UP),
-    ("/api/commissions/commissions/", ALL),
-    ("/api/commissions/periods/", ALL),
+    ("/api/commissions/commissions/", GERANT_UP),  # BUG-253
+    ("/api/commissions/periods/", GERANT_UP),  # BUG-253
     ("/api/production/stocks/", ALL),
     ("/api/core/notifications/", ALL),
 ]

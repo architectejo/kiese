@@ -159,11 +159,16 @@ class ClientCommission(SyncableModel):
         self.deduction_carte  = round(self.commission_gross * Decimal('0.01'), 2)
         self.deduction_remise = round(self.commission_gross * Decimal('0.001'), 2)
 
-        self.net_ordi  = self.commission_gross - deduction_debt
-        self.net_carte = self.net_ordi - self.deduction_carte
-
         self.carried_debt_in = self._compute_carried_debt_in()
         carried_debt_in = Decimal(str(self.carried_debt_in))
+
+        # BUG-268 : le report d'un net négatif contient déjà la dette de BP du
+        # mois précédent ; on ne retient donc que l'excédent de dette au-delà du
+        # report (jamais de double comptage de la même créance).
+        deduction_debt = max(Decimal('0'), deduction_debt - carried_debt_in)
+
+        self.net_ordi  = self.commission_gross - deduction_debt
+        self.net_carte = self.net_ordi - self.deduction_carte
 
         # BUG-058 : REMISE est calculée et affichée (`deduction_remise`,
         # conservée ci-dessus pour l'affichage) mais n'est plus déduite du

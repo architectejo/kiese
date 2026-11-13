@@ -400,8 +400,9 @@ class CashClosureViewSet(viewsets.ModelViewSet):
     ordering         = ['-date', '-pk']  # BUG-172/176 : ordre total
 
     def get_permissions(self):
+        # BUG-253 : moindre privilège, facturier et livreur ne lisent pas les clôtures.
         if self.action in ('list', 'retrieve'):
-            return [IsAuthenticated()]
+            return [IsGerant()]
         # BUG-200 : confirmation, infirmation et versement au Livre de Caisse
         # = comptable / direction / siège UNIQUEMENT (CLAUDE.md §5.5). Le
         # gérant crée, modifie (si infirmée) et supprime (si non confirmée)
@@ -952,9 +953,8 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'options']
 
     def get_permissions(self):
-        if self.action == 'create':
-            return [IsGerant()]
-        return [IsAuthenticated()]
+        # BUG-253 : lecture réservée au gérant et au-dessus.
+        return [IsGerant()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -1110,7 +1110,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
             )
         return entry
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def suggested_ca(self, request):
         """
         BUG-091 : montant suggéré pour l'imputation « Recettes du jour (CA) »
@@ -1164,7 +1164,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
             'message': None,
         })
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def monthly_report(self, request):
         """Totals for a given month/year and node."""
         params  = request.query_params
@@ -1226,8 +1226,7 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         # BUG-206 : saisie/modification/suppression réservées au gérant et
         # au-dessus (un livreur ou un facturier ne saisit pas l'épargne).
-        if self.action in ('list', 'retrieve', 'monthly_total'):
-            return [IsAuthenticated()]
+        # BUG-253 : lecture aussi réservée au gérant et au-dessus.
         return [IsGerant()]
 
     def get_queryset(self):
@@ -1296,7 +1295,7 @@ class DailySavingsViewSet(viewsets.ModelViewSet):
         instance.savings_amount = (daily_revenue * savings_rate).quantize(Decimal('0.01'))
         instance.save(update_fields=['savings_amount'])
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def monthly_total(self, request):
         """Total savings per node for a given month/year."""
         params  = request.query_params

@@ -23,8 +23,9 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
     ordering         = ['-year', '-month']
 
     def get_permissions(self):
+        # BUG-253 : lecture réservée au gérant et au-dessus.
         if self.action in ('list', 'retrieve'):
-            return [IsAuthenticated()]
+            return [IsGerant()]
         return [IsHeadquarters()]
 
     def get_queryset(self):
@@ -46,7 +47,7 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def history(self, request):
         """Last N commission periods for a node with aggregates (total CM, net, paid)."""
         node_id = request.query_params.get('node')
@@ -131,10 +132,16 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
         ).exclude(special_code='RG').exclude(commission_rate=0).select_related('client').prefetch_related('lines')
 
         by_client = {}
+        # BUG-267 : un remboursement/dépôt n'est pas une vente (pas de base de CM).
+        invoices = invoices.filter(is_debt_repayment=False)
         for inv in invoices:
             agg = by_client.setdefault(inv.client_id, {'client': inv.client, 'order_value': 0, 'total_breads': 0})
             agg['order_value']  += inv.order_total
             agg['total_breads'] += sum(line.quantity for line in inv.lines.all())
+
+        # BUG-267 : client épargne (commande = 0, BP créditrice) : aucune commission,
+        # son épargne n'est jamais restituée comme net à payer.
+        by_client = {cid: a for cid, a in by_client.items() if a['order_value'] > 0}
 
         config = Config.get_instance()
         for client_id, agg in by_client.items():
@@ -148,7 +155,7 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
                     'total_breads': agg['total_breads'],
                     'order_value': agg['order_value'],
                     'commission_rate': client.commission_rate,
-                    'deduction_debt': client.current_debt,
+                    'deduction_debt': max(Decimal('0'), Decimal(str(client.current_debt))),
                     'deduction_social': cotisation,
                     'deduction_prints': config.print_fee,
                     'node_origin': node.code,
@@ -201,7 +208,7 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
-            return [IsAuthenticated()]
+            return [IsGerant()]
         if self.action in ('mark_paid', 'set_manuel'):
             # BUG-265 : réservés à ADMIN/DIRECTION (ne pas écraser IsDirection).
             return [IsDirection()]
@@ -264,6 +271,11 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         commission = self.get_object()
         if commission.is_paid:
             return Response({'detail': 'Commission déjà marquée comme payée.'}, status=status.HTTP_400_BAD_REQUEST)
+        # BUG-266 : un net négatif est reporté comme dette, il ne se « paie » pas.
+        if Decimal(str(commission.net_payable)) < 0:
+            return Response(
+                {'detail': 'Net à payer négatif : paiement impossible, le solde est reporté comme dette sur la période suivante.'},
+                status=status.HTTP_400_BAD_REQUEST)
         paid_by = request.data.get('paid_by', request.user.get_full_name())
         commission.mark_paid(paid_by)
         log_activity(
@@ -308,7 +320,7 @@ class ClientCommissionViewSet(viewsets.ModelViewSet):
         )
         return Response(ClientCommissionSerializer(commission).data)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def payroll_listing(self, request):
         """Return unpaid commissions for a given period (for the pay register)."""
         period_id = request.query_params.get('period')

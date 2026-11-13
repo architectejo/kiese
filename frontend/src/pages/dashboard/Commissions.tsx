@@ -480,6 +480,8 @@ export const Commissions: React.FC = () => {
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                         {c.is_paid ? (
                           <span style={{ color: 'hsl(var(--color-success))', fontWeight: 700, fontSize: '0.65rem' }}>À jour</span>
+                        ) : canPay && netPayable < 0 ? (
+                          <span title="Net négatif : non payable, solde reporté comme dette" style={{ color: 'hsl(var(--color-danger))', fontWeight: 700, fontSize: '0.6rem' }}>Net négatif</span>
                         ) : canPay ? (
                           <button
                             onClick={e => { e.stopPropagation(); setPayoutItem(c); }}
@@ -629,7 +631,12 @@ export const Commissions: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>
-                {!f.is_paid && isDir && (
+                {!f.is_paid && isDir && net < 0 && (
+                  <div style={{ fontSize: '0.74rem', color: 'hsl(var(--color-danger))', fontWeight: 600 }}>
+                    Net à payer négatif : paiement impossible, le solde est reporté comme dette.
+                  </div>
+                )}
+                {!f.is_paid && isDir && net >= 0 && (
                   <button
                     onClick={() => { setFicheItem(null); setPayoutItem(f); }}
                     className="btn btn-primary"

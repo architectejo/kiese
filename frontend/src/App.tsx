@@ -180,7 +180,8 @@ export const App: React.FC = () => {
         <Route 
           path="/commissions" 
           element={
-            <ProtectedRoute>
+            // BUG-253 : même garde que le menu ; FACTURIER/LIVREUR n'ont plus accès à l'API.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION', 'COMPTABLE'].includes(u.role)}>
               <Commissions />
             </ProtectedRoute>
           } 

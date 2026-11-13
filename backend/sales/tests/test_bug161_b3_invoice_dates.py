@@ -113,7 +113,8 @@ class NoRotationEquivalenceTests(_Base):
     def test_daily_summary_default_date_is_local_date(self):
         with _now(0, 30):
             r = self._sale()
-            Invoice.objects.filter(pk=r.data['id']).update(status=Invoice.Status.DELIVERED)
+            Invoice.objects.filter(pk=r.data['id']).update(
+                status=Invoice.Status.DELIVERED, delivered_at=timezone.now())   # BUG-275 : jour de livraison
             resp = _api(self.gerant).get(INV + 'daily_summary/')
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data and resp.data[0]['total'] == 500)
