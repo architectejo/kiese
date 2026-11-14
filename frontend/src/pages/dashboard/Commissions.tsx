@@ -152,7 +152,9 @@ export const Commissions: React.FC = () => {
   // Les trois KPI ne sont affichés que si la liste est complète (jamais de total partiel).
   const totalCalculated = commissions.reduce((s, c) => s + parseFloat(c.commission_gross || '0'), 0);
   const totalPaid = commissions.filter(c => c.is_paid).reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0);
-  const totalRemaining = commissions.filter(c => !c.is_paid).reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0);
+  // BUG-299 : seuls les nets positifs sont payables ; les nets négatifs sont reportés en dette client.
+  const totalRemaining = commissions.filter(c => !c.is_paid).reduce((s, c) => s + Math.max(0, parseFloat(c.net_payable || '0')), 0);
+  const totalCarriedDebt = commissions.filter(c => !c.is_paid).reduce((s, c) => s + Math.max(0, -parseFloat(c.net_payable || '0')), 0);
 
   const handlePrint = () => {
     if (!isReady) return;
@@ -286,6 +288,11 @@ export const Commissions: React.FC = () => {
           <div>
             <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>RESTE À VERSER</div>
             <h3 style={{ fontSize: '1rem', fontWeight: 800 }}>{isReady ? `${totalRemaining.toLocaleString('fr-FR')} FC` : `calcul en cours… ${progress}`}</h3>
+            {isReady && totalCarriedDebt > 0 && (
+              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))' }}>
+                + {totalCarriedDebt.toLocaleString('fr-FR')} FC reportés en dette (nets négatifs)
+              </div>
+            )}
           </div>
         </div>
       </div>

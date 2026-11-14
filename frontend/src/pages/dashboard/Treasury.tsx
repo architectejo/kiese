@@ -354,6 +354,7 @@ export const Treasury: React.FC = () => {
   // Totaux « du jour » : fiables seulement quand rapports ET dépenses sont complets.
   const reportsReady = reportsQ.isComplete;
   const expensesReady = expensesQ.isComplete;
+  const [editingClosure, setEditingClosure] = useState<CashClosure | null>(null);
   const dayReady = reportsReady && expensesReady;
   const isLoading = auxLoading || reportsQ.isLoading || closuresQ.isLoading || expensesQ.isLoading || cashbookQ.isLoading;
 
@@ -577,7 +578,12 @@ export const Treasury: React.FC = () => {
   const theoreticalCash  = reports.reduce((sum, r) => sum + parseFloat(r.theoretical_cash   || '0'), 0);
 
   // §5.2 — Écart caisse (physical bills vs net theoretical = theoretical - local expenses)
-  const ecartCaisse = billTotal - (theoreticalCash - totalExpenses);
+  // BUG-298 : une clôture du jour déjà enregistrée fait foi (valeurs serveur, non modifiables) ;
+  // sinon calcul prévisionnel = billetage − (espèces théoriques − dépenses locales).
+  const closureRecorded = !!todayClosure && !editingClosure;
+  const soldeComptable = closureRecorded ? parseFloat(todayClosure.net_cash || '0') : theoreticalCash - totalExpenses;
+  const ecartCaisse = closureRecorded ? parseFloat(todayClosure.cash_gap || '0') : billTotal - soldeComptable;
+  const billTotalShown = closureRecorded ? parseFloat(todayClosure.physical_cash_total || '0') : billTotal;
   const netCaisse = totalCash - totalExpenses;
 
   // Active node label for visual indicators
@@ -713,7 +719,6 @@ export const Treasury: React.FC = () => {
   const [rejectingClosureId, setRejectingClosureId] = useState<string | null>(null);
   const [validateNotes, setValidateNotes] = useState('');
   const [validatingClosureId, setValidatingClosureId] = useState<string | null>(null);
-  const [editingClosure, setEditingClosure] = useState<CashClosure | null>(null);
   const [closureActionLoading, setClosureActionLoading] = useState(false);
 
   const handleRejectClosure = async (closureId: string) => {
@@ -1435,7 +1440,7 @@ export const Treasury: React.FC = () => {
         {[
           { label: 'TOTAL CASH DU JOUR', value: reportsReady ? `${fmt(totalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-success)', icon: <FiDollarSign /> },
           { label: 'TOTAL CRÉDIT DU JOUR', value: reportsReady ? `${fmt(totalCredit)} FC` : progressLabel(reportsQ), color: 'var(--color-info)', icon: <FiFileText /> },
-          { label: 'SOLDE COMPTABLE CAISSE', value: reportsReady ? `${fmt(theoreticalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-warning)', icon: <FiLock /> },
+          { label: 'SOLDE COMPTABLE CAISSE', value: (reportsReady || closureRecorded) ? `${fmt(soldeComptable)} FC` : progressLabel(reportsQ), color: 'var(--color-warning)', icon: <FiLock /> },
           { label: 'ÉCART BILLETAGE', value: dayReady ? `${ecartCaisse >= 0 ? '+' : ''}${fmt(ecartCaisse)} FC` : 'calcul en cours…', color: !dayReady ? 'var(--text-muted)' : ecartCaisse === 0 ? 'var(--color-success)' : 'var(--color-danger)', icon: <FiAlertTriangle /> },
         ].map((k, i) => (
           <div key={i} className="glass-card" style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1693,7 +1698,7 @@ export const Treasury: React.FC = () => {
             <div style={{ borderTop: '2px solid hsl(var(--border-color))', marginTop: '4px', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 800 }}>
                 <span>TOTAL GÉNÉRAL ESPÈCES :</span>
-                <span style={{ color: 'hsl(var(--color-success))', fontSize: '0.9rem' }}>{billTotal.toLocaleString('fr-FR')} FC</span>
+                <span style={{ color: 'hsl(var(--color-success))', fontSize: '0.9rem' }}>{billTotalShown.toLocaleString('fr-FR')} FC</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'hsl(var(--text-secondary))' }}>
                 <span>
@@ -1712,7 +1717,7 @@ export const Treasury: React.FC = () => {
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'hsl(var(--text-secondary))' }}>
                 <span>Solde comptable caisse :</span>
-                <span style={{ fontWeight: 800, color: 'hsl(var(--color-warning))' }}>{dayReady ? `${fmt(theoreticalCash - totalExpenses)} FC` : '…'}</span>
+                <span style={{ fontWeight: 800, color: 'hsl(var(--color-warning))' }}>{dayReady || closureRecorded ? `${fmt(soldeComptable)} FC` : '…'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 800, padding: '5px 8px', borderRadius: 'var(--radius-sm)', backgroundColor: !dayReady ? 'hsl(var(--bg-tertiary))' : ecartCaisse === 0 ? 'hsl(var(--color-success) / 0.08)' : 'hsl(var(--color-danger) / 0.08)', border: `1px solid hsl(var(--${!dayReady ? 'border-color' : ecartCaisse === 0 ? 'color-success' : 'color-danger'}) / 0.3)` }}>
                 <span>ÉCART DE CAISSE :</span>

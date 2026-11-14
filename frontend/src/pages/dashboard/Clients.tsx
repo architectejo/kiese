@@ -284,27 +284,30 @@ export const Clients: React.FC = () => {
   const [distLoading, setDistLoading]           = useState(false);
   const [bulkMsg, setBulkMsg]                   = useState<string | null>(null);
 
+  // BUG-300 : la caisse sociale est réservée au gérant et aux rôles supérieurs (403 sinon).
+  const canReadSocial = !!user && user.role !== 'FACTURIER' && user.role !== 'LIVREUR';
+
   const loadContributions = useCallback(async () => {
-    if (!socialNode) return;
+    if (!socialNode || !canReadSocial) return;
     setSocialLoading(true);
     try {
       const res = await clientsApi.contributions.list({ node: socialNode, month: String(socialMonth), year: String(socialYear) });
       setContributions(Array.isArray(res.data) ? res.data : []);
     } catch { /* ignore */ }
     finally { setSocialLoading(false); }
-  }, [socialNode, socialMonth, socialYear]);
+  }, [socialNode, socialMonth, socialYear, canReadSocial]);
 
   useEffect(() => { if (socialTab === 'cotisations') loadContributions(); }, [loadContributions, socialTab]);
 
   const loadDistributions = useCallback(async () => {
-    if (!socialNode) return;
+    if (!socialNode || !canReadSocial) return;
     setDistLoading(true);
     try {
       const res = await clientsApi.distributions.list({ node: socialNode, year: String(socialYear) });
       setDistributions(Array.isArray(res.data) ? res.data : []);
     } catch { /* ignore */ }
     finally { setDistLoading(false); }
-  }, [socialNode, socialYear]);
+  }, [socialNode, socialYear, canReadSocial]);
 
   useEffect(() => { if (socialTab === 'distribution') loadDistributions(); }, [loadDistributions, socialTab]);
 

@@ -100,6 +100,8 @@ export const Dashboard: React.FC = () => {
     fetchPage: (page) => clientsApi.listPage({ page: String(page), page_size: CLIENTS_PAGE_SIZE }),
   });
 
+  const canSeeActiveClients = !!user && user.role !== 'FACTURIER' && user.role !== 'LIVREUR';
+
   const loadDashboard = async () => {
     setIsLoading(true);
     setLoadError(null);
@@ -109,7 +111,8 @@ export const Dashboard: React.FC = () => {
         clientsApi.listPage({ page: '1', page_size: '1' }),
         salesApi.dailySummary(),
         productionApi.sessions.list({ date_from: sevenDaysAgo, page_size: '200' }),
-        clientsApi.activeLastMonth(),
+        // BUG-300 : route réservée aux rôles de gestion (403 pour facturier/livreur).
+        canSeeActiveClients ? clientsApi.activeLastMonth() : Promise.resolve({ data: { count: 0 } }),
       ]);
 
       const summaryRaw: DailySummaryRow[] = Array.isArray(summaryRes.data) ? summaryRes.data : [];
@@ -315,7 +318,7 @@ export const Dashboard: React.FC = () => {
           {
             key: 'clients' as KpiModalKey,
             label: 'Clients Actifs du Groupe',
-            value: isLoading ? '—' : `${data?.activeClients ?? 0} clients`,
+            value: isLoading || !canSeeActiveClients ? '—' : `${data?.activeClients ?? 0} clients`,
             change: `Actifs ce mois — total fiches : ${data?.totalClients ?? 0}`,
             icon: <FiUsers />, color: 'hsl(var(--text-primary))'
           },
