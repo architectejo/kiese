@@ -10,13 +10,15 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import ProtectedError
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Node, Config, BreadPrice, ExpenseCategory, ActivityLog, SystemNotification, ColisDistribution
 from .serializers import (
     NodeSerializer, UserSerializer, UserCreateSerializer,
     ConfigSerializer, PublicConfigSerializer, BreadPriceSerializer, ExpenseCategorySerializer, LoginSerializer,
-    ActivityLogSerializer, SystemNotificationSerializer,
+    ActivityLogSerializer, SystemNotificationSerializer, ChangePasswordSerializer,
     ColisDistributionSerializer,
 )
 from .permissions import IsAdmin, IsDirection, IsHeadquarters, IsGerant, IsSuperuser
@@ -104,13 +106,48 @@ def me_view(request):
     # Password change (separate from profile fields)
     new_password = request.data.get('new_password', '').strip()
     if new_password:
-        old_password = request.data.get('old_password', '')
-        if not user.check_password(old_password):
-            return Response({'old_password': 'Mot de passe actuel incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
-        user.set_password(new_password)
-        user.save()
+        error = _apply_password_change(user, request.data.get('old_password', ''), new_password)
+        if error:
+            return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(UserSerializer(user).data)
+
+
+def _apply_password_change(user, old_password, new_password):
+    """BUG-284 : verifie l'ancien mot de passe, applique les validateurs Django,
+    remet `must_change_password` a False. Retourne un message d'erreur ou None.
+    Ne journalise jamais de mot de passe."""
+    if not user.check_password(old_password):
+        return 'Mot de passe actuel incorrect.'
+    if new_password == old_password:
+        return "Le nouveau mot de passe doit être différent de l'actuel."
+    try:
+        validate_password(new_password, user)
+    except DjangoValidationError as exc:
+        return ' '.join(exc.messages)
+    user.set_password(new_password)
+    user.must_change_password = False
+    user.save()
+    log_activity(user, 'CHANGE_PASSWORD', f"Mot de passe modifié par {user.username}",
+                 node_origin=user.node.code if user.node_id else 'CLOUD')
+    return None
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password_view(request):
+    """BUG-284 : changement de mot de passe (ancien + nouveau)."""
+    serializer = ChangePasswordSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'detail': "Ancien et nouveau mot de passe requis."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    error = _apply_password_change(
+        request.user, serializer.validated_data['old_password'],
+        serializer.validated_data['new_password'],
+    )
+    if error:
+        return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+    return Response({'detail': 'Mot de passe modifié.'})
 
 
 @api_view(['POST'])
@@ -246,6 +283,7 @@ class UserViewSet(viewsets.ModelViewSet):
             self._deny("Seul un administrateur peut réinitialiser le mot de passe d'un administrateur.")
         temp = _generate_temporary_password()
         user.set_password(temp)
+        user.must_change_password = True  # BUG-284
         user.save()
         log_activity(
             request.user, 'RESET_PASSWORD',

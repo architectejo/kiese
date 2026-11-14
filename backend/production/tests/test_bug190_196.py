@@ -121,10 +121,13 @@ class Bug190ClosureOfCorrectedTeamTests(_Base):
 class Bug191SingleSourceTests(_Base):
     def test_confirmed_category_not_chained_again_but_others_still_are(self):
         self._rotation()
-        DailyBreadStockSnapshot.objects.create(
-            node=self.node, bread_price=self.bp500, date=J, team='A', qty_at_close=10)
-        DailyBreadStockSnapshot.objects.create(
-            node=self.node, bread_price=self.bp300, date=J, team='A', qty_at_close=4)
+        # BUG-297 : `updated_at` des instantanés doit suivre l'horloge simulée
+        # (sinon la comparaison `updated_at <= confirmed_at` dépend de la date réelle).
+        with _now(20, 0, d=J):
+            DailyBreadStockSnapshot.objects.create(
+                node=self.node, bread_price=self.bp500, date=J, team='A', qty_at_close=10)
+            DailyBreadStockSnapshot.objects.create(
+                node=self.node, bread_price=self.bp300, date=J, team='A', qty_at_close=4)
         with _now(13, 0, d=J1):
             self._assign('B')
             c = self.g.post(OPENING, {'lines': [{'bread_price': self.bp500.pk, 'qty': 10}]}, format='json')

@@ -185,7 +185,8 @@ export const Sales: React.FC = () => {
       setQueueComplete(false);
       setQueueError(null);
       setQueueProgress({ loaded: 0, total: null });
-      await salesApi.cleanupExpired().catch(() => {});
+      // BUG-284 : le nettoyage est réservé au gérant et au-dessus (403 pour le facturier).
+      if (canAdjustInvoice) await salesApi.cleanupExpired().catch(() => {});
       // Charge les factures du JOUR (PENDING + DELIVERED), pas seulement PENDING :
       // une commande livrée doit rester comptée dans les stats de la page tant
       // qu'elle n'est pas annulée — seul un statut CANCELLED doit l'en exclure.
@@ -260,7 +261,7 @@ export const Sales: React.FC = () => {
     } finally {
       if (seq === queueLoadSeqRef.current) setIsLoading(false);
     }
-  }, [workDate]);
+  }, [workDate, canAdjustInvoice]);
 
   useEffect(() => { loadData(); }, [loadData]);
 

@@ -13,6 +13,9 @@ const API_BASE_URL =
   import.meta.env.VITE_API_URL ||
   'http://localhost:8000';
 
+// BUG-284 : évènement émis quand l'API exige le changement du mot de passe initial.
+export const PASSWORD_CHANGE_REQUIRED_EVENT = 'kiese:password-change-required';
+
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -65,6 +68,15 @@ apiClient.interceptors.response.use(
       }
     }
     
+    // BUG-284 : mot de passe initial à changer — l'interface affiche l'écran bloquant.
+    if (
+      error.response?.status === 403 &&
+      (error.response?.data as { code?: unknown } | undefined)?.code === 'password_change_required' &&
+      typeof window !== 'undefined'
+    ) {
+      window.dispatchEvent(new CustomEvent(PASSWORD_CHANGE_REQUIRED_EVENT));
+    }
+
     return Promise.reject(error);
   }
 );

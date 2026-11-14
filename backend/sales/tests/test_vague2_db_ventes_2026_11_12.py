@@ -131,7 +131,7 @@ class LivraisonEtExpirationTests(Base):
         Invoice.objects.filter(pk=old).update(created_at=timezone.now() - timedelta(hours=13))
         Invoice.objects.filter(pk=delivered).update(created_at=timezone.now() - timedelta(hours=13))
         recent = self.post(qty=1).data['id']
-        r = self.api.post(f'{INV}cleanup_expired/')
+        r = self.as_user(self.gerant).post(f'{INV}cleanup_expired/')  # BUG-284 : GERANT+
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['deleted'], 1)
         self.assertFalse(Invoice.objects.filter(pk=old).exists())

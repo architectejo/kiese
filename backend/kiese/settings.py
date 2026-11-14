@@ -18,7 +18,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # variables restent simplement absentes : c'est pour cela que `.env` doit être
 # renommé `.venv` et qu'un vrai fichier `.env` (texte, voir `.env.example`)
 # doit être créé à sa place. Voir BUG-007 dans docs/qa/REGISTRE_BUGS.md.
-load_dotenv(BASE_DIR / '.env', override=True)
+# override=False : une variable déjà définie dans l'environnement (ex. DB_NAME
+# d'un test ou d'une exécution isolée) prime sur le .env, qui ne sert que de défaut.
+load_dotenv(BASE_DIR / '.env', override=False)
 
 # Clé de secours utilisée uniquement en développement local (DEBUG=True).
 # Ne doit JAMAIS être utilisée en production : voir le garde-fou ci-dessous.
@@ -205,8 +207,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ─── Django REST Framework ──────────────────────────────────────────
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+        'core.authentication.ForcedPasswordJWTAuthentication',
+        'core.authentication.ForcedPasswordSessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

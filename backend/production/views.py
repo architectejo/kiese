@@ -2230,7 +2230,10 @@ def _build_daily_closure_report(node, report_date=None):
     node_codes = set(Node.objects.values_list('code', flat=True))
 
     base_invoices = Invoice.objects.filter(
-        node=node, invoice_date=report_date, status=Invoice.Status.DELIVERED,
+        node=node, status=Invoice.Status.DELIVERED,
+        # BUG-286 : date de vente = date de LIVRAISON (BUG-275), comme
+        # daily_summary, bread_summary et le rapport facturier.
+        **delivered_on_work_date_filter(node, report_date),
         is_debt_repayment=False,
     )
 
@@ -2589,7 +2592,8 @@ def _build_daily_closure_report(node, report_date=None):
     # car `order_total`/`payment_amount` y sont toujours nuls par
     # construction — ce n'est jamais une commande, CLAUDE.md §5.2).
     ecart_facture_agg = Invoice.objects.filter(
-        node=node, invoice_date=report_date, status=Invoice.Status.DELIVERED,
+        node=node, status=Invoice.Status.DELIVERED,
+        **delivered_on_work_date_filter(node, report_date),  # BUG-286
     ).exclude(special_code=Invoice.SpecialCode.NS).aggregate(  # BUG-177 : NS n'est pas une commande
         commande=Sum('order_total'), paye=Sum('payment_amount'))
     ecart_facture_fc = _m(ecart_facture_agg['commande']) - _m(ecart_facture_agg['paye'])

@@ -1166,6 +1166,9 @@ export const coreApi = {
   me: {
     get: () => apiClient.get('/api/core/auth/me/'),
     update: (data: Record<string, string>) => apiClient.patch('/api/core/auth/me/', data),
+    // BUG-284 : changement du mot de passe (obligatoire à la première connexion).
+    changePassword: (data: { old_password: string; new_password: string }) =>
+      apiClient.post<{ detail?: string }>('/api/core/auth/change-password/', data),
   },
   breadPrices: {
     list: () => getList<BreadPrice>('/api/core/bread-prices/'),

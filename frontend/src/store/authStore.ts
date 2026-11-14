@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { apiClient } from '@/api/client';
+import { apiClient, PASSWORD_CHANGE_REQUIRED_EVENT } from '@/api/client';
 import { getErrorDetail } from '@/api/errors';
 
 export interface UserProfile {
@@ -21,6 +21,7 @@ export interface UserProfile {
   is_headquarters: boolean;
   can_access_all_nodes: boolean;
   is_superuser?: boolean;
+  must_change_password?: boolean;
 }
 
 interface AuthState {
@@ -29,6 +30,8 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
+  /** BUG-284 : vrai si l'API a exigé le changement du mot de passe (403 password_change_required). */
+  passwordChangeRequired: boolean;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   fetchCurrentUser: () => Promise<void>;
@@ -40,6 +43,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: !!localStorage.getItem('kiese_access_token'),
   isLoading: false,
   error: null,
+  passwordChangeRequired: false,
 
   login: async (username, password) => {
     set({ isLoading: true, error: null });
@@ -74,7 +78,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
     localStorage.removeItem('kiese_access_token');
     localStorage.removeItem('kiese_refresh_token');
-    set({ user: null, accessToken: null, isAuthenticated: false });
+    set({ user: null, accessToken: null, isAuthenticated: false, passwordChangeRequired: false });
   },
 
   fetchCurrentUser: async () => {
@@ -93,3 +97,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 }));
+
+// BUG-284 : l'intercepteur axios signale le 403 `password_change_required`.
+if (typeof window !== 'undefined') {
+  window.addEventListener(PASSWORD_CHANGE_REQUIRED_EVENT, () => {
+    useAuthStore.setState({ passwordChangeRequired: true });
+  });
+}

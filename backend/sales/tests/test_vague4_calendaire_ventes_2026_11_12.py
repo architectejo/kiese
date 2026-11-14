@@ -112,7 +112,7 @@ class DatesEtRecusCalendairesTests(Base):
             ids = [self.sale().data['id'] for _ in range(3)]
         Invoice.objects.filter(pk=ids[0]).update(created_at=_at(D, 0, 1))
         with _now(13, 30):
-            _api(self.fa).post(INV + 'cleanup_expired/')
+            _api(self.gerant).post(INV + 'cleanup_expired/')  # BUG-284 : reserve GERANT+
             n = self.sale().data['receipt_number']
         nums = list(Invoice.objects.values_list('receipt_number', flat=True))
         self.assertEqual(len(nums), len(set(nums)))

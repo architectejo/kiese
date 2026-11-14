@@ -686,7 +686,7 @@ class ExpiryCleanupTests(TestCase):
         self.assertEqual(resp.data['deleted'], 0)
         self.assertTrue(Invoice.objects.filter(pk=recent.pk).exists())
 
-    def test_facturier_can_trigger_cleanup_expired_himself(self):
+    def test_facturier_cannot_trigger_cleanup_expired(self):
         """
         BUG-031 (même cause racine que pour `cancel`) : le décorateur
         `@action(..., permission_classes=[IsAuthenticated])` sur
@@ -702,8 +702,10 @@ class ExpiryCleanupTests(TestCase):
         facturier qui charge la page, seulement si un Gérant+ la charge.
         """
         self._create_invoice(qty=3, payment=0, created_offset_hours=13)
+        # BUG-284 : l'action est desormais reservee a GERANT et au-dessus.
         resp = self.api.post('/api/sales/invoices/cleanup_expired/')
-        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.status_code, 403, resp.data)
+        self.assertEqual(Invoice.objects.count(), 1)
 
     def test_cleanup_restores_bread_stock_deducted_at_creation(self):
         """

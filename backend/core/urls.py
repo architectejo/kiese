@@ -25,6 +25,7 @@ urlpatterns = [
     # logout est bien rejeté par cette vue.
     path('auth/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/logout/', views.logout_view, name='logout'),
+    path('auth/change-password/', views.change_password_view, name='change-password'),
     path('auth/me/', views.me_view, name='me'),
     path('config/', views.ConfigView.as_view(), name='config'),
     # BUG-149 : réinitialisation globale des données (Superuser strict).

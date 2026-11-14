@@ -131,8 +131,11 @@ def regenerate_facturier_reports(node, target_date):
         groups[key]['facturier'] = inv.facturier
         groups[key]['team'] = inv.team
         groups[key]['total_cash'] += inv.payment_amount
-        credit = inv.order_total - inv.payment_amount
-        groups[key]['total_credit'] += credit if credit > 0 else Decimal('0')
+        # BUG-288 : le manquant d'une VENTE SOLDE/CASH est une perte
+        # (debt_delta = 0), jamais un crédit.
+        if not inv.is_soldee:
+            credit = inv.order_total - inv.payment_amount
+            groups[key]['total_credit'] += credit if credit > 0 else Decimal('0')
 
     teams_involved = {team for (_, team) in groups.keys()}
     team_detail = {}

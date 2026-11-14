@@ -523,8 +523,9 @@ class DesignationCorrectionDefectsTests(_Base):
     def test_bug191_designation_change_after_confirmation_double_counts_reste_du_hier(self):
         """BUG-191 : changer l'équipe désignée après la confirmation du départ double le reste_du_hier du rapport."""
         self._rotation()
-        DailyBreadStockSnapshot.objects.create(
-            node=self.node, bread_price=self.bp500, date=J, team='A', qty_at_close=10)
+        with _now(20, 0):  # BUG-297 : updated_at sur l'horloge simulée
+            DailyBreadStockSnapshot.objects.create(
+                node=self.node, bread_price=self.bp500, date=J, team='A', qty_at_close=10)
         with _now(13, 0, d=J1):
             self._assign('B')
             c = self.g.post(OPENING, {'lines': [{'bread_price': self.bp500.pk, 'qty': 10}]}, format='json')

@@ -38,11 +38,12 @@ class UserSerializer(serializers.ModelSerializer):
             'email', 'role', 'role_display', 'team', 'team_display',
             'node', 'node_display', 'phone', 'photo',
             'is_active', 'is_headquarters', 'can_access_all_nodes',
-            'is_superuser', 'last_login', 'date_joined'
+            'is_superuser', 'last_login', 'date_joined', 'must_change_password'
         ]
         read_only_fields = [
             'id', 'last_login', 'date_joined',
-            'is_headquarters', 'can_access_all_nodes', 'is_superuser'
+            'is_headquarters', 'can_access_all_nodes', 'is_superuser',
+            'must_change_password',
         ]
         extra_kwargs = {
             'password': {'write_only': True, 'required': False}
@@ -63,6 +64,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = User(**validated_data)
+        user.must_change_password = True  # BUG-284 : mot de passe temporaire
         user.set_password(password)
         user.save()
         return user
@@ -110,6 +112,11 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
         model = ExpenseCategory
         fields = ['id', 'code', 'label', 'is_active', 'updated_at']
         read_only_fields = ['updated_at']
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
 
 
 class LoginSerializer(serializers.Serializer):

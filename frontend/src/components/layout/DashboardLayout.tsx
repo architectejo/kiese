@@ -11,6 +11,7 @@ import {
   FiMapPin, FiUserCheck, FiMenu, FiSave, FiKey, FiHardDrive, FiCalendar
 } from 'react-icons/fi';
 import { coreApi, productionApi, SystemNotificationItem, TeamAssignment } from '@/api/services';
+import { ForcePasswordChange } from '@/components/auth/ForcePasswordChange';
 import { Modal } from '@/components/shared/Modal';
 import { extractApiError } from '@/hooks/useProgressiveList';
 import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
@@ -870,6 +871,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
             {children}
           </div>
         </div>
+        <ForcePasswordChange />
       </main>
 
       {/* --- Full Glass Notification Modal Box --- */}

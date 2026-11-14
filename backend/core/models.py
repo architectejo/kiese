@@ -346,6 +346,12 @@ class User(AbstractUser):
         null=True,
         verbose_name=_("Photo de profil")
     )
+    # BUG-284 : True apres reset_password / creation par un administrateur avec
+    # mot de passe temporaire ; l'API metier est refusee (403) tant que non change.
+    must_change_password = models.BooleanField(
+        default=False,
+        verbose_name=_("Changement de mot de passe obligatoire"),
+    )
 
     class Meta:
         verbose_name = _("Utilisateur")

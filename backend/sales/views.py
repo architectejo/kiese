@@ -977,7 +977,7 @@ class InvoiceViewSet(
 
         return Response(InvoiceSerializer(adjustment).data, status=status.HTTP_201_CREATED)
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsGerant])  # BUG-284
     def cleanup_expired(self, request):
         """Delete PENDING invoices older than 12 h and reverse client debts."""
         from datetime import timedelta
@@ -1050,11 +1050,16 @@ class InvoiceViewSet(
             cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id'),
             solde_cash=Sum('payment_amount', filter=Q(is_soldee=True)),
             solde_value=Sum('order_total', filter=Q(is_soldee=True)),
+            # BUG-287 : une RG a une variation de BP nulle (debt_delta = 0).
+            rg_cash=Sum('payment_amount', filter=Q(special_code=Invoice.SpecialCode.RG, is_soldee=False)),
+            rg_value=Sum('order_total', filter=Q(special_code=Invoice.SpecialCode.RG, is_soldee=False)),
         )
         summary = []
         for row in per_node:
             cash = row['cash'] or 0
-            credit = ((row['order_value'] or 0) - (row['solde_value'] or 0)) - (cash - (row['solde_cash'] or 0))
+            excl_value = (row['solde_value'] or 0) + (row['rg_value'] or 0)
+            excl_cash = (row['solde_cash'] or 0) + (row['rg_cash'] or 0)
+            credit = ((row['order_value'] or 0) - excl_value) - (cash - excl_cash)
             summary.append({'node__code': row['node__code'], 'payment_type': 'CASH', 'total': cash, 'count': row['count']})
             summary.append({'node__code': row['node__code'], 'payment_type': 'CREDIT', 'total': credit, 'count': 0})
         return Response(summary)

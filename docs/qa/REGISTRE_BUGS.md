@@ -16029,7 +16029,12 @@ Tests : `backend/treasury/tests/test_vague4_db_testeur_tresorerie.py` (6 tests v
 
 ### BUG-284 — [Majeur] Sécurité/Core : changement de mot de passe obligatoire à la première connexion (non implémenté)
 - Besoin client : un compte créé par l'administrateur doit imposer le changement du mot de passe initial à la première connexion (ex. drapeau `must_change_password` sur `User`, refus des autres routes tant que non changé, endpoint de changement). Non implémenté dans cette session (schéma : migration requise, frontend : écran dédié).
-- Composant : backend/frontend. Statut : OUVERT (dev-backend, 2026-11-13).
+- Composant : backend/frontend. Statut : CORRIGÉ (backend, dev-backend, 2026-11-14) ; partie frontend CORRIGÉ (dev-frontend, 2026-11-14) : `components/auth/ForcePasswordChange.tsx` (écran bloquant monté dans DashboardLayout, déclenché par `user.must_change_password` ou par un 403 `password_change_required` capté dans `api/client.ts` via un évènement, sans toucher au refresh JWT ; `coreApi.me.changePassword`) ; `Sales.tsx` n'appelle plus `cleanupExpired()` que pour GERANT et au-dessus. Vérification manuelle : se connecter avec un compte `must_change_password=true` -> écran bloquant (360 px et bureau) ; ancien mot de passe faux -> message du serveur ; succès -> accès débloqué ; facturier sur /sales sans 403.
+- Cause : aucun drapeau ni contrôle de changement de mot de passe initial.
+- Correction : `User.must_change_password` (défaut False, migration `core/migrations/0019_user_must_change_password.py` — à appliquer à db.sqlite3 par le coordinateur ; les comptes réels ne sont pas bloqués). Mis à True par `reset_password` et par la création d'un compte via `UserCreateSerializer`. Exposé en lecture seule dans `UserSerializer` (login `user`, `GET auth/me/`, liste users). Nouvel endpoint `POST /api/core/auth/change-password/` `{old_password, new_password}` : vérifie l'ancien, refuse nouveau = ancien, applique les validateurs Django, remet le drapeau à False, `log_activity` sans mot de passe ; erreurs `400 {"detail": "..."}`. `PATCH auth/me/` avec `new_password` passe par la même logique. Blocage centralisé dans `core/authentication.py` (classes JWT et Session référencées dans `REST_FRAMEWORK`) : 403 `{"detail": "...", "code": "password_change_required"}` sauf login, login/refresh, logout, me, change-password.
+- Connexe : `POST sales/invoices/cleanup_expired/` réservé à GERANT et au-dessus (`IsGerant`). Les tests `test_facturier_can_trigger_cleanup_expired_himself` (test_invoices.py, devenu `..._cannot_...`, attend 403) et `test_numeros_uniques_apres_suppression...` (vague4, appel fait par le gérant) ont été adaptés à cette décision explicite du coordinateur.
+- Tests : `backend/core/tests/test_bug284_password_change.py` (11 tests).
+- Impact frontend (dev-frontend) : lire `user.must_change_password` au login/profil ; si True ou si une réponse 403 porte `code == "password_change_required"`, afficher un écran bloquant de changement de mot de passe (ancien + nouveau) appelant `POST /api/core/auth/change-password/`, puis recharger le profil. `Sales.tsx` appelle `cleanupExpired()` pour le facturier : il recevra 403 (déjà ignoré par `.catch`), à retirer ou à réserver au gérant. Après `reset_password`, l'écran de gestion des utilisateurs peut mentionner que l'utilisateur devra changer son mot de passe.
 
 ### BUG-285 — [Mineur] Config : plafond de crédit réel 500 000 FC contre règle métier 50 000 FC
 - Constat : `Config.debt_ceiling` en base réelle vaut 500 000 FC alors que CLAUDE.md §5.1 fixe le plafond par défaut à 50 000 FC. À trancher avec le client (valeur voulue ? zéro de trop ?). Configuration NON modifiée.
@@ -16037,3 +16042,71 @@ Tests : `backend/treasury/tests/test_vague4_db_testeur_tresorerie.py` (6 tests v
 - BUG-266 : VÉRIFIÉ (testeur-clients-commissions, 2026-11-13). mark_paid 400 si net < 0 (is_paid reste faux, y compris après régénération) ; net = 0 payable (200) ; net positif normal inchangé. Tests : `test_verif_bug266_267_268_2026_11_13.py::Verif266`.
 - BUG-267 : VÉRIFIÉ (testeur-clients-commissions, 2026-11-13). Client épargne pur (dépôt / commande 0) : aucune ligne ; client mixte épargne + vente : commission sur la vente seule, retenue dette = 0 (BP créditrice ignorée). Tests : `Verif267`.
 - BUG-268 : VÉRIFIÉ (testeur-clients-commissions, 2026-11-13). Report sur 3 périodes exact (-10 525 ; -13 277,50 ; -16 030), régénération idempotente, dette > report : seul l'excès retenu. Tests : `Verif268`. Remarque : le report croît chaque mois de la cotisation (3 000) par conception BUG-122, hors périmètre.
+
+## Rapprochement Excel août 2026 — auditeur-comptable (2026-11-14)
+
+Rapport : `docs/qa/rapports/auditeur-comptable-2026-11-14.md`. Rejeu en base isolée (hors `db.sqlite3`) de K1 et K6 (1-16/08, 16 jours) et K5 (28/07-16/08, 20 jours), soit environ 2 900 factures. Résultat : commandes, paiements cash, CM par client, FACTURE/JR, COMMISSION/JR, VENTE SOLDE, caisse nette (K1) et chaîne du livre de caisse sont identiques aux Excel. Les écarts ci-dessous sont les seuls constatés. Les classeurs ne couvrent que le 1-16/08 : pas de mois complet rejouable.
+
+### BUG-286 — [Majeur] Production/Clôture : le rapport de clôture journalier (`/api/production/daily-closure/`) range une vente à `invoice_date`, alors que `daily_summary`, `bread_summary` et le rapport facturier la rangent à `delivered_at` (décision BUG-275)
+- Reproduction (base isolée, nœud B2) : facture datée 20/08 (10 × 500 FC, versé 2 000) livrée le 21/08. `daily_summary`, `bread_summary` et `reports/generate` du 21/08 comptent 2 000 cash / 5 000 FC ; `daily-closure?date=2026-08-20` affiche `facture_jr` = 5 000 et `ecart_facture_fc` = 3 000, celui du 21/08 affiche 0. `_build_daily_closure_report` filtre `invoice_date=report_date` (`base_invoices` et `ecart_facture_agg`), alors que BUG-275 cite « la clôture » parmi les vues alignées sur `delivered_at`.
+- Impact : sur une vente rétroactive ou à cheval sur minuit, FACTURE/JR et ECART/FACTURE de la clôture ne tombent pas sur le jour de l'encaissement. Aucun écart sur les 56 jours rejoués (invoice_date = delivered_at).
+- Contradiction à trancher : BUG-275 (date de vente = livraison) contre `commissions/views.py::generate`, qui filtre aussi sur `invoice_date__month` pour la période de paie.
+- Composant : backend (production/views.py, commissions/views.py). Statut : CORRIGÉ (dev-backend, 2026-11-14).
+- Correction BUG-286 : `production/views.py::_build_daily_closure_report` : `base_invoices` et `ecart_facture_agg` filtrent maintenant sur `delivered_at` (jour calendaire, `delivered_on_work_date_filter`) au lieu de `invoice_date`. Les NS (jamais livrées) restent rangées à `invoice_date`. Test : `production/tests/test_bug286_287_288_2026_11_14.py::Bug286ClotureDateLivraison` (échouait avant).
+- Génération des commissions NON modifiée : `commissions/views.py::generate` filtre sur `invoice_date__month` pour la période de paie. Ambigu (période de paie par mois de facturation ou de livraison ? seul le cas d'une facture livrée au mois suivant change) : à trancher avec le client avant d'y toucher. Aucun impact de contrat d'API.
+
+### BUG-287 — [Mineur] Ventes : `daily_summary` compte la valeur d'une régularisation (RG) dans le CREDIT alors que sa variation de BP est nulle
+- Reproduction (base isolée) : client du nœud B2, le 22/08 : vente 5 000 versée 5 000, RG 4 × 500 (2 000), vente solde 6 × 375 versée 1 000, remboursement BP 1 500. BP client = -1 500 (seul le remboursement joue). `daily_summary` : CASH 7 500, CREDIT +500. Attendu : CREDIT -1 500 (RG exclue comme la décote de VENTE SOLDE, `debt_delta` = 0).
+- Cause : `credit = (Σ order_total - Σ solde) - (cash - cash solde)` ne retire pas les `special_code='RG'`.
+- Contradiction à signaler : le rapport du testeur-ventes (2026-11-13) a vérifié « RG comptée » dans BUG-275 ; à confirmer si une RG doit apparaître en CREDIT.
+- Composant : backend (sales/views.py::daily_summary). Statut : CORRIGÉ (dev-backend, 2026-11-14).
+- Correction : `sales/views.py::daily_summary` retire les RG (non soldées) du CREDIT (valeur et paiement), cohérent avec `debt_delta = 0`, avec le rapport facturier (BUG-178) et la clôture (BUG-177) qui excluent déjà les RG. CASH et `count` inchangés. Aucune contradiction trouvée dans remarque.md / adaptes.md (adaptes.md : RG = régularisation d'une transaction précédente). Point à confirmer par testeur-ventes : sa vérification BUG-275 « RG comptée » portait sur le CASH/`count`, qui n'ont pas changé. Test : `Bug287Bug288Credit::test_rg_hors_credit_daily_summary_bp_inchangee` (échouait avant).
+
+### BUG-288 — [Mineur] Trésorerie : `FacturierReport.total_credit_sales` inclut le manquant d'une VENTE SOLDE et se calcule facture par facture
+- Même scénario : le rapport facturier du 22/08 affiche crédit 1 250 (manquant de la vente solde : 2 250 - 1 000), alors que ce manquant est une perte (BP inchangée) et que BUG-275 l'a exclu du CREDIT de `daily_summary`. `regenerate_facturier_reports` ne tient pas compte de `is_soldee` et plafonne à 0 chaque facture (`credit if credit > 0`), tandis que `daily_summary` compense par facture.
+- Composant : backend (treasury/services.py). Statut : CORRIGÉ (dev-backend, 2026-11-14).
+- Correction : `treasury/services.py::regenerate_facturier_reports` n'ajoute plus au crédit les factures `is_soldee` (le cash reste compté). Le calcul reste facture par facture (plafonné à 0), ce qui est cohérent avec daily_summary hors cas de trop-perçu sur facture normale (à signaler si besoin). Test : `Bug287Bug288Credit::test_vente_solde_hors_credit_rapport_facturier` (échouait avant).
+
+### BUG-289 — [Majeur] Commissions/Clients : cotisation sociale de 3 000 FC par client par défaut, absente des Excel d'août (SOCIAL = 0 sauf B2 = 2 000)
+- Constat : `Client.cotisation_sociale` vaut 3 000 FC par défaut ; les 678 clients de `db.sqlite3` sont à 3 000 (lecture seule). Les classeurs d'août ont SOCIAL = 0 pour tous les clients de K1-K6 et B1 (`adaptes.md` [3.2], [3.3] : « varie par boulangerie, peut être 0 », B2 = 2 000). Rejeu K1 : retenue sociale 213 000 FC (71 clients × 3 000), net à payer app 919 291 contre 1 171 375 Excel (écart 252 084 = social 213 000 + CARTE 37 084 + BP créditrice 2 000).
+- Attendu (adaptes.md [3.3]) : cotisation paramétrable par boulangerie (Node ou Config par node), 0 pour K1-K6/B1. Non implémenté. Voir Q-015.
+- Composant : backend (clients/models.py, commissions/views.py), donnée. Statut : OUVERT (auditeur-comptable, 2026-11-14).
+
+### BUG-290 — [Majeur] Ventes : aucun moyen de saisir un paiement négatif (retrait ou remboursement au client) alors que les Excel en contiennent
+- Constat : 19 lignes client à paiement négatif sur 1-16/08 (K2 6, K5 6, K4 4, K3 2, K6 1) pour -635 850 FC au total, presque toutes sans commande (L = 0). L'API refuse `payment_amount < 0` (BUG-209, 400) et `is_debt_repayment` exige > 0 (BUG-213). Rejeu : 10 lignes refusées ; `daily_summary` ne retombe pas sur l'Excel (K6 14/08 : CREDIT -17 500 contre 52 500 ; K5 : 7 jours en écart, tous expliqués par ces lignes) ; ECART/FACTURE idem.
+- Question : retrait d'épargne, remboursement d'un trop-perçu, ou erreur de saisie ? Voir Q-009.
+- Composant : backend (règle manquante). Statut : À CLARIFIER (auditeur-comptable, 2026-11-14).
+
+### BUG-291 — [Mineur] Commissions : CARTE 1 % déduite du net à payer alors que la colonne CARTE est vide dans les 8 classeurs d'août
+- Constat : `ClientCommission.compute` déduit CARTE (1 % de la CM brute, K1 : 37 084 FC). Dans les synthèses K1-K6, B1, B2 d'août, CARTE = 0 partout et NET = CM - BP. BUG-058 (décision client 2026-10-23) a conservé la déduction CARTE ; `adaptes.md` [3.2] la prévoit mais note « CARTE = 0 pour août ». CLAUDE.md §5.3 ne la cite pas (retenues = dette + sociale + imprimés + autre) : contradiction entre CLAUDE.md §5.3 et adaptes.md [3.2].
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14). Voir Q-010.
+
+### BUG-292 — [Mineur] Commissions : REMISE mensuelle affichée 10 fois plus faible que dans les Excel
+- Constat : les Excel calculent REMISE = commande × 0,25 % (formule `IP*0.25/100`, K5 : 80 361 ; K1 synthèse : 40 566, exact au franc). L'app affiche 0,1 % de la CM brute (= 0,025 % de la commande, K1 : 3 708). `adaptes.md` [3.2] écrit « ≈ 0,1 % du CM » : inexact par rapport aux formules des classeurs (0,25 % de la commande, soit ≈ 1 % de la CM à 25 %). Non déduite du net dans les deux cas.
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14). Voir Q-011.
+
+### BUG-293 — [Mineur] Commissions : une BP créditrice est ignorée dans le net à payer, les Excel l'ajoutent
+- Constat : Excel NET = CM - BP même si BP < 0 (K1 client à -2 000, K6 -500 : net plus élevé). L'app plafonne la retenue dette à 0 (BUG-267, conçu pour les clients épargne). Écart : K1 2 000 FC, K6 500 FC sur 16 jours.
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14). Voir Q-012.
+
+### BUG-294 — [Majeur] Commissions : la période de paie de l'Excel déborde sur le mois précédent ; l'app découpe par mois civil
+- Constat : les synthèses « AOUT » incluent les jours du 28/07 (K5), 26/07 (K3, K4) et 30/07 (B1) : K5 CM Excel 3 592 625 contre 2 849 875 pour août seul (742 750 de juillet). K1 et K6 (1-16/08) concordent à l'unité. K2 et B2 : un bloc de date en double (07/08 K2, 14/08 B2) que la synthèse ne compte qu'une fois (-1 286 125 K2, -570 500 B2) : anomalie de l'Excel. `generate` regroupe par `invoice_date` du mois civil ; la dette BP retenue est cumulative (K5 : 50 clients en écart de BP à cause de juillet).
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14). Voir Q-013.
+
+### BUG-295 — [Mineur] Commissions : la remise annuelle vaut `total_breads × 0,025` FC, contradiction entre cahier des charges et adaptes.md
+- Constat : `annual_bonus` = nombre de pains × 0,025 donne 611 FC pour K1 sur 16 jours (3,7 M FC de CM), très loin d'une remise de fidélité de 2,5 % du volume. Cahier §2.3.3 : 0,025 × volume (unité non précisée). `adaptes.md` [4.2] : REMISE = INDICE × TARIF (mois de participation × tarif fixé par la direction), prioritaire sur le cahier. Aucune remise annuelle dans les Excel d'août.
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14). Voir Q-014.
+
+### BUG-296 — [Mineur] Production/Clôture : `ecart_facture_fc` inclut les remboursements BP, le commentaire du code dit le contraire
+- Constat : le commentaire de `_build_daily_closure_report` affirme que `payment_amount` d'un remboursement est nul ; un remboursement porte le montant versé. L'écart du 22/08 (base isolée) = 1 750 = 9 250 - 7 500 (remboursement 1 500 compté). Le calcul coïncide avec la somme L - O des lignes de l'Excel (lignes de remboursement incluses) : à confirmer par le client avant toute correction.
+- Statut : À CLARIFIER (auditeur-comptable, 2026-11-14).
+
+### Défaut settings (signalé par l'auditeur-comptable, 2026-11-14) — CORRIGÉ (dev-backend)
+- `kiese/settings.py` : `load_dotenv(..., override=True)` -> `override=False` : une variable d'environnement déjà définie (DB_NAME d'un test ou d'une exécution isolée) n'est plus écrasée par `.env`, qui reste lu pour les variables absentes. Test : `core/tests/test_settings_dotenv_override.py`. Impact déploiement : une variable système/service définie prime désormais sur `.env`.
+
+### BUG-297 — [Mineur] Tests production : dépendance à l'horloge réelle (instantanés créés hors horloge simulée) — CORRIGÉ (dev-backend, 2026-11-14)
+- Constat : `test_bug190_196.Bug191SingleSourceTests.test_confirmed_category_not_chained_again_but_others_still_are` et `test_verif_bug161_b3_b5_testeur_production...test_bug191_designation_change_after_confirmation_double_counts_reste_du_hier` donnaient `reste_du_hier = -20` au lieu de -10 depuis le 2026-11-14.
+- Cause : défaut de TEST, pas applicatif. `_build_daily_closure_report` (ajustement de relève BUG-247) compare `DailyBreadStockSnapshot.updated_at <= confirmation.confirmed_at`. Les instantanés étaient créés avec l'horloge réelle (`auto_now`) tandis que la confirmation utilisait l'horloge simulée au 2026-11-13 13:00. Tant que la date réelle était <= 11-13, l'instantané précédait la confirmation ; dès le 11-14 il lui était postérieur, `before` devenait None et l'écart de relève (+10) était ajouté en double. En production l'horloge est unique : pas de défaut.
+- Correction : création des instantanés dans `_now(20, 0, d=J)` (veille simulée) dans les deux tests ; assertions inchangées.
+- Autres tests exposés au même risque (instantanés créés à l'horloge réelle puis confirmations/relèves à l'horloge simulée), non modifiés car verts : `test_bug247_calendar_day._snap`, `test_bug161_b4_opening_rotation._snapshot`, `test_bug161_b3_production_dates` (PREV), `test_verif_bug161_b3_b5_...` (J-5). Tests utilisant `timezone.localdate()` sans gel (valables, relatifs à aujourd'hui) : bug141, bug144, bug177, bug185_186_187, daily_closure_report, daily_opening_confirmation, opening_confirmation_verification, vague1_db_production, verif_bug142, verif_bug177. Aucun usage dans sales/treasury tests.
+- Statut : CORRIGÉ (dev-backend).
