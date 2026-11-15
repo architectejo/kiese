@@ -336,6 +336,64 @@ class InvoiceViewSet(
                 continue
         raise last_exc
 
+    @staticmethod
+    def _credit_block_response(client, node, config, payment_amount, order_total_est, current_work_date):
+        """Blocage de crédit (CLAUDE.md §5.2) : `BP_avant >= plafond` et
+        `paiement < valeur_commande` -> 403 + notification ; même règle pour le
+        déficit net du mois. BUG-290 : un paiement NÉGATIF (sortie de caisse)
+        est toujours inférieur à la commande : il ne contourne jamais le blocage.
+        Retourne une `Response` 403, ou None si la vente est autorisée."""
+        effective_limit = _effective_credit_limit(client, node, config)
+        if client.current_debt >= effective_limit and payment_amount < order_total_est:
+            degraded_note = (
+                f" (mode dégradé : plafond réduit à {config.offline_credit_limit_ratio:.0%} du plafond nominal {client.credit_limit:,.0f} FC car {node.code} n'a pas synchronisé récemment)"
+                if effective_limit != client.credit_limit else ""
+            )
+            create_notification(
+                title=f"Facturation bloquée — {client.full_name}",
+                message=f"Balance {client.current_debt:,.0f} FC ≥ plafond {effective_limit:,.0f} FC pour {client.code}.{degraded_note}",
+                severity='DANGER', node_origin=node.code
+            )
+            return Response(
+                {'detail': f"Plafond de crédit atteint ({client.current_debt:,.0f} FC ≥ {effective_limit:,.0f} FC{degraded_note}). Réglez intégralement la commande ou remboursez la dette."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Déficit net de la période de commission en cours (mois courant) :
+        # COM (valeur commandée) − PAYE (versé) − CM (commission gagnée sur COM).
+        # Contrôle distinct du plafond de dette brute ci-dessus (les deux règles
+        # sont actives — la commission du mois ne neutralise jamais le blocage
+        # basé sur la dette brute). Le même plafond effectif (réduit en mode
+        # dégradé, SYNC.md §6 H2) s'applique ici aussi.
+        today_ = current_work_date
+        # BUG-180 : les RG livrées n'entrent pas dans le déficit du mois.
+        period_agg = Invoice.objects.filter(
+            client=client, status=Invoice.Status.DELIVERED,
+            invoice_date__year=today_.year, invoice_date__month=today_.month,
+        ).exclude(special_code=Invoice.SpecialCode.RG).aggregate(com=Sum('order_total'), paye=Sum('payment_amount'))
+        period_com  = period_agg['com'] or Decimal('0')
+        period_paye = period_agg['paye'] or Decimal('0')
+        period_cm   = period_com * client.commission_rate
+        period_deficit = period_com - period_paye - period_cm
+
+        if period_deficit >= effective_limit and payment_amount < order_total_est:
+            create_notification(
+                title=f"Déficit du mois — {client.full_name}",
+                message=(
+                    f"Déficit net du mois {period_deficit:,.0f} FC ≥ plafond {effective_limit:,.0f} FC pour {client.code} "
+                    f"(Commandé {period_com:,.0f} − Versé {period_paye:,.0f} − Commission {period_cm:,.0f})."
+                ),
+                severity='DANGER', node_origin=node.code
+            )
+            return Response(
+                {'detail': (
+                    f"Déficit net du mois atteint ({period_deficit:,.0f} FC ≥ {effective_limit:,.0f} FC), "
+                    f"commission déduite. Réglez le déficit avant de continuer à commander pour ce client."
+                )},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return None
+
     @transaction.atomic
     def _create_once(self, request, *args, **kwargs):
         """Create invoice with lines. Calculates BP and locks order_total."""
@@ -439,6 +497,7 @@ class InvoiceViewSet(
         # jamais lu par `InvoiceLine.save()` ni `Invoice.compute_debt_after()`.
         commission_exempt = data.get('commission_exempt', False)
         special_code       = data.get('special_code', '')
+        motif              = data.get('motif', '')
         lines_data        = data.get('lines', [])
 
         if not is_debt_repayment and len(lines_data) == 0:
@@ -459,10 +518,19 @@ class InvoiceViewSet(
             # Pure repayment — no bread lines, no stock deduction, commission = 0
             if client is None:
                 return Response({'detail': 'Un client doit être sélectionné pour un remboursement BP.'}, status=status.HTTP_400_BAD_REQUEST)
-            # BUG-213 : un remboursement à 0 FC n'a aucun effet (ni BP ni
-            # versement) mais consommerait un numéro de reçu.
-            if payment_amount <= 0:
-                return Response({'detail': 'Le montant du remboursement doit être supérieur à 0 FC.'}, status=status.HTTP_400_BAD_REQUEST)
+            # BUG-213 : un versement à 0 FC n'a aucun effet (ni BP ni caisse)
+            # mais consommerait un numéro de reçu.
+            # BUG-290 (décision client 2026-11-14) : un montant NÉGATIF est
+            # accepté : sortie de caisse (retrait d'épargne, emprunt boulanger,
+            # manquant d'équipe) ; BP après = BP avant - paiement (la BP augmente).
+            if payment_amount == 0:
+                return Response({'detail': 'Le montant du versement ne peut pas être nul (0 FC).'}, status=status.HTTP_400_BAD_REQUEST)
+            if payment_amount < 0:
+                # Une sortie de caisse ne contourne pas le blocage de crédit.
+                blocked = self._credit_block_response(
+                    client, node, config, payment_amount, Decimal('0'), current_work_date)
+                if blocked is not None:
+                    return blocked
             debt_before = client.current_debt
             invoice = Invoice.objects.create(
                 node=node, client=client,
@@ -475,6 +543,7 @@ class InvoiceViewSet(
                 is_soldee=False,
                 is_debt_repayment=True,
                 special_code=special_code,
+                motif=motif,
                 node_origin=node.code,
                 receipt_number=_make_receipt_number(node.code, requested_invoice_date),
                 status=Invoice.Status.DELIVERED,
@@ -500,7 +569,8 @@ class InvoiceViewSet(
             client.save(update_fields=['category'])
             log_activity(
                 request.user, "Remboursement BP",
-                f"Remboursement {invoice.receipt_number} — {client.full_name} : {payment_amount} FC versé, BP {invoice.debt_after} FC.",
+                f"Remboursement {invoice.receipt_number} — {client.full_name} : {payment_amount} FC versé, BP {invoice.debt_after} FC."
+                + (f" Motif : {invoice.get_motif_display()}." if motif else ""),
                 node_origin=node.code
             )
             return Response(InvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
@@ -549,55 +619,10 @@ class InvoiceViewSet(
         # prise, pas une nouvelle vente à crédit) ni pour une RG (BUG-180 :
         # sans paiement ni dette, elle compense un NS antérieur).
         if client is not None and not is_ns and not is_rg:
-            effective_limit = _effective_credit_limit(client, node, config)
-            if client.current_debt >= effective_limit and payment_amount < order_total_est:
-                degraded_note = (
-                    f" (mode dégradé : plafond réduit à {config.offline_credit_limit_ratio:.0%} du plafond nominal {client.credit_limit:,.0f} FC car {node.code} n'a pas synchronisé récemment)"
-                    if effective_limit != client.credit_limit else ""
-                )
-                create_notification(
-                    title=f"Facturation bloquée — {client.full_name}",
-                    message=f"Balance {client.current_debt:,.0f} FC ≥ plafond {effective_limit:,.0f} FC pour {client.code}.{degraded_note}",
-                    severity='DANGER', node_origin=node.code
-                )
-                return Response(
-                    {'detail': f"Plafond de crédit atteint ({client.current_debt:,.0f} FC ≥ {effective_limit:,.0f} FC{degraded_note}). Réglez intégralement la commande ou remboursez la dette."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            # Déficit net de la période de commission en cours (mois courant) :
-            # COM (valeur commandée) − PAYE (versé) − CM (commission gagnée sur COM).
-            # Contrôle distinct du plafond de dette brute ci-dessus (les deux règles
-            # sont actives — la commission du mois ne neutralise jamais le blocage
-            # basé sur la dette brute). Le même plafond effectif (réduit en mode
-            # dégradé, SYNC.md §6 H2) s'applique ici aussi.
-            today_ = current_work_date
-            # BUG-180 : les RG livrées n'entrent pas dans le déficit du mois.
-            period_agg = Invoice.objects.filter(
-                client=client, status=Invoice.Status.DELIVERED,
-                invoice_date__year=today_.year, invoice_date__month=today_.month,
-            ).exclude(special_code=Invoice.SpecialCode.RG).aggregate(com=Sum('order_total'), paye=Sum('payment_amount'))
-            period_com  = period_agg['com'] or Decimal('0')
-            period_paye = period_agg['paye'] or Decimal('0')
-            period_cm   = period_com * client.commission_rate
-            period_deficit = period_com - period_paye - period_cm
-
-            if period_deficit >= effective_limit and payment_amount < order_total_est:
-                create_notification(
-                    title=f"Déficit du mois — {client.full_name}",
-                    message=(
-                        f"Déficit net du mois {period_deficit:,.0f} FC ≥ plafond {effective_limit:,.0f} FC pour {client.code} "
-                        f"(Commandé {period_com:,.0f} − Versé {period_paye:,.0f} − Commission {period_cm:,.0f})."
-                    ),
-                    severity='DANGER', node_origin=node.code
-                )
-                return Response(
-                    {'detail': (
-                        f"Déficit net du mois atteint ({period_deficit:,.0f} FC ≥ {effective_limit:,.0f} FC), "
-                        f"commission déduite. Réglez le déficit avant de continuer à commander pour ce client."
-                    )},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            blocked = self._credit_block_response(
+                client, node, config, payment_amount, order_total_est, current_work_date)
+            if blocked is not None:
+                return blocked
 
         # BUG-028 : le serveur impose commission_rate=0 pour une vente soldée
         # (remarque.md l.186) ou une vente occasionnelle sans client
@@ -624,6 +649,7 @@ class InvoiceViewSet(
             commission_exempt=commission_exempt,
             is_debt_repayment=False,
             special_code=special_code,
+            motif=motif,
             node_origin=node.code,
             receipt_number=_make_receipt_number(node.code, requested_invoice_date),
             invoice_date=requested_invoice_date,

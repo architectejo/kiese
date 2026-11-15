@@ -13,6 +13,7 @@ export interface BakeryNode {
   name: string;
   address: string;
   sac_value_fc: string | null;
+  monthly_social_contribution?: string;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
@@ -65,6 +66,7 @@ export const Nodes: React.FC = () => {
     name: '',
     address: '',
     sac_value_fc: '',
+    monthly_social_contribution: '0',
     is_active: true,
     team_a_start_time: '',
     team_a_end_time: '',
@@ -100,6 +102,7 @@ export const Nodes: React.FC = () => {
         name: node.name,
         address: node.address || '',
         sac_value_fc: node.sac_value_fc ?? '',
+        monthly_social_contribution: node.monthly_social_contribution ?? '0',
         is_active: node.is_active,
         team_a_start_time: toTimeInputValue(node.team_a_start_time),
         team_a_end_time: toTimeInputValue(node.team_a_end_time),
@@ -115,6 +118,7 @@ export const Nodes: React.FC = () => {
         name: '',
         address: '',
         sac_value_fc: '',
+        monthly_social_contribution: '0',
         is_active: true,
         team_a_start_time: '',
         team_a_end_time: '',
@@ -144,6 +148,7 @@ export const Nodes: React.FC = () => {
     const payload = {
       ...formData,
       sac_value_fc: formData.sac_value_fc !== '' ? formData.sac_value_fc : null,
+      monthly_social_contribution: formData.monthly_social_contribution !== '' ? formData.monthly_social_contribution : '0',
       team_a_start_time: fromTimeInputValue(formData.team_a_start_time),
       team_a_end_time: fromTimeInputValue(formData.team_a_end_time),
       team_b_start_time: fromTimeInputValue(formData.team_b_start_time),
@@ -398,6 +403,23 @@ export const Nodes: React.FC = () => {
                 />
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
                   Laisser vide pour utiliser la valeur globale de la Configuration.
+                </span>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px' }}>Cotisation sociale mensuelle par client (FC)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formData.monthly_social_contribution}
+                  onChange={(e) => setFormData({...formData, monthly_social_contribution: e.target.value})}
+                  className="form-input"
+                  style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                  placeholder="0"
+                />
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
+                  0 = aucune cotisation (cas général). Chaque client peut avoir sa propre valeur ; sinon celle-ci s'applique.
                 </span>
               </div>
 

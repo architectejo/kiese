@@ -56,6 +56,8 @@ export interface BakeryNode {
   name: string;
   address: string;
   sac_value_fc: string | null;
+  /** BUG-289 : cotisation sociale mensuelle par défaut des clients de la boulangerie (0 = aucune). */
+  monthly_social_contribution?: string;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
@@ -151,7 +153,10 @@ export interface Client {
   address: string;
   node: string;
   node_display: string;
-  cotisation_sociale: string;
+  /** BUG-289 : null = valeur de la boulangerie (`Node.monthly_social_contribution`). */
+  cotisation_sociale: string | null;
+  /** BUG-289 : valeur effective, lecture seule. */
+  effective_cotisation_sociale?: string;
   commission_rate: string;
   credit_limit: string;
   current_debt: string;
@@ -241,6 +246,7 @@ export interface Invoice {
    */
   total_loss?: string;
   is_debt_repayment?: boolean;
+  motif?: '' | 'RETRAIT_EPARGNE' | 'EMPRUNT_BOULANGER' | 'MANQUANT_EQUIPE' | 'AUTRE';
   special_code?: '' | 'NV' | 'RG' | 'NS';
   lines: InvoiceLine[];
   created_at: string;
@@ -277,6 +283,8 @@ export interface InvoiceCreatePayload {
   commission_exempt?: boolean;
   special_code?: '' | 'NV' | 'RG' | 'NS';
   invoice_date?: string;
+  /** BUG-290 : motif d'un versement (surtout négatif). */
+  motif?: '' | 'RETRAIT_EPARGNE' | 'EMPRUNT_BOULANGER' | 'MANQUANT_EQUIPE' | 'AUTRE';
   lines: Array<{ bread_price: number; quantity: number }>;
 }
 
@@ -1281,6 +1289,14 @@ export const clientsApi = {
       apiClient.post<{ created: number; skipped: number; distribution: SocialDistribution }>(
         `/api/clients/distributions/${id}/auto_populate_lines/`
       ),
+    // BUG-295 : TARIF modifiable tant que la distribution n'est pas clôturée (400 sinon).
+    update: (id: number, data: Partial<Pick<SocialDistribution, 'tarif'>>) =>
+      apiClient.patch<SocialDistribution>(`/api/clients/distributions/${id}/`, data),
+    // BUG-295 : recalcule INDICE, TOTAL SOCIAL, REMISE (= INDICE × TARIF), TOTAL À PAYER ; MÉRITE conservé.
+    refreshIndices: (id: number) =>
+      apiClient.post<{ updated: number; distribution: SocialDistribution }>(
+        `/api/clients/distributions/${id}/refresh_indices/`
+      ),
   },
   distributionLines: {
     list: (params?: Record<string, string>) =>
@@ -1317,13 +1333,14 @@ export const salesApi = {
   // commandes normales (réservé aux cas où `Config.allow_backdated_sales=True`,
   // validation réelle côté serveur). Couvre à la fois un remboursement de dette et un
   // dépôt « client épargne » (le serveur autorise un BP négatif, CLAUDE.md §5.1).
-  createRepayment: (clientId: string, paymentAmount: number, invoiceDate?: string) =>
+  createRepayment: (clientId: string, paymentAmount: number, invoiceDate?: string, motif?: InvoiceCreatePayload['motif']) =>
     apiClient.post<Invoice>('/api/sales/invoices/', {
       client: clientId,
       payment_type: 'CASH',
       payment_amount: paymentAmount.toString(),
       is_debt_repayment: true,
       lines: [],
+      ...(motif ? { motif } : {}),
       ...(invoiceDate ? { invoice_date: invoiceDate } : {}),
     }),
   // BUG-083 : `deliveredAt` optionnel (`AAAA-MM-JJ`) — livraison datée rétroactivement, réservé aux

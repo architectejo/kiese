@@ -32,6 +32,15 @@ class Invoice(SyncableModel):
         RG   = 'RG', _('Régularisation')
         NS   = 'NS', _('Non Servi')
 
+    class Motif(models.TextChoices):
+        # BUG-290 : nature d'un paiement négatif (sortie de caisse), d'après les
+        # libellés des classeurs d'août 2026.
+        NONE            = '',                  _('—')
+        RETRAIT_EPARGNE = 'RETRAIT_EPARGNE',   _("Retrait d'épargne")
+        EMPRUNT         = 'EMPRUNT_BOULANGER', _('Emprunt boulanger')
+        MANQUANT        = 'MANQUANT_EQUIPE',   _("Manquant d'équipe")
+        AUTRE           = 'AUTRE',             _('Autre')
+
     node      = models.ForeignKey(Node,   on_delete=models.PROTECT, related_name='invoices', verbose_name=_("Boulangerie"))
     client    = models.ForeignKey(Client, on_delete=models.PROTECT, related_name='invoices', null=True, blank=True, verbose_name=_("Client"))
     facturier = models.ForeignKey(
@@ -69,6 +78,8 @@ class Invoice(SyncableModel):
 
     special_code       = models.CharField(max_length=2, choices=SpecialCode.choices, blank=True, default='', verbose_name=_("Code Spécial (NV/RG/NS)"))
     is_debt_repayment  = models.BooleanField(default=False, verbose_name=_("Remboursement BP"))
+    # BUG-290 : motif facultatif (surtout pour un paiement négatif).
+    motif = models.CharField(max_length=20, choices=Motif.choices, blank=True, default='', verbose_name=_("Motif"))
 
     # BUG-083 : `auto_now_add` retiré — la saisie d'une date antérieure
     # (« ventes passées », remarque.md l.360) exige que `invoice_date` soit

@@ -102,9 +102,12 @@ class Client(SyncableModel):
         related_name='clients',
         verbose_name=_("Boulangerie de rattachement")
     )
+    # BUG-289 : NULL = « suit la boulangerie » (`Node.monthly_social_contribution`).
+    # Une valeur renseignée est une personnalisation explicite qui prévaut.
     cotisation_sociale = models.DecimalField(
-        max_digits=10, decimal_places=2, default='3000.00',
-        verbose_name=_("Cotisation Sociale (FC)")
+        max_digits=10, decimal_places=2, default=None, null=True, blank=True,
+        verbose_name=_("Cotisation Sociale personnalisée (FC)"),
+        help_text=_("Vide = valeur de la boulangerie")
     )
     commission_rate = models.DecimalField(
         max_digits=4, decimal_places=2, default='0.25',
@@ -140,6 +143,14 @@ class Client(SyncableModel):
         verbose_name = _("Client")
         verbose_name_plural = _("Clients")
         ordering = ['node__code', 'last_name', 'first_name']
+
+    @property
+    def effective_cotisation_sociale(self):
+        """BUG-289 : personnalisation client si renseignée, sinon valeur de la boulangerie."""
+        from decimal import Decimal
+        if self.cotisation_sociale is not None:
+            return Decimal(str(self.cotisation_sociale))
+        return Decimal(str(self.node.monthly_social_contribution or 0))
 
     def __str__(self):
         return f"[{self.code}] {self.last_name} {self.first_name}"

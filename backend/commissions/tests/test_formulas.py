@@ -48,14 +48,16 @@ class DeductionAndAnnualBonusTests(TestCase):
         self.period = _make_period(self.node)
         self.client = make_client(self.node, commission_rate=Decimal('0.25'))
 
-    def test_annual_bonus_is_2_5_percent_of_volume_delivered(self):
+    def test_annual_bonus_n_est_plus_calculee_sur_le_volume(self):
+        # BUG-295 : l'ancienne formule `volume x 0,025` est remplacee par
+        # INDICE x TARIF + MERITE (caisse sociale, SocialDistributionLine) ;
+        # la commission mensuelle garde la colonne a 0.
         cc = ClientCommission(
             period=self.period, client=self.client,
             total_breads=4000, order_value=Decimal('0.00'), commission_rate=Decimal('0.25'),
         )
         cc.compute(annual_bonus_rate=0.025)
-        # 4000 x 0.025 = 100 (exact)
-        self.assertEqual(cc.annual_bonus, Decimal('100.000'))
+        self.assertEqual(cc.annual_bonus, Decimal('0.00'))
 
     def test_net_payable_with_bonus_incorporated(self):
         """BUG-058 (décision client 2026-10-23) : REMISE (0,1 %) est calculée
@@ -68,17 +70,18 @@ class DeductionAndAnnualBonusTests(TestCase):
             annual_bonus_incorporated=True,
         )
         cc.compute(annual_bonus_rate=0.025)
-        self.assertEqual(cc.annual_bonus, Decimal('100.000'))
+        self.assertEqual(cc.annual_bonus, Decimal('0.00'))   # BUG-295
         self.assertEqual(cc.commission_gross, Decimal('50000.00'))
         # NET/ORDI = 50000 - 0 (pas de dette) = 50000
         self.assertEqual(cc.net_ordi, Decimal('50000.00'))
-        # CARTE = 1% de 50000 = 500 ; NET/CARTE = 50000 - 500 = 49500
-        self.assertEqual(cc.deduction_carte, Decimal('500.00'))
-        self.assertEqual(cc.net_carte, Decimal('49500.00'))
-        # REMISE(0.1%) = 50 — calculée/affichée, mais NON déduite (BUG-058)
-        self.assertEqual(cc.deduction_remise, Decimal('50.00'))
-        # net_payable = net_carte - social(0) - prints(0) - other(0) + bonus(100)
-        expected = Decimal('49500.00') + Decimal('100.000')
+        # BUG-291 : plus de carte (0) ; NET/CARTE = NET/ORDI = 50000
+        self.assertEqual(cc.deduction_carte, Decimal('0.00'))
+        self.assertEqual(cc.net_carte, Decimal('50000.00'))
+        # REMISE(0,25 % de la commande, BUG-292) = 500 — affichée, NON déduite (BUG-058)
+        self.assertEqual(cc.deduction_remise, Decimal('500.00'))
+        # BUG-295 : la remise annuelle n'est plus ajoutee au net mensuel,
+        # meme avec annual_bonus_incorporated = True : net = CM - retenues
+        expected = Decimal('50000.00')
         self.assertEqual(cc.net_payable, expected)
 
     def test_net_payable_without_bonus_incorporated_excludes_bonus(self):
@@ -88,8 +91,8 @@ class DeductionAndAnnualBonusTests(TestCase):
             annual_bonus_incorporated=False,
         )
         cc.compute(annual_bonus_rate=0.025)
-        self.assertEqual(cc.annual_bonus, Decimal('100.000'))  # calculé mais non incorporé
-        expected = Decimal('49500.00')
+        self.assertEqual(cc.annual_bonus, Decimal('0.00'))  # BUG-295
+        expected = Decimal('50000.00')
         self.assertEqual(cc.net_payable, expected)
 
     def test_total_deductions_sums_debt_social_prints_other_plus_carte(self):
@@ -104,13 +107,13 @@ class DeductionAndAnnualBonusTests(TestCase):
             deduction_prints=Decimal('500.00'), deduction_other=Decimal('1200.00'),
         )
         cc.compute()
-        # commission_gross = 50000 ; carte = 500 ; remise = 50 (affichée, non déduite)
+        # commission_gross = 50000 ; carte = 500 ; remise = 500 (0,25 % de la commande, BUG-292 ; affichée, non déduite)
         self.assertEqual(cc.commission_gross, Decimal('50000.00'))
-        self.assertEqual(cc.deduction_carte, Decimal('500.00'))
-        self.assertEqual(cc.deduction_remise, Decimal('50.00'))
-        expected_total = Decimal('10000.00') + Decimal('3000.00') + Decimal('500.00') + Decimal('1200.00') + Decimal('500.00')
+        self.assertEqual(cc.deduction_carte, Decimal('0.00'))   # BUG-291
+        self.assertEqual(cc.deduction_remise, Decimal('500.00'))
+        expected_total = Decimal('10000.00') + Decimal('3000.00') + Decimal('500.00') + Decimal('1200.00')
         self.assertEqual(cc.total_deductions, expected_total)
-        self.assertEqual(cc.total_deductions, Decimal('15200.00'))
+        self.assertEqual(cc.total_deductions, Decimal('14700.00'))
 
     def test_net_payable_can_go_negative_when_deductions_exceed_cm(self):
         """Cas d'un net négatif — comportement non spécifié par le cahier des

@@ -26,6 +26,10 @@ def _api(user):
 class Base(TestCase):
     def setUp(self):
         self.node = make_node(code='C4')
+        # BUG-289 : ces scénarios exercent la mécanique de la retenue sociale (3 000 FC) ;
+        # la valeur vient désormais de la boulangerie, plus du client.
+        self.node.monthly_social_contribution = D('3000')
+        self.node.save()
         self.bp = make_bread_price('GRAND', 'Pain 500 FC', 500)
         self.comptable = make_user('COMPTABLE', node=None, team='')
         self.direction = make_user('DIRECTION', node=None, team='')
@@ -71,22 +75,22 @@ class FormulesTests(Base):
         self.assertEqual(a.commission_gross, D('1250.00'))     # 5000 x 0,25
         self.assertEqual(b.order_value, D('16000.00'))
         self.assertEqual(b.commission_gross, D('4800.00'))     # 16000 x 0,30
-        # retenues : dette 5000 + sociale 3000 + imprimés 0 + autre 0 (+ CARTE 1 % = 12,50, BUG-058)
-        self.assertEqual(a.deduction_carte, D('12.50'))
-        self.assertEqual(a.total_deductions, D('8012.50'))
-        # net = 1250 - 5000 - 12,50 - 3000
-        self.assertEqual(a.net_payable, D('-6762.50'))
-        self.assertEqual(b.net_payable, D('4800') - D('10000') - D('48.00') - D('3000'))   # -8248,00
-        # remise annuelle = 0,025 x pains livrés (10 puis 32), 2 décimales
-        self.assertEqual(a.annual_bonus, D('0.25'))
-        self.assertEqual(b.annual_bonus, D('0.80'))
-        # incorporation : net + remise
+        # retenues : dette 5000 + sociale 3000 + imprimés 0 + autre 0 (carte supprimée, BUG-291)
+        self.assertEqual(a.deduction_carte, D('0.00'))
+        self.assertEqual(a.total_deductions, D('8000.00'))
+        # net = 1250 - 5000 - 3000
+        self.assertEqual(a.net_payable, D('-6750.00'))
+        self.assertEqual(b.net_payable, D('4800') - D('10000') - D('3000'))   # -8200
+        # BUG-295 : plus de remise annuelle sur volume (INDICE x TARIF + MERITE en caisse sociale)
+        self.assertEqual(a.annual_bonus, D('0.00'))
+        self.assertEqual(b.annual_bonus, D('0.00'))
+        # incorporation : sans effet sur le net mensuel
         r = _api(self.comptable).patch(f'{COMM}{a.pk}/', {'annual_bonus_incorporated': True}, format='json')
-        self.assertEqual(D(str(r.data['net_payable'])), D('-6762.25'))
+        self.assertEqual(D(str(r.data['net_payable'])), D('-6750.00'))
         # retenue « autre » 500
         r = _api(self.comptable).patch(f'{COMM}{a.pk}/', {'deduction_other': '500'}, format='json')
-        self.assertEqual(D(str(r.data['net_payable'])), D('-7262.25'))
-        self.assertEqual(D(str(r.data['total_deductions'])), D('8512.50'))
+        self.assertEqual(D(str(r.data['net_payable'])), D('-7250.00'))
+        self.assertEqual(D(str(r.data['total_deductions'])), D('8500.00'))
 
     def test_aucun_float_dans_les_montants_de_l_api(self):
         c = make_client(self.node)
@@ -145,10 +149,10 @@ class FormulesTests(Base):
         c = make_client(self.node, current_debt=D('10000'))
         self.invoice(c, 20)                                           # CM 2500
         p1 = self.generate(2)
-        self.assertEqual(self.row(p1, c).net_payable, D('2500') - D('10000') - D('25.00') - D('3000'))   # -10525
+        self.assertEqual(self.row(p1, c).net_payable, D('2500') - D('10000') - D('3000'))   # -10500
         self.invoice(c, 2, pay=1000, month=3)
         p2 = self.generate(3)
-        self.assertEqual(self.row(p2, c).carried_debt_in, D('10525.00'))
+        self.assertEqual(self.row(p2, c).carried_debt_in, D('10500.00'))
 
 
 class DefautsConstatesTests(Base):
@@ -209,8 +213,8 @@ class DefautsConstatesTests(Base):
         self.assertEqual(b.commission_gross, D('500.00'))              # 2000 x 0,25
         self.assertEqual(b.deduction_prints, D('200.00'))              # retenues saisies conservées
         self.assertEqual(b.deduction_other, D('50.00'))
-        # net = 500 - (0 + 3000 + 200 + 50 + carte 5,00)
-        self.assertEqual(b.net_payable, D('500') - D('3255.00'))
+        # net = 500 - (0 + 3000 + 200 + 50)  (sans carte, BUG-291)
+        self.assertEqual(b.net_payable, D('500') - D('3250.00'))
 
     def test_bug265_mark_paid_et_set_manuel_reserves_a_la_direction(self):
         c = self.sans_cotisation()
@@ -241,14 +245,14 @@ class DefautsConstatesTests(Base):
 
     def test_bug268_report_de_deficit_ne_recompte_pas_la_dette_bp_deja_retenue(self):
         c = make_client(self.node, current_debt=D('10000'))
-        self.invoice(c, 20)                                           # CM 2500, net fév. -10525
+        self.invoice(c, 20)                                           # CM 2500, net fév. -10500
         self.generate(2)
         self.invoice(c, 2, pay=1000, month=3)                         # BP inchangée : 10000
         p2 = self.generate(3)
         cc = self.row(p2, c)
-        # La dette de 10000 FC figure déjà dans le déficit reporté (10525) : la retenue du mois ne
+        # La dette de 10000 FC figure déjà dans le déficit reporté (10500) : la retenue du mois ne
         # doit pas la compter une seconde fois (dette réellement due = 10000 FC + frais).
-        # Net maximal admissible : 250 (CM) - 2,50 (carte) - 10000 (dette, une fois) - 3000 - 3000 (2 cotisations).
+        # Net maximal admissible : 250 (CM) - 10000 (dette, une fois) - 3000 - 3000 (2 cotisations).
         self.assertGreaterEqual(cc.net_payable, D('-16000'), f'net observé {cc.net_payable}')
 
     def test_bug253_facturier_ne_lit_pas_les_commissions_et_retenues_des_clients(self):

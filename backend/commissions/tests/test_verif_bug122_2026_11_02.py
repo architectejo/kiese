@@ -43,6 +43,10 @@ class CarriedDebtMultiPeriodChainTests(TestCase):
 
     def setUp(self):
         self.node = make_node(code='K1', name='K1 - TABORA')
+        # BUG-289 : retenue sociale désormais par boulangerie ; la chaîne de report
+        # suppose une retenue sociale fixe de 3 000 FC par période.
+        self.node.monthly_social_contribution = Decimal('3000')
+        self.node.save()
         self.bp = make_bread_price(category='MOYEN', unit_price=500)
         self.client_obj = make_client(self.node, commission_rate=Decimal('0.25'))
         self.direction = make_user(role='DIRECTION', node=None)

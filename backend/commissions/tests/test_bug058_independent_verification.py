@@ -49,13 +49,14 @@ class Bug058IndependentVerificationTests(TestCase):
             annual_bonus_incorporated=True,
         )
         cc.compute(annual_bonus_rate=0.025)
-        # 8000 x 0.025 = 200, mécanisme totalement indépendant de deduction_remise
-        self.assertEqual(cc.annual_bonus, Decimal('200.000'))
+        # BUG-295 : la remise annuelle (INDICE x TARIF + MERITE) vit dans la
+        # caisse sociale ; la commission mensuelle garde annual_bonus = 0.
+        self.assertEqual(cc.annual_bonus, Decimal('0.00'))
         self.assertNotEqual(cc.annual_bonus, cc.deduction_remise)
-        # net_payable doit inclure annual_bonus (incorporé) mais jamais deduction_remise
+        # net_payable ne contient ni annual_bonus ni deduction_remise
         cm = Decimal('100000.00') * Decimal('0.25')  # 25000
-        carte = round(cm * Decimal('0.01'), 2)  # 250.00
-        expected_net = (cm - carte) + cc.annual_bonus
+        self.assertEqual(cc.deduction_carte, Decimal('0.00'))  # BUG-291 : plus de carte
+        expected_net = cm + cc.annual_bonus
         self.assertEqual(cc.net_payable, expected_net)
 
     def test_k1_august_2026_aggregate_reproduction_independent_calc(self):
@@ -86,13 +87,14 @@ class Bug058IndependentVerificationTests(TestCase):
         self.assertEqual(real_net_a_payer, Decimal('6557500.00'))
 
         # --- Calcul à la main, indépendant, de ce que l'app produit désormais ---
-        carte_app = round(cm * Decimal('0.01'), 2)
-        remise_app = round(cm * Decimal('0.001'), 2)
-        self.assertEqual(carte_app, Decimal('65575.00'))
-        self.assertEqual(remise_app, Decimal('6557.50'))
+        # BUG-291 : carte supprimée (0) ; BUG-292 : REMISE = 0,25 % de la commande.
+        carte_app = Decimal('0.00')
+        remise_app = round(order_value * Decimal('0.0025'), 2)
+        self.assertEqual(cc.deduction_carte, carte_app)
+        self.assertEqual(remise_app, Decimal('65575.00'))
         expected_app_net = cm - carte_app  # pas de dette/social/prints/other ici
         self.assertEqual(cc.net_payable, expected_app_net)
-        self.assertEqual(cc.net_payable, Decimal('6491925.00'))
+        self.assertEqual(cc.net_payable, Decimal('6557500.00'))
 
         # --- Écart résiduel documenté ---
         ecart = real_net_a_payer - cc.net_payable
@@ -101,8 +103,8 @@ class Bug058IndependentVerificationTests(TestCase):
         # (0,1% du CM) à l'écart, qui valait avant correction CARTE+REMISE
         # = 1,1% du CM (~72 133 FC sur cet agrégat ; ici 72 132,50 FC exact
         # avec ce montant rond). Après correction : 1% du CM = 65 575 FC.
-        self.assertEqual(ecart, carte_app)
-        self.assertEqual(ecart, Decimal('65575.00'))
+        # BUG-291 : plus de carte -> l'écart avec le grand livre réel est nul.
+        self.assertEqual(ecart, Decimal('0.00'))
         # REMISE n'intervient plus du tout dans net_payable, bien qu'elle
         # soit toujours calculée/affichée (deduction_remise non nul) :
         self.assertNotEqual(cc.deduction_remise, Decimal('0.00'))

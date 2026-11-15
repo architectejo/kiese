@@ -15,7 +15,7 @@ class NodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Node
         fields = [
-            'id', 'code', 'name', 'address', 'sac_value_fc', 'is_active',
+            'id', 'code', 'name', 'address', 'sac_value_fc', 'monthly_social_contribution', 'is_active',
             'last_sync', 'display_name',
             'team_a_start_time', 'team_a_end_time',
             'team_b_start_time', 'team_b_end_time',

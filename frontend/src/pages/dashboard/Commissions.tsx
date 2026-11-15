@@ -171,8 +171,6 @@ export const Commissions: React.FC = () => {
         <td style="text-align:center">${rate}%</td>
         <td style="text-align:right">${parseFloat(c.commission_gross||'0').toLocaleString('fr-FR')}</td>
         <td style="text-align:right">${parseFloat(c.net_ordi||'0').toLocaleString('fr-FR')}</td>
-        <td style="text-align:right;color:#dc2626">−${parseFloat(c.deduction_carte||'0').toLocaleString('fr-FR')}</td>
-        <td style="text-align:right">${parseFloat(c.net_carte||'0').toLocaleString('fr-FR')}</td>
         <td style="text-align:right;font-weight:bold;color:${net<0?'#dc2626':'#059669'}">${net<0?`(${Math.abs(net).toLocaleString('fr-FR')})`:net.toLocaleString('fr-FR')}</td>
         <td style="text-align:center"><span style="padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;background:${c.is_paid?'#d1fae5':'#fef3c7'};color:${c.is_paid?'#065f46':'#92400e'}">${c.is_paid?'PAYÉ':'EN ATTENTE'}</span></td>
       </tr>`;
@@ -189,14 +187,13 @@ export const Commissions: React.FC = () => {
       <table><thead><tr>
         <th>Client</th><th style="text-align:right">Commande (FC)</th><th style="text-align:center">Taux</th>
         <th style="text-align:right">CM Brute</th><th style="text-align:right">NET/ORDI</th>
-        <th style="text-align:right">CARTE 1%</th><th style="text-align:right">NET/CARTE</th>
         <th style="text-align:right">NET À PAYER</th><th style="text-align:center">Statut</th>
       </tr></thead><tbody>${rows}</tbody>
       <tfoot><tr>
         <td>TOTAL (${filteredCommissions.length} clients)</td>
         <td style="text-align:right">${totCmd.toLocaleString('fr-FR')}</td>
         <td></td><td style="text-align:right">${totCm.toLocaleString('fr-FR')}</td>
-        <td></td><td></td><td></td>
+        <td></td>
         <td style="text-align:right;color:#059669">${totNet.toLocaleString('fr-FR')}</td>
         <td></td>
       </tr></tfoot></table></body></html>`;
@@ -210,15 +207,13 @@ export const Commissions: React.FC = () => {
 
   const handleExportExcel = () => {
     if (!isReady) return;
-    const headers = ['Client', 'Commande (FC)', 'Taux CM', 'CM Brute (FC)', 'NET/ORDI (FC)', 'CARTE 1% (FC)', 'NET/CARTE (FC)', 'NET À PAYER (FC)', 'Statut'];
+    const headers = ['Client', 'Commande (FC)', 'Taux CM', 'CM Brute (FC)', 'NET/ORDI (FC)', 'NET À PAYER (FC)', 'Statut'];
     const rows = filteredCommissions.map(c => [
       c.client_display || c.client,
       parseFloat(c.order_value || '0'),
       (parseFloat(c.commission_rate || '0') * 100).toFixed(0) + '%',
       parseFloat(c.commission_gross || '0'),
       parseFloat(c.net_ordi || '0'),
-      parseFloat(c.deduction_carte || '0'),
-      parseFloat(c.net_carte || '0'),
       parseFloat(c.net_payable || '0'),
       c.is_paid ? 'PAYÉ' : 'EN ATTENTE',
     ]);
@@ -427,8 +422,6 @@ export const Commissions: React.FC = () => {
                   <th style={{ padding: '8px 10px' }}>Tx</th>
                   <th style={{ padding: '8px 10px' }}>CM Brute</th>
                   <th style={{ padding: '8px 10px' }}>NET/ORDI</th>
-                  <th style={{ padding: '8px 10px' }}>CARTE 1%</th>
-                  <th style={{ padding: '8px 10px' }}>NET/CARTE</th>
                   <th style={{ padding: '8px 10px', fontWeight: 900 }}>NET À PAYER</th>
                   <th style={{ padding: '8px 10px', textAlign: 'center' }}>Statut</th>
                   <th style={{ padding: '8px 10px', textAlign: 'center' }}>Action</th>
@@ -438,8 +431,6 @@ export const Commissions: React.FC = () => {
                 {filteredCommissions.map(c => {
                   const netPayable = parseFloat(c.net_payable || '0');
                   const netOrdi   = parseFloat(c.net_ordi   || '0');
-                  const netCarte  = parseFloat(c.net_carte  || '0');
-                  const carte     = parseFloat(c.deduction_carte || '0');
                   const rate      = parseFloat(c.commission_rate || '0') * 100;
                   const hasManuel = c.manuel_adjustment != null;
                   const carriedDebtIn = parseFloat(c.carried_debt_in || '0');
@@ -472,8 +463,6 @@ export const Commissions: React.FC = () => {
                       </td>
                       <td style={{ padding: '8px 10px', fontWeight: 700 }}>{parseFloat(c.commission_gross || '0').toLocaleString('fr-FR')}</td>
                       <td style={{ padding: '8px 10px' }}>{netOrdi.toLocaleString('fr-FR')}</td>
-                      <td style={{ padding: '8px 10px', color: 'hsl(var(--color-danger))' }}>−{carte.toLocaleString('fr-FR')}</td>
-                      <td style={{ padding: '8px 10px' }}>{netCarte.toLocaleString('fr-FR')}</td>
                       <td style={{ padding: '8px 10px', fontWeight: 800, color: netPayable < 0 ? 'hsl(var(--color-danger))' : 'hsl(var(--color-success))' }}>
                         {netPayable < 0
                           ? `Client: ${Math.abs(netPayable).toLocaleString('fr-FR')} FC`
@@ -547,8 +536,6 @@ export const Commissions: React.FC = () => {
         const gross    = parseFloat(f.commission_gross   || '0');
         const debt     = parseFloat(f.deduction_debt     || '0');
         const netOrdi  = parseFloat(f.net_ordi           || '0');
-        const carte    = parseFloat(f.deduction_carte    || '0');
-        const netCarte = parseFloat(f.net_carte          || '0');
         const social   = parseFloat(f.deduction_social   || '0');
         const prints   = parseFloat(f.deduction_prints   || '0');
         const other    = parseFloat(f.deduction_other    || '0');
@@ -585,13 +572,12 @@ export const Commissions: React.FC = () => {
               <div style={{ backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: 'var(--radius-sm)', padding: '10px 14px', marginBottom: '10px' }}>
                 {row('ORDI (CM brute)', gross, 'hsl(var(--accent-color))')}
                 {debt > 0 && row('(−) Retenue BP (dette)', debt, 'hsl(var(--color-danger))', '−')}
+                {debt < 0 && row('(+) Crédit client (BP créditrice)', Math.abs(debt), 'hsl(var(--color-success))', '+')}
                 {subtotalRow('= NET / ORDI', netOrdi)}
-                {carte > 0 && row('(−) CARTE 1%', carte, 'hsl(var(--color-danger))', '−')}
-                {subtotalRow('= NET / CARTE', netCarte)}
                 {social > 0 && row('(−) Cotisation sociale',  social, 'hsl(var(--color-danger))', '−')}
                 {prints > 0 && row('(−) Frais imprimés',      prints, 'hsl(var(--color-danger))', '−')}
                 {other  > 0 && row('(−) Retenues diverses',   other,  'hsl(var(--color-danger))', '−')}
-                {remise > 0 && row('(−) Remise 0,1%',         remise, 'hsl(var(--color-danger))', '−')}
+                {remise > 0 && row('Remise (0,25 % de la commande, non déduite)', remise, 'hsl(var(--text-muted))')}
                 {carriedDebtIn > 0 && (
                   <div style={{ padding: '5px 0', borderBottom: '1px solid hsl(var(--border-color) / 0.4)', fontSize: '0.76rem' }} title="Dette de commission non réglée lors de la période précédente, reportée et jamais remise à zéro">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

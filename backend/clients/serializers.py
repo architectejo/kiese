@@ -27,7 +27,7 @@ class ClientBoundsMixin:
         return value
 
     def validate_cotisation_sociale(self, value):
-        if value < 0:
+        if value is not None and value < 0:
             raise serializers.ValidationError("La cotisation sociale ne peut pas être négative.")
         return value
 
@@ -42,6 +42,8 @@ class ClientSerializer(ClientBoundsMixin, serializers.ModelSerializer):
     node_display  = serializers.StringRelatedField(source='node', read_only=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
     client_type_display = serializers.CharField(source='get_client_type_display', read_only=True)
+    effective_cotisation_sociale = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model  = Client
@@ -49,12 +51,12 @@ class ClientSerializer(ClientBoundsMixin, serializers.ModelSerializer):
             'id', 'code', 'first_name', 'last_name', 'full_name',
             'phone', 'address', 'photo',
             'node', 'node_display',
-            'cotisation_sociale', 'commission_rate', 'credit_limit', 'current_debt', 'total_breads_received',
+            'cotisation_sociale', 'effective_cotisation_sociale', 'commission_rate', 'credit_limit', 'current_debt', 'total_breads_received',
             'category', 'category_display', 'client_type', 'client_type_display', 'is_active', 'notes',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'code', 'full_name', 'node_display', 'category_display',
+            'id', 'code', 'full_name', 'node_display', 'category_display', 'effective_cotisation_sociale',
             # BUG-259 : BP et total pains ne bougent que par les mécanismes métier.
             'current_debt', 'total_breads_received',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
@@ -143,6 +145,10 @@ class SocialDistributionSerializer(serializers.ModelSerializer):
     def validate_tarif(self, value):
         if value < 0:
             raise serializers.ValidationError("Le tarif ne peut pas être négatif.")
+        # BUG-295 : le tarif (fixé par la direction, par an et par boulangerie)
+        # d'une distribution clôturée est figé : il détermine les remises versées.
+        if self.instance is not None and self.instance.is_closed and value != self.instance.tarif:
+            raise serializers.ValidationError("Distribution clôturée : le tarif ne peut plus être modifié.")
         return value
 
     def validate_year(self, value):

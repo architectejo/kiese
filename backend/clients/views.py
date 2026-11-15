@@ -471,7 +471,8 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
         if not all([node_id, month, year]):
             raise ValidationError({'detail': 'node, month et year sont requis.'})
         # BUG-256 : `cotisation_sociale` est un montant (DecimalField) -> `> 0`.
-        clients = Client.objects.filter(node_id=node_id, is_active=True, cotisation_sociale__gt=0)
+        clients = [c for c in Client.objects.filter(node_id=node_id, is_active=True).select_related('node')
+                   if c.effective_cotisation_sociale > 0]  # BUG-289 : valeur effective
         created, skipped = 0, 0
         for client in clients:
             obj, is_new = SocialContribution.objects.get_or_create(
@@ -479,7 +480,7 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
                 node_id=node_id,
                 month=month,
                 year=year,
-                defaults={'amount': request.data.get('amount') or client.cotisation_sociale},
+                defaults={'amount': request.data.get('amount') or client.effective_cotisation_sociale},
             )
             if is_new:
                 created += 1
@@ -513,6 +514,41 @@ class SocialDistributionViewSet(viewsets.ModelViewSet):
             node = serializer.validated_data.get('node') or user.node
         serializer.save(node=node)
 
+    def perform_update(self, serializer):
+        distribution = serializer.save()
+        if not distribution.is_closed:
+            # BUG-295 : REMISE = INDICE × TARIF + MÉRITE ; un nouveau tarif
+            # recalcule les lignes déjà créées (distribution non clôturée).
+            for line in distribution.lines.select_related('distribution'):
+                line.compute()
+                line.save(update_fields=['remise', 'total_payer', 'updated_at'])
+
+    @action(detail=True, methods=['post'])
+    def refresh_indices(self, request, pk=None):
+        """BUG-295 : recalcule INDICE (= nombre de mois de cotisation payés de
+        l'année, boulangerie de la distribution) et TOTAL SOCIAL de chaque ligne
+        d'une distribution non clôturée, puis REMISE = INDICE × TARIF et
+        TOTAL À PAYER = TOTAL SOCIAL + REMISE + MÉRITE (MÉRITE saisi, conservé)."""
+        from django.db.models import Sum
+        distribution = self.get_object()
+        if distribution.is_closed:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Cette distribution est déjà clôturée.'})
+        updated = 0
+        for line in distribution.lines.select_related('distribution', 'client'):
+            paid_qs = SocialContribution.objects.filter(
+                client=line.client, node=distribution.node,
+                year=distribution.year, is_paid=True,
+            )
+            line.indice = paid_qs.count()
+            line.total_social = paid_qs.aggregate(total=Sum('amount'))['total'] or 0
+            line.compute()
+            line.save()
+            updated += 1
+        distribution.refresh_from_db()
+        return Response({'updated': updated,
+                         'distribution': SocialDistributionSerializer(distribution).data})
+
     @action(detail=True, methods=['post'])
     def auto_populate_lines(self, request, pk=None):
         """Auto-create distribution lines for all active cotisation_sociale clients,
@@ -522,7 +558,8 @@ class SocialDistributionViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Cette distribution est déjà clôturée.'})
         from django.db.models import Sum
-        clients = Client.objects.filter(node=distribution.node, is_active=True, cotisation_sociale__gt=0)  # BUG-256
+        clients = [c for c in Client.objects.filter(node=distribution.node, is_active=True).select_related('node')
+                   if c.effective_cotisation_sociale > 0]  # BUG-256 / BUG-289
         created, skipped = 0, 0
         for client in clients:
             paid_qs = SocialContribution.objects.filter(

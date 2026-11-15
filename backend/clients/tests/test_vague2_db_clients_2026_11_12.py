@@ -172,7 +172,10 @@ class ImportExcelTests(Base):
 class CaisseSocialeTests(Base):
     def setUp(self):
         super().setUp()
-        self.cl = make_client(self.k4)   # cotisation_sociale par défaut : 3000.00 (comme les 678 clients réels)
+        # BUG-289 : la cotisation suit la boulangerie (client.cotisation_sociale = NULL).
+        self.k4.monthly_social_contribution = Decimal('3000')
+        self.k4.save()
+        self.cl = make_client(self.k4)
 
     def test_cotisations_creation_doublon_et_toggle_paid(self):
         api = _api(self.gerant)
@@ -223,3 +226,18 @@ class CaisseSocialeTests(Base):
         api.patch(f"/api/clients/distributions/{d['id']}/", {'is_closed': True})
         r = api.patch(f"/api/clients/distributions/{d['id']}/", {'is_closed': False})
         self.assertTrue(SocialDistribution.objects.get(pk=d['id']).is_closed, 'une distribution clôturée ne doit pas se rouvrir par PATCH')
+
+
+class Bug289CaisseSocialeParBoulangerie(Base):
+    """BUG-289 : bulk_create_month suit la cotisation de la boulangerie ; 0 FC = aucun client."""
+    def test_boulangerie_a_zero_aucune_cotisation_et_deux_mille_a_b2(self):
+        cl = make_client(self.k4)
+        api = _api(self.gerant)
+        r = api.post('/api/clients/contributions/bulk_create_month/', {'node': self.k4.pk, 'month': 5, 'year': 2098})
+        self.assertEqual(r.data['created'], 0)
+        self.k4.monthly_social_contribution = Decimal('2000')
+        self.k4.save()
+        r = api.post('/api/clients/contributions/bulk_create_month/', {'node': self.k4.pk, 'month': 5, 'year': 2098})
+        self.assertEqual(r.data['created'], 1)
+        from clients.models import SocialContribution
+        self.assertEqual(SocialContribution.objects.get(client=cl, month=5, year=2098).amount, Decimal('2000'))

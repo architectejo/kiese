@@ -147,7 +147,8 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
         for client_id, agg in by_client.items():
             client = agg['client']
             # Pre-compute gross to derive social deduction
-            cotisation = Decimal(str(client.cotisation_sociale))
+            # BUG-289 : cotisation = valeur de la boulangerie, sauf personnalisation explicite.
+            cotisation = client.effective_cotisation_sociale
 
             commission, created = ClientCommission.objects.get_or_create(
                 period=period, client_id=client_id,
@@ -155,7 +156,7 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
                     'total_breads': agg['total_breads'],
                     'order_value': agg['order_value'],
                     'commission_rate': client.commission_rate,
-                    'deduction_debt': max(Decimal('0'), Decimal(str(client.current_debt))),
+                    'deduction_debt': Decimal(str(client.current_debt)),  # BUG-293 : BP créditrice conservée (négatif)
                     'deduction_social': cotisation,
                     'deduction_prints': config.print_fee,
                     'node_origin': node.code,

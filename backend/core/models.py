@@ -7,6 +7,7 @@ in the future distributed/offline architecture.
 """
 
 import datetime
+from decimal import Decimal
 import uuid
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
@@ -113,6 +114,12 @@ class Node(models.Model):
         max_digits=12, decimal_places=2, null=True, blank=True,
         verbose_name=_("Valeur théorique sac farine (FC)"),
         help_text=_("Valeur FC attendue par sac 50 kg pour cette boulangerie")
+    )
+    monthly_social_contribution = models.DecimalField(
+        max_digits=10, decimal_places=2, default='0.00', db_default=Decimal('0.00'),
+        verbose_name=_("Cotisation sociale mensuelle (FC)"),
+        help_text=_("Montant retenu par client et par mois dans cette boulangerie "
+                    "(adaptes.md [3.3] : 0 par défaut, ex. 2 000 FC à B2)")
     )
     is_active = models.BooleanField(
         default=True,

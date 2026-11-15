@@ -38,7 +38,11 @@ class ClientCommission(SyncableModel):
     Formula (§2.3 CDC):
         CM Brute   = order_value × commission_rate
         Deductions = debt + social + prints + other
-        Net        = (CM Brute + annual_bonus) − Total Deductions
+        Net        = CM Brute − Total Deductions
+
+    BUG-295 : la remise annuelle (INDICE × TARIF + MÉRITE) est versée avec la
+    distribution de la caisse sociale (`clients.SocialDistributionLine`), jamais
+    avec le net mensuel : `annual_bonus` reste à 0 ici (colonne conservée).
     """
     period = models.ForeignKey(CommissionPeriod, on_delete=models.CASCADE, related_name='commissions', verbose_name=_("Période"))
     client = models.ForeignKey(Client, on_delete=models.PROTECT, related_name='commissions', verbose_name=_("Client"))
@@ -57,7 +61,7 @@ class ClientCommission(SyncableModel):
     deduction_prints  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Frais Imprimés (FC)"))
     deduction_other   = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Retenues Diverses (FC)"))
     deduction_carte   = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Retenue CARTE 1% (FC)"))
-    deduction_remise  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Remise 0.1% (FC)"))
+    deduction_remise  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Remise 0.25% de la commande (FC)"))
     total_deductions  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Total Retenues (FC)"))
 
     # BUG-122 (Q-002) : report de dette entre périodes — si `net_payable` est
@@ -78,7 +82,8 @@ class ClientCommission(SyncableModel):
     net_ordi  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("NET/ORDI (CM − BP)"))
     net_carte = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("NET/CARTE (NET/ORDI − CARTE)"))
 
-    # Annual bonus (0.025 × total pains livrés)
+    # BUG-295 : colonnes conservées pour compatibilité d'API mais toujours à 0 / sans effet ;
+    # la remise annuelle (INDICE × TARIF + MÉRITE) est dans SocialDistributionLine.
     annual_bonus            = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Remise Annuelle (FC)"))
     annual_bonus_incorporated = models.BooleanField(default=False, verbose_name=_("Remise annuelle incorporée"))
 
@@ -154,10 +159,18 @@ class ClientCommission(SyncableModel):
         deduction_other  = Decimal(str(self.deduction_other))
 
         self.commission_gross = order_value * commission_rate
-        self.annual_bonus     = Decimal(str(self.total_breads)) * Decimal(str(annual_bonus_rate))
+        # BUG-295 (adaptes.md [4.2] + classeurs : REMISE = INDICE × TARIF + MÉRITE) :
+        # l'ancienne formule `volume × 0,025` est supprimée ; la remise annuelle
+        # n'est plus ajoutée au net mensuel (`annual_bonus_rate` ignoré, conservé
+        # dans la signature pour les appelants existants).
+        self.annual_bonus     = Decimal('0.00')
 
-        self.deduction_carte  = round(self.commission_gross * Decimal('0.01'), 2)
-        self.deduction_remise = round(self.commission_gross * Decimal('0.001'), 2)
+        # BUG-291 (décision client 2026-11-14) : carte client supprimée (factures imprimées) :
+        # jamais déduite, colonne conservée à 0 en base.
+        self.deduction_carte  = Decimal('0.00')
+        # BUG-292 : REMISE = 0,25 % de la commande (formule des classeurs d'août :
+        # `IQ = IJ*0.25/100`), affichée seulement, absente du NET (IS = CM-BP-social-CARTE-retenue).
+        self.deduction_remise = round(order_value * Decimal('0.0025'), 2)
 
         self.carried_debt_in = self._compute_carried_debt_in()
         carried_debt_in = Decimal(str(self.carried_debt_in))
@@ -165,7 +178,10 @@ class ClientCommission(SyncableModel):
         # BUG-268 : le report d'un net négatif contient déjà la dette de BP du
         # mois précédent ; on ne retient donc que l'excédent de dette au-delà du
         # report (jamais de double comptage de la même créance).
-        deduction_debt = max(Decimal('0'), deduction_debt - carried_debt_in)
+        # BUG-293 : une BP créditrice (dette < 0) s'ajoute au net (Excel : NET = CM - BP) ;
+        # le report ne s'applique qu'à une dette positive.
+        if deduction_debt > 0:
+            deduction_debt = max(Decimal('0'), deduction_debt - carried_debt_in)
 
         self.net_ordi  = self.commission_gross - deduction_debt
         self.net_carte = self.net_ordi - self.deduction_carte
@@ -180,14 +196,12 @@ class ClientCommission(SyncableModel):
             + self.deduction_carte + carried_debt_in
         )
 
-        bonus = self.annual_bonus if self.annual_bonus_incorporated else Decimal('0')
         if self.manuel_adjustment is not None:
-            self.net_payable = Decimal(str(self.manuel_adjustment)) + bonus
+            self.net_payable = Decimal(str(self.manuel_adjustment))
         else:
             self.net_payable = (
                 self.net_carte - deduction_social - deduction_prints - deduction_other
                 - carried_debt_in
-                + bonus
             )
 
     def _compute_carried_debt_in(self) -> Decimal:

@@ -1,3 +1,4 @@
+import { SocialDistributionPanel } from '../../components/clients/SocialDistributionPanel';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import {
@@ -9,7 +10,7 @@ import {
 import {
   clientsApi, salesApi, coreApi,
   Client, Client as ApiClient, BakeryNode, BreadPrice, Invoice,
-  SocialContribution, SocialDistribution, SocialDistributionLine,
+  SocialContribution,
   BassinRow, ClientImportResult,
 } from '@/api/services';
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
@@ -30,6 +31,8 @@ interface ClientItem {
   creditLimit: number;
   outstandingDebt: number;
   commissionRate: number;
+  /** BUG-289 : cotisation sociale effective (lecture seule). */
+  effectiveCotisation: number;
   riskScore: 'Low' | 'Medium' | 'High';
   active: boolean;
   avatarColor: string;
@@ -49,6 +52,7 @@ const mapApiClient = (c: ApiClient): ClientItem => ({
   creditLimit: parseFloat(c.credit_limit) || 50000,
   outstandingDebt: parseFloat(c.current_debt) || 0,
   commissionRate: parseFloat(c.commission_rate) || 0.25,
+  effectiveCotisation: parseFloat(c.effective_cotisation_sociale ?? c.cotisation_sociale ?? '0') || 0,
   riskScore: c.category === 'RISK' ? 'High' : c.category === 'BEST' ? 'Low' : 'Medium',
   active: c.is_active,
   avatarColor: `hsl(${(c.code.charCodeAt(0) * 37 + c.code.charCodeAt(2) * 13) % 360}, 65%, 42%)`,
@@ -181,7 +185,7 @@ export const Clients: React.FC = () => {
   const [newAddress, setNewAddress] = useState('');
   const [newCreditLimit, setNewCreditLimit] = useState(50000);
   const [newCommissionRate, setNewCommissionRate] = useState(25);
-  const [newCotisationSociale, setNewCotisationSociale] = useState(3000);
+  const [newCotisationSociale, setNewCotisationSociale] = useState('');
   const [newPhoto, setNewPhoto] = useState<File | null>(null);
   const [newPhotoPreview, setNewPhotoPreview] = useState<string | null>(null);
 
@@ -278,10 +282,6 @@ export const Clients: React.FC = () => {
   const [socialYear, setSocialYear]             = useState(() => new Date().getFullYear());
   const [contributions, setContributions]       = useState<SocialContribution[]>([]);
   const [socialLoading, setSocialLoading]       = useState(false);
-  const [distributions, setDistributions]       = useState<SocialDistribution[]>([]);
-  const [selectedDist, setSelectedDist]         = useState<SocialDistribution | null>(null);
-  const [distLines, setDistLines]               = useState<SocialDistributionLine[]>([]);
-  const [distLoading, setDistLoading]           = useState(false);
   const [bulkMsg, setBulkMsg]                   = useState<string | null>(null);
 
   // BUG-300 : la caisse sociale est réservée au gérant et aux rôles supérieurs (403 sinon).
@@ -299,18 +299,6 @@ export const Clients: React.FC = () => {
 
   useEffect(() => { if (socialTab === 'cotisations') loadContributions(); }, [loadContributions, socialTab]);
 
-  const loadDistributions = useCallback(async () => {
-    if (!socialNode || !canReadSocial) return;
-    setDistLoading(true);
-    try {
-      const res = await clientsApi.distributions.list({ node: socialNode, year: String(socialYear) });
-      setDistributions(Array.isArray(res.data) ? res.data : []);
-    } catch { /* ignore */ }
-    finally { setDistLoading(false); }
-  }, [socialNode, socialYear, canReadSocial]);
-
-  useEffect(() => { if (socialTab === 'distribution') loadDistributions(); }, [loadDistributions, socialTab]);
-
   const handleBulkCreate = async () => {
     if (!socialNode) return;
     setBulkMsg(null);
@@ -326,23 +314,6 @@ export const Clients: React.FC = () => {
       const res = await clientsApi.contributions.togglePaid(id);
       setContributions(prev => prev.map(c => c.id === id ? res.data : c));
     } catch { /* ignore */ }
-  };
-
-  const handleCreateDistribution = async () => {
-    if (!socialNode) return;
-    try {
-      const r = await clientsApi.distributions.create({ node: socialNode, year: socialYear });
-      setDistributions(prev => [r.data, ...prev]);
-    } catch (e: unknown) { alert(getErrorDetail(e, 'Erreur création.')); }
-  };
-
-  const handleAutoPopulate = async (id: number) => {
-    try {
-      const r = await clientsApi.distributions.autoPopulate(id);
-      setBulkMsg(`${r.data.created} ligne(s) créée(s), ${r.data.skipped} existante(s).`);
-      setSelectedDist(r.data.distribution);
-      setDistLines(r.data.distribution.lines || []);
-    } catch (e: unknown) { alert(getErrorDetail(e, 'Erreur auto-population.')); }
   };
 
   // §7 BASSINS
@@ -504,7 +475,8 @@ export const Clients: React.FC = () => {
         notes: newBusiness,
         credit_limit: newCreditLimit.toString(),
         commission_rate: (newCommissionRate / 100).toFixed(2),
-        cotisation_sociale: newCotisationSociale.toString(),
+        // BUG-289 : facultatif ; vide = valeur de la boulangerie (effective_cotisation_sociale).
+        ...(newCotisationSociale.trim() !== '' ? { cotisation_sociale: newCotisationSociale.trim() } : {}),
         client_type: newType === 'Grossiste' ? 'GROSSISTE' : newType === 'Revendeur' ? 'REVENDEUR' : 'DETAILLANT',
         ...(selectedNode ? { node: selectedNode } : {}),
       };
@@ -521,7 +493,7 @@ export const Clients: React.FC = () => {
       await loadClients();
       setIsAddModalOpen(false);
       setNewName(''); setNewBusiness(''); setNewPhone(''); setNewAddress('');
-      setNewCreditLimit(50000); setNewCommissionRate(25); setNewCotisationSociale(3000);
+      setNewCreditLimit(50000); setNewCommissionRate(25); setNewCotisationSociale('');
       if (newPhotoPreview) URL.revokeObjectURL(newPhotoPreview);
       setNewPhoto(null); setNewPhotoPreview(null);
     } catch (err: unknown) {
@@ -910,7 +882,7 @@ export const Clients: React.FC = () => {
       type: 'Occasionnel',
       phone: 'Non applicable',
       address: 'Vente directe au comptoir',
-      creditLimit: 0, outstandingDebt: 0, commissionRate: 0, riskScore: 'Low', active: true,
+      creditLimit: 0, outstandingDebt: 0, commissionRate: 0, effectiveCotisation: 0, riskScore: 'Low', active: true,
       avatarColor: 'hsl(200, 10%, 40%)',
       lastPaymentDate: workDate,
       createdAt: new Date().toISOString(),
@@ -1652,12 +1624,14 @@ export const Clients: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '6px', textTransform: 'uppercase' }}>Cotisation Sociale (FC)</label>
+                  <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--accent-color))', marginBottom: '6px', textTransform: 'uppercase' }}>Cotisation Sociale (FC, facultatif)</label>
                   <input
                     type="number"
                     min="0"
+                    placeholder="Boulangerie"
+                    title="Laisser vide : la valeur de la boulangerie s'applique"
                     value={newCotisationSociale}
-                    onChange={(e) => setNewCotisationSociale(Number(e.target.value))}
+                    onChange={(e) => setNewCotisationSociale(e.target.value)}
                     className="form-input"
                     style={{ height: '36px', fontSize: '0.8rem', padding: '0 12px' }}
                   />
@@ -2097,6 +2071,9 @@ export const Clients: React.FC = () => {
                       ) : (
                         <p style={{ fontSize: '0.9rem', fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{selectedClient.creditLimit.toLocaleString('fr-FR')} FC</p>
                       )}
+                      <p style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '4px' }}>
+                        Cotisation sociale : {selectedClient.effectiveCotisation > 0 ? `${selectedClient.effectiveCotisation.toLocaleString('fr-FR')} FC/mois` : 'aucune'}
+                      </p>
                     </div>
                     <div>
                       <h4 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.65rem', fontWeight: 800, color: 'hsl(var(--text-muted))', textTransform: 'uppercase', marginBottom: '5px' }}>
@@ -3111,93 +3088,7 @@ export const Clients: React.FC = () => {
             )}
           </div>
         ) : (
-          <div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button onClick={handleCreateDistribution}
-                style={{ padding: '7px 14px', borderRadius: 6, border: 'none', background: 'hsl(var(--accent-color))', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}>
-                + Nouvelle distribution {socialYear}
-              </button>
-              {bulkMsg && <span style={{ fontSize: '0.8rem', color: 'hsl(var(--color-success))' }}>{bulkMsg}</span>}
-            </div>
-            {distLoading ? (
-              <div style={{ textAlign: 'center', padding: 24, color: 'hsl(var(--text-secondary))' }}>Chargement…</div>
-            ) : distributions.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 24, color: 'hsl(var(--text-secondary))', fontSize: '0.875rem' }}>
-                Aucune distribution pour {socialYear}. Créez-en une pour commencer.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {distributions.map(dist => (
-                  <div key={dist.id} style={{ border: '1px solid hsl(var(--border-color))', borderRadius: 8, padding: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-                      <div>
-                        <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Distribution {dist.year}</span>
-                        <span style={{ marginLeft: 12, fontSize: '0.8rem', color: 'hsl(var(--text-secondary))' }}>Tarif : {parseFloat(dist.tarif).toLocaleString('fr-FR')} FC/indice</span>
-                        {dist.is_closed && <span style={{ marginLeft: 10, padding: '2px 8px', background: 'hsl(var(--color-success))', color: '#fff', borderRadius: 12, fontSize: '0.7rem', fontWeight: 700 }}>CLÔTURÉE</span>}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => { setSelectedDist(dist); setDistLines(dist.lines || []); setBulkMsg(null); }}
-                          style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid hsl(var(--border-color))', background: 'none', cursor: 'pointer', fontSize: '0.8rem', color: 'hsl(var(--text-primary))' }}>
-                          Voir lignes ({(dist.lines || []).length})
-                        </button>
-                        {!dist.is_closed && (
-                          <button onClick={() => handleAutoPopulate(dist.id)}
-                            style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: 'hsl(var(--accent-color))', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}>
-                            Auto-peupler
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Lignes de distribution */}
-                    {selectedDist?.id === dist.id && distLines.length > 0 && (
-                      <div style={{ overflowX: 'auto', marginTop: 8 }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
-                          <thead>
-                            <tr style={{ background: 'hsl(var(--bg-tertiary))', borderBottom: '2px solid hsl(var(--border-color))' }}>
-                              {['Client', 'Indice', 'Total Cot.', 'Remise', 'Mérite', 'Total à recevoir', 'Présence', 'Forme'].map(h => (
-                                <th key={h} style={{ padding: '6px 8px', textAlign: ['Total Cot.', 'Remise', 'Mérite', 'Total à recevoir'].includes(h) ? 'right' : 'left', fontWeight: 600, color: 'hsl(var(--text-secondary))', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {distLines.map(line => (
-                              <tr key={line.id} style={{ borderBottom: '1px solid hsl(var(--border-color))' }}>
-                                <td style={{ padding: '6px 8px', fontWeight: 600 }}>{line.client_display || line.client}</td>
-                                <td style={{ padding: '6px 8px' }}>{line.indice}</td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{parseFloat(line.total_social).toLocaleString('fr-FR')}</td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--color-info))' }}>{parseFloat(line.remise).toLocaleString('fr-FR')}</td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--color-success))' }}>{parseFloat(line.merite).toLocaleString('fr-FR')}</td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: 'hsl(var(--accent-color))' }}>{parseFloat(line.total_payer).toLocaleString('fr-FR')}</td>
-                                <td style={{ padding: '6px 8px' }}>
-                                  <span style={{ padding: '2px 7px', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700, background: line.position === 'present' ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))', color: '#fff' }}>
-                                    {line.position === 'present' ? 'Présent' : 'Absent'}
-                                  </span>
-                                </td>
-                                <td style={{ padding: '6px 8px', fontSize: '0.78rem', color: 'hsl(var(--text-secondary))' }}>
-                                  {line.form === 'especes' ? 'Espèces' : 'Colis'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                          <tfoot>
-                            <tr style={{ background: 'hsl(var(--bg-tertiary))', borderTop: '2px solid hsl(var(--border-color))', fontWeight: 700 }}>
-                              <td colSpan={2} style={{ padding: '6px 8px' }}>{distLines.length} client(s)</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{distLines.reduce((s, l) => s + parseFloat(l.total_social), 0).toLocaleString('fr-FR')}</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--color-info))' }}>{distLines.reduce((s, l) => s + parseFloat(l.remise), 0).toLocaleString('fr-FR')}</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--color-success))' }}>{distLines.reduce((s, l) => s + parseFloat(l.merite), 0).toLocaleString('fr-FR')}</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--accent-color))' }}>{distLines.reduce((s, l) => s + parseFloat(l.total_payer), 0).toLocaleString('fr-FR')}</td>
-                              <td colSpan={2} />
-                            </tr>
-                          </tfoot>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <SocialDistributionPanel node={socialNode} year={socialYear} canRead={canReadSocial} />
         )}
       </div>
 

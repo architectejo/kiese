@@ -46,7 +46,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'facturier', 'facturier_display', 'livreur', 'livreur_display',
             'team', 'status', 'status_display', 'payment_type', 'payment_type_display',
             'debt_before', 'order_total', 'payment_amount', 'debt_after', 'commission_rate',
-            'is_soldee', 'commission_exempt', 'special_code', 'is_debt_repayment', 'total_loss',
+            'is_soldee', 'commission_exempt', 'special_code', 'is_debt_repayment', 'motif', 'total_loss',
             'adjusts', 'is_adjustment', 'adjustment_sign', 'adjustments_count',
             'invoice_date', 'delivered_at',
             'lines',
@@ -121,10 +121,14 @@ class InvoiceCreateSerializer(serializers.Serializer):
     node            = serializers.IntegerField(required=False)
     client          = serializers.UUIDField(required=False, allow_null=True)
     payment_type    = serializers.ChoiceField(choices=Invoice.PaymentType.choices)
-    # BUG-209 : un versement n'est jamais négatif.
-    payment_amount  = serializers.DecimalField(
-        max_digits=14, decimal_places=2, min_value=Decimal('0.00'),
-        error_messages={'min_value': "Le versement ne peut pas être négatif."},
+    # BUG-290 (décision client 2026-11-14, remplace BUG-209) : le signe « − »
+    # est accepté ; un versement négatif est une sortie de caisse (retrait
+    # d'épargne, emprunt boulanger, manquant d'équipe) : BP après = BP avant +
+    # commande - versement, la BP augmente.
+    payment_amount  = serializers.DecimalField(max_digits=14, decimal_places=2)
+    motif = serializers.ChoiceField(
+        choices=[c for c in Invoice.Motif.values if c], required=False, allow_blank=True, default='',
+        error_messages={'invalid_choice': "Motif invalide."},
     )
     # BUG-083 : date antérieure optionnelle (« ventes passées »). La
     # validation métier (Config.allow_backdated_sales, jamais de date

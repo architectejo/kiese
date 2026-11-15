@@ -502,25 +502,6 @@ export const Settings: React.FC = () => {
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px', textTransform: 'uppercase' }}>
-                  Taux Remise Annuelle (§2.3.3)
-                </label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    type="number" step="0.001"
-                    value={form.annual_bonus_rate ?? ''}
-                    onChange={e => set('annual_bonus_rate', e.target.value)}
-                    className="form-input"
-                    style={{ height: '34px', fontSize: '0.8rem', padding: '0 10px' }}
-                  />
-                  <span style={{ fontSize: '0.72rem', color: 'hsl(var(--text-secondary))', whiteSpace: 'nowrap' }}>
-                    = {((parseFloat(String(form.annual_bonus_rate)) || 0) * 100).toFixed(1)}%
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginTop: '3px' }}>Remise Annuelle = 0.025 × Volume Total Pains</div>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px', textTransform: 'uppercase' }}>
                   Frais d'Imprimés (FC)
                 </label>
                 <input

@@ -51,13 +51,17 @@ class Bug208209213214Tests(Base):
                       lines=[{'bread_price': str(self.bp.pk), 'quantity': '2'}])
         self.assertEqual(r.status_code, 201, r.data)
 
-    def test_versement_negatif_refuse(self):
-        self.assertEqual(self.post(payment_amount='-500').status_code, 400)
+    def test_versement_negatif_accepte(self):
+        # BUG-290 (décision client 2026-11-14) : remplace l'ancien refus BUG-209/213.
+        r = self.post(payment_amount='-500')                      # commande 1 000
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(Decimal(r.data['debt_after']), Decimal('1500'))   # 0 + 1 000 - (-500)
         r = self.api.post(INV, {'client': str(self.cl.pk), 'payment_type': 'CASH',
                                 'payment_amount': '-3000', 'is_debt_repayment': True, 'lines': []}, format='json')
-        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(Decimal(r.data['debt_after']), Decimal('4500'))   # 1 500 + 3 000
         self.cl.refresh_from_db()
-        self.assertEqual(self.cl.current_debt, 0)
+        self.assertEqual(self.cl.current_debt, Decimal('4500'))
 
     def test_remboursement_a_zero_refuse_et_positif_accepte(self):
         body = {'client': str(self.cl.pk), 'payment_type': 'CASH', 'is_debt_repayment': True, 'lines': []}

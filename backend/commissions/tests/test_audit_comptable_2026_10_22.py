@@ -91,6 +91,7 @@ class RemiseCarteNotDeductedInRealLedgerTests(TestCase):
         # restant entre le grand livre réel et l'application ne vient plus
         # que de CARTE (1 % du CM), plus de REMISE (0,1 % du CM).
         ecart = real_net - cc.net_payable
-        self.assertEqual(ecart, cc.deduction_carte)
-        self.assertEqual(ecart, cm * Decimal('0.01'))
-        self.assertLess(cc.net_payable, real_net)
+        # BUG-291 (décision client 2026-11-14) : carte supprimée -> écart nul.
+        self.assertEqual(cc.deduction_carte, Decimal('0.00'))
+        self.assertEqual(ecart, Decimal('0.00'))
+        self.assertEqual(cc.net_payable, real_net)

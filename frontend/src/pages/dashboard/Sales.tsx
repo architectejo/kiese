@@ -1,3 +1,4 @@
+import { MotifSelect, type InvoiceMotif } from '../../components/sales/MotifSelect';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FiTruck, FiPlusCircle, FiClock, FiCheckCircle,
@@ -133,6 +134,10 @@ export const Sales: React.FC = () => {
 
   // Payment
   const [versement, setVersement] = useState(0);
+  // Texte saisi (entier signé) : un champ type="number" empêche le « − » sur certains claviers Android.
+  const [versementText, setVersementText] = useState('');
+  const [motif, setMotif] = useState<InvoiceMotif>('');
+  const [repaymentMotif, setRepaymentMotif] = useState<InvoiceMotif>('');
   const [venteSoldee, setVenteSoldee] = useState(false);
   // BUG-052 : exonération de commission (CM=0) sur une facture normale — INDÉPENDANTE de
   // « Vente Soldée » (qui applique en plus la remise de prix à 75% et gèle la BP).
@@ -333,6 +338,8 @@ export const Sales: React.FC = () => {
     setSelectedClient(null);
     setClientSearch('');
     setVersement(0);
+    setVersementText('');
+    setMotif('');
     setVenteSoldee(false);
     setCommissionExempt(false);
     setIsOccasional(false);
@@ -353,13 +360,13 @@ export const Sales: React.FC = () => {
     e.preventDefault();
     if (!selectedClient) return;
     const amount = parseFloat(repaymentAmount);
-    if (isNaN(amount) || amount <= 0) { setRepaymentError('Montant invalide.'); return; }
+    if (isNaN(amount) || !Number.isInteger(amount) || amount === 0) { setRepaymentError('Montant invalide : entier non nul (négatif = sortie de caisse).'); return; }
     setRepaymentLoading(true);
     setRepaymentError(null);
     try {
       const todayStr = workDate;
       const retroactiveDate = allowBackdatedSales && repaymentDate && repaymentDate !== todayStr ? repaymentDate : undefined;
-      const res = await salesApi.createRepayment(selectedClient.id, amount, retroactiveDate);
+      const res = await salesApi.createRepayment(selectedClient.id, amount, retroactiveDate, repaymentMotif);
       const inv = res.data;
       const built: ReceiptData = {
         receiptNumber: inv.receipt_number,
@@ -390,6 +397,7 @@ export const Sales: React.FC = () => {
       }
       setIsRepaymentModalOpen(false);
       setRepaymentAmount('');
+      setRepaymentMotif('');
       setRepaymentDate('');
       clearClient();
     } catch (err: unknown) {
@@ -477,8 +485,8 @@ export const Sales: React.FC = () => {
       setFormError('Chaque quantité doit être un nombre entier compris entre 1 et 100 000.');
       return;
     }
-    if (!isNonServiForm && !isRegularisationForm && (!Number.isFinite(effectiveVersement) || effectiveVersement < 0)) {
-      setFormError('Le versement ne peut pas être négatif.');
+    if (!isNonServiForm && !isRegularisationForm && (!Number.isInteger(effectiveVersement) || versementText === '-')) {
+      setFormError('Le versement doit être un nombre entier (le signe « - » est accepté).');
       return;
     }
 
@@ -499,6 +507,7 @@ export const Sales: React.FC = () => {
         // forcée côté serveur (comm_rate=0) même si combinée avec is_soldee (§ ci-dessus).
         ...(commissionExempt ? { commission_exempt: true } : {}),
         ...(specialCode ? { special_code: specialCode } : {}),
+        ...(motif ? { motif } : {}),
         ...(retroactiveDate ? { invoice_date: retroactiveDate } : {}),
         lines,
       });
@@ -1143,7 +1152,7 @@ export const Sales: React.FC = () => {
             {!isOccasional && selectedClient && (
               <button
                 type="button"
-                onClick={() => { setRepaymentAmount(''); setRepaymentDate(''); setRepaymentError(null); setIsRepaymentModalOpen(true); }}
+                onClick={() => { setRepaymentAmount(''); setRepaymentMotif(''); setRepaymentDate(''); setRepaymentError(null); setIsRepaymentModalOpen(true); }}
                 className="btn btn-secondary"
                 style={{ padding: '7px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'hsl(var(--color-info))', borderColor: 'hsl(var(--color-info) / 0.4)' }}
                 title="Enregistrer un versement sans commande de pain : remboursement de dette ou dépôt épargne"
@@ -1239,11 +1248,18 @@ export const Sales: React.FC = () => {
               <span style={{ display: 'block', fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '4px' }}>Acompte en espèces versé ce jour</span>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="number" min={0}
-                  value={isCashOnlySale ? orderTotal : (versement || '')}
-                  placeholder="0"
+                  type="text" inputMode="text" autoComplete="off" pattern="-?[0-9]*"
+                  aria-label="Versement du jour en francs congolais (le signe moins est accepté)"
+                  value={isCashOnlySale ? String(orderTotal) : versementText}
+                  placeholder="0 (ex. -5000)"
                   disabled={isCashOnlySale}
-                  onChange={e => setVersement(Math.max(0, Number(e.target.value)))}
+                  onChange={e => {
+                    // Entier signé : « − » typographique et espaces tolérés, tout le reste ignoré.
+                    const raw = e.target.value.replace(/[−–—]/g, '-').replace(/[\s  ]/g, '');
+                    if (!/^-?\d*$/.test(raw)) return;
+                    setVersementText(raw);
+                    setVersement(raw === '' || raw === '-' ? 0 : parseInt(raw, 10));
+                  }}
                   className="form-input"
                   style={{ fontSize: '0.78rem', height: '30px', padding: '0 8px', borderColor: 'hsl(var(--color-success) / 0.4)', fontWeight: 800 }}
                 />
@@ -1262,6 +1278,14 @@ export const Sales: React.FC = () => {
                     ? 'Vente soldée — aucune dette ajoutée au BP'
                     : `Nouvelle BP ≈ ${(parseFloat(selectedClient.current_debt) + orderTotal - versement).toLocaleString('fr-FR')} FC`}
                 </div>
+              )}
+              {versement < 0 && !isCashOnlySale && (
+                <div style={{ fontSize: '0.62rem', color: 'hsl(var(--color-warning))', marginTop: '3px', fontWeight: 700 }}>
+                  Versement négatif : sortie de caisse ({versement.toLocaleString('fr-FR')} FC), la BP augmente. Le blocage de crédit reste appliqué par le serveur.
+                </div>
+              )}
+              {!isCashOnlySale && !isNonServiForm && !isRegularisationForm && (
+                <div style={{ marginTop: '8px' }}><MotifSelect value={motif} onChange={setMotif} /></div>
               )}
             </div>}
 
@@ -1397,22 +1421,26 @@ export const Sales: React.FC = () => {
             </div>
             <div>
               <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px', textTransform: 'uppercase' }}>
-                Montant versé (FC) *
+                Montant versé (FC, négatif = sortie de caisse) *
               </label>
               <input
-                type="number"
-                min="1"
-                step="1"
+                type="text"
+                inputMode="text"
+                pattern="-?[0-9]*"
+                autoComplete="off"
                 value={repaymentAmount}
-                onChange={e => setRepaymentAmount(e.target.value)}
-                placeholder="Ex: 10 000"
+                onChange={e => {
+                  const raw = e.target.value.replace(/[−–—]/g, '-').replace(/[\s  ]/g, '');
+                  if (/^-?\d*$/.test(raw)) setRepaymentAmount(raw);
+                }}
+                placeholder="Ex: 10000 ou -5000"
                 className="form-input"
                 style={{ height: '34px', fontSize: '0.84rem', fontWeight: 700 }}
                 autoFocus
                 required
               />
             </div>
-            {repaymentAmount && parseFloat(repaymentAmount) > 0 && (
+            {repaymentAmount && repaymentAmount !== '-' && parseFloat(repaymentAmount) !== 0 && (
               <div style={{ padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'hsl(var(--bg-tertiary))', fontSize: '0.7rem' }}>
                 <span style={{ color: 'hsl(var(--text-secondary))' }}>Nouvelle BP après versement : </span>
                 <strong style={{ color: (parseFloat(selectedClient.current_debt) - parseFloat(repaymentAmount)) <= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-warning))' }}>
@@ -1423,6 +1451,7 @@ export const Sales: React.FC = () => {
                 )}
               </div>
             )}
+            <MotifSelect value={repaymentMotif} onChange={setRepaymentMotif} />
             {allowBackdatedSales && (
               <div>
                 <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--color-warning))', marginBottom: '2px', textTransform: 'uppercase' }}>
@@ -1451,7 +1480,7 @@ export const Sales: React.FC = () => {
               <button type="button" onClick={() => setIsRepaymentModalOpen(false)} className="btn btn-secondary" style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }}>
                 Annuler
               </button>
-              <button type="submit" disabled={repaymentLoading || !repaymentAmount} className="btn btn-primary" style={{ flex: 2, padding: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: repaymentLoading ? 0.7 : 1 }}>
+              <button type="submit" disabled={repaymentLoading || !repaymentAmount || repaymentAmount === '-'} className="btn btn-primary" style={{ flex: 2, padding: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: repaymentLoading ? 0.7 : 1 }}>
                 <FiCheckCircle />
                 <span>{repaymentLoading ? 'Enregistrement...' : 'Confirmer le versement'}</span>
               </button>

@@ -5,6 +5,7 @@ Chaque test attendu en échec porte `@expectedFailure` et la référence du
 ticket (docs/qa/REGISTRE_BUGS.md). Données fictives uniquement.
 """
 from datetime import timedelta
+from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
@@ -44,16 +45,18 @@ class QuantiteEtMontantsTests(Vague1Base):
         r = self.post(lines=[{'bread_price': self.bp.pk, 'quantity': 0}])
         self.assertEqual(r.status_code, 400)
 
-    def test_versement_negatif_refuse_sur_facture(self):
-        r = self.post(payment_amount='-500')
-        self.assertEqual(r.status_code, 400)
+    def test_versement_negatif_accepte_sur_facture(self):
+        # BUG-290 : le signe « − » est accepté (sortie de caisse), la BP augmente.
+        r = self.post(payment_amount='-500')                      # commande 1 000
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(Decimal(r.data['debt_after']), Decimal('1500'))
 
-    def test_versement_negatif_refuse_sur_remboursement(self):
+    def test_versement_negatif_accepte_sur_remboursement(self):
         r = self.api.post(INV, {'client': str(self.cl.pk), 'payment_type': 'CASH',
                                 'payment_amount': '-3000', 'is_debt_repayment': True, 'lines': []}, format='json')
-        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.status_code, 201, r.data)
         self.cl.refresh_from_db()
-        self.assertEqual(self.cl.current_debt, 0)
+        self.assertEqual(self.cl.current_debt, Decimal('3000'))
 
     def test_remboursement_a_zero_refuse(self):
         r = self.api.post(INV, {'client': str(self.cl.pk), 'payment_type': 'CASH',
