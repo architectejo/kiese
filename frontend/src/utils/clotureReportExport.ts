@@ -110,7 +110,7 @@ export function exportClotureToExcel(
   // --- Feuille 3 : Décomposition par catégorie de pain ------------------------
   const header = [
     'Catégorie', 'Produit (qté)', 'Produit (FC)', 'Facture/Jr (qté)', 'Facture/Jr (FC)',
-    'CM/Jr (FC)', 'Reste Jour (A)', 'Reste Jour (B)', 'Reste Hier (A)', 'Reste Hier (B)',
+    'CM/Jr (FC)', 'Reste du Jour', "Reste d'Hier",
     'Appro Effectué (qté)', 'Appro Effectué (FC)', 'Appro Reçu (qté)', 'Appro Reçu (FC)',
     'Non Servi (qté)', 'Non Servi (FC)', 'Régularisation (qté)', 'Régularisation (FC)',
     'Vente Cash/Soldée (qté)', 'Vente Cash/Soldée (FC)', 'Perte (Soldée) (FC)',
@@ -129,8 +129,7 @@ export function exportClotureToExcel(
       cat.produit.quantity, toNum(cat.produit.fc),
       cat.facture_jr.quantity, toNum(cat.facture_jr.fc),
       toNum(cat.commission_jr.fc),
-      cat.reste_du_jour.A ?? null, cat.reste_du_jour.B ?? null,
-      cat.reste_du_hier.A ?? null, cat.reste_du_hier.B ?? null,
+      cat.reste_du_jour_jour ?? null, cat.reste_du_hier_jour ?? null,
       cat.appro_effectue.quantity, toNum(cat.appro_effectue.fc),
       cat.appro_recu.quantity, toNum(cat.appro_recu.fc),
       cat.non_servi.quantity, toNum(cat.non_servi.fc),
@@ -188,8 +187,7 @@ export function printClotureReport(
   const repRows = repartitionRows.map(r => `<tr><td>${r.label}</td><td style="text-align:right">${r.pct} %</td></tr>`).join('');
 
   const decompHeader = [
-    'Catégorie', 'Produit', 'Facture/Jr', 'CM/Jr', 'Reste Jr(A)', 'Reste Jr(B)',
-    'Reste Hr(A)', 'Reste Hr(B)', 'Appro Eff.', 'Appro Reçu', 'Non Servi', 'Régul.',
+    'Catégorie', 'Produit', 'Facture/Jr', 'CM/Jr', 'Reste du Jour', "Reste d'Hier", 'Appro Eff.', 'Appro Reçu', 'Non Servi', 'Régul.',
     'Vente Cash/Soldée', 'Perte (Soldée)', 'Fact. Mvm Int.', 'Non Vendu', 'Déclassés', 'Sorties Grat.',
   ].map(h => `<th>${h}</th>`).join('');
 
@@ -199,10 +197,8 @@ export function printClotureReport(
       <td style="text-align:right">${formatQty(cat.produit.quantity)}<br/><small>${formatFC(cat.produit.fc)}</small></td>
       <td style="text-align:right">${formatQty(cat.facture_jr.quantity)}<br/><small>${formatFC(cat.facture_jr.fc)}</small></td>
       <td style="text-align:right">${formatFC(cat.commission_jr.fc)}</td>
-      <td style="text-align:right">${formatQty(cat.reste_du_jour.A)}</td>
-      <td style="text-align:right">${formatQty(cat.reste_du_jour.B)}</td>
-      <td style="text-align:right">${formatQty(cat.reste_du_hier.A)}</td>
-      <td style="text-align:right">${formatQty(cat.reste_du_hier.B)}</td>
+      <td style="text-align:right">${cat.reste_du_jour_jour == null ? '—' : formatQty(cat.reste_du_jour_jour)}</td>
+      <td style="text-align:right">${formatQty(cat.reste_du_hier_jour)}</td>
       <td style="text-align:right">${formatQty(cat.appro_effectue.quantity)}<br/><small>${formatFC(cat.appro_effectue.fc)}</small></td>
       <td style="text-align:right">${formatQty(cat.appro_recu.quantity)}<br/><small>${formatFC(cat.appro_recu.fc)}</small></td>
       <td style="text-align:right">${formatFC(cat.non_servi.fc)}<br/><small>${formatQty(cat.non_servi.quantity)} pain(s)<br/>retranché : ${formatFC(cat.non_servi.fc_signe)}</small></td>

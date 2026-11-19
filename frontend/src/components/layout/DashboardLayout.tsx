@@ -13,6 +13,7 @@ import {
 import { coreApi, productionApi, SystemNotificationItem, TeamAssignment } from '@/api/services';
 import { ForcePasswordChange } from '@/components/auth/ForcePasswordChange';
 import { Modal } from '@/components/shared/Modal';
+import { ChatButton } from '@/components/chat/ChatButton';
 import { extractApiError } from '@/hooks/useProgressiveList';
 import { OpeningStockConfirmationModal } from '@/components/production/OpeningStockConfirmationModal';
 import { CloseSessionModal } from '@/components/production/CloseSessionModal';
@@ -636,6 +637,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            <ChatButton />
+
             {/* Notification Bell with Badge Count */}
             <div style={{ position: 'relative' }}>
               <button 

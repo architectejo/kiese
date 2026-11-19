@@ -7,20 +7,21 @@ import {
   productionApi, coreApi, ConsumableStock, ConsumableCount, FlourHistoryEntry,
   ProductionSession, BreadTransfer, BreadDisposal, BreadStock, BakeryNode, BreadPrice, ServiceTeam
 } from '@/api/services';
-import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
-import { useTeamAssignmentStore, TEAM_NOT_ASSIGNED_MESSAGE } from '@/store/teamAssignmentStore';
+import { getErrorDetail } from '@/api/errors';
+import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
-import { getWorkDate, localIsoDate, useRotationActive, useSelectedWorkDay, useWorkDateStore } from '@/store/workDateStore';
+import { getWorkDate, localIsoDate, useRotationActive, useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
+import { mergeSessionLines, carryoverLines } from '@/components/production/mergeSessionLines';
 import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production/ReconciliationPanel';
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
 import { OpeningConfirmationManualSection } from '@/components/production/OpeningConfirmationManualSection';
 import { TransferDisputeCard } from '@/components/production/TransferDisputeCard';
+import { BatchInProgressPanel } from '@/components/production/BatchInProgressPanel';
 import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 
 const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
 
-const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
 // BUG-161 (F3) : plus de date UTC. Un horodatage `created_at` (UTC) est converti en date LOCALE
 // avant comparaison à la date du jour ; en rotation de 24 h c'est exact : le jour
@@ -132,7 +133,7 @@ export const Production: React.FC = () => {
   const loadSeqRef = useRef(0);
   const [nodes, setNodes]             = useState<BakeryNode[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
-  const [sacValueFc, setSacValueFc]   = useState(200000);
+  const [sacValueFc, setSacValueFc]   = useState<number | null>(null); // BUG-311 : null tant que la config n'est pas chargée
   const [isLoading, setIsLoading]     = useState(true);
 
   // Direction Générale (multi-node access) must pick one branch to view —
@@ -143,12 +144,6 @@ export const Production: React.FC = () => {
   // au milieu d'une page de 1500+ lignes sans libellé visible pour le client).
   const [activeTab, setActiveTab] = useState<'fournees' | 'intrants' | 'transferts' | 'reconciliation'>('fournees');
 
-  // §3.1 Production form — quantities keyed by BreadPrice.id (integer)
-  const [selTeam, setSelTeam]         = useState<'A' | 'B'>('A');
-  const [flourSacks, setFlourSacks]   = useState(4);
-  const [quantities, setQuantities]   = useState<Record<number, number>>({});
-  const [prodError, setProdError]     = useState<string | null>(null);
-  const [consumablesUsed, setConsumablesUsed] = useState<Record<string, string>>({ SALT: '', YEAST: '', OIL: '' });
   const [showAllSessionsModal, setShowAllSessionsModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<ProductionSession | null>(null);
   const [sessionNotes, setSessionNotes] = useState('');
@@ -168,7 +163,6 @@ export const Production: React.FC = () => {
   // (le serveur la lit ; le formulaire n'envoie ni `team` ni `date`). `undefined` = pas encore
   // lue ; `null` = aucune équipe désignée.
   const [serviceTeam, setServiceTeam] = useState<ServiceTeam | null | undefined>(undefined);
-  const requestTeamAssignment = useTeamAssignmentStore(st => st.requestAssignment);
   const assignmentTick = useTeamAssignmentStore(st => st.requestTick);
   useEffect(() => {
     if (!rotationActive) { setServiceTeam(undefined); return; }
@@ -378,59 +372,6 @@ export const Production: React.FC = () => {
       setCountError(getErrorDetail(err, 'Erreur lors du comptage.'));
     } finally {
       setCountSubmitting(false);
-    }
-  };
-
-  // §3.1 Rendement monétaire (en FC)
-  const totalBreads   = breadPrices.reduce((s, bp) => s + (quantities[bp.id] || 0), 0);
-  const totalFcProd   = breadPrices.reduce((s, bp) => s + (quantities[bp.id] || 0) * bp.unit_price, 0);
-  const theoreticalFc = flourSacks * sacValueFc;
-  const ecartFc       = totalFcProd - theoreticalFc;
-  const rendementPct  = theoreticalFc > 0 ? (totalFcProd / theoreticalFc) * 100 : 0;
-  const rendementColor = rendementPct >= 90 ? 'var(--color-success)' : rendementPct >= 75 ? 'var(--color-warning)' : 'var(--color-danger)';
-
-  const handleAddSession = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setProdError(null);
-    if (!user?.node) { setProdError('Compte non assigné à une boulangerie.'); return; }
-    if (flourSacks <= 0) { setProdError('Indiquez le nombre de sacs de farine.'); return; }
-    const lines = breadPrices
-      .filter(bp => (quantities[bp.id] || 0) > 0)
-      .map(bp => ({ bread_price: bp.id, quantity: quantities[bp.id] }));
-    if (lines.length === 0) { setProdError('Déclarez au moins une catégorie de pains.'); return; }
-    const inRotation = useWorkDateStore.getState().rotation;
-    try {
-      if (inRotation) {
-        // Relecture : l'équipe a pu être désignée/corrigée depuis la dernière lecture.
-        const { data: assignment } = await productionApi.teamAssignment.get();
-        setServiceTeam(assignment.team);
-        if (assignment.team === null) {
-          setProdError(TEAM_NOT_ASSIGNED_MESSAGE.replace('avant de facturer', 'avant de déclarer une fournée'));
-          requestTeamAssignment();
-          return;
-        }
-      }
-      const consumablesPayload = Object.entries(consumablesUsed)
-        .filter(([, qty]) => qty !== '' && parseFloat(qty.replace(',', '.')) > 0)
-        .map(([ct, qty]) => ({ consumable_type: ct, quantity: parseFloat(qty.replace(',', '.')) }));
-      await productionApi.sessions.create({
-        flour_sacks_used: flourSacks.toString(),
-        // Rotation : le serveur décide du jour calendaire et de l'équipe désignée
-        // (ni `date` ni `team`, BUG-195) ; sinon date locale et équipe choisie.
-        ...(inRotation ? {} : { date: getWorkDate(), team: selTeam }),
-        lines,
-        consumables_used: consumablesPayload,
-      });
-      setQuantities({});
-      setConsumablesUsed({ SALT: '', YEAST: '', OIL: '' });
-      await loadData();
-    } catch (err: unknown) {
-      if (isTeamNotAssignedError(err)) {
-        setProdError(TEAM_NOT_ASSIGNED_MESSAGE.replace('avant de facturer', 'avant de déclarer une fournée'));
-        requestTeamAssignment();
-        return;
-      }
-      setProdError(getErrorDetail(err, 'Erreur.'));
     }
   };
 
@@ -753,160 +694,17 @@ export const Production: React.FC = () => {
       {/* ═══ §3.1 — FOURNÉES (Déclaration & Historique) ═══ */}
       {activeTab === 'fournees' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div className="glass-card" style={{ padding: '14px' }}>
-            <h2 style={{ fontSize: '0.88rem', fontWeight: 800, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <FiGrid style={{ color: 'hsl(var(--accent-color))' }} /> §3.1 — Déclaration de Fournée
-            </h2>
-            <form onSubmit={handleAddSession} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Équipe</label>
-                  {rotationActive ? (
-                    <div
-                      className="form-input"
-                      data-testid="service-team-locked"
-                      style={{ fontSize: '0.75rem', minHeight: '30px', display: 'flex', alignItems: 'center', fontWeight: 700 }}
-                    >
-                      {serviceTeam === undefined
-                        ? 'Équipe de service : chargement…'
-                        : serviceTeam === null
-                          ? 'Équipe de service : non désignée'
-                          : `Équipe de service : ${serviceTeam}`}
-                    </div>
-                  ) : (
-                    <select value={selTeam} onChange={e => setSelTeam(e.target.value as 'A' | 'B')} className="form-input" style={{ fontSize: '0.75rem', height: '30px' }}>
-                      <option value="A">Équipe A</option>
-                      <option value="B">Équipe B</option>
-                    </select>
-                  )}
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Nbre sac farine consommer *</label>
-                  <input type="number" step="0.01" min={0.01} value={flourSacks} onChange={e => setFlourSacks(Number(e.target.value))} className="form-input" style={{ fontSize: '0.75rem', height: '30px', padding: '0 8px' }} />
-                </div>
-              </div>
-
-              {/* Dynamic bread quantity inputs from BreadPrice API */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '5px', textTransform: 'uppercase' }}>
-                  Projection coupe
-                  <span style={{ marginLeft: '6px', fontWeight: 400, color: 'hsl(var(--text-muted))' }}>Prix sac = {formatFC(sacValueFc)}</span>
-                </label>
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(breadPrices.length, 4)}, 1fr)`, gap: '6px' }}>
-                  {breadPrices.map(bp => (
-                    <div key={bp.id}>
-                      <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '2px', textAlign: 'center' }}>{bp.label}</div>
-                      <input
-                        type="number" min={0}
-                        value={quantities[bp.id] || ''}
-                        placeholder="0"
-                        onChange={e => setQuantities(prev => ({ ...prev, [bp.id]: Math.max(0, Number(e.target.value)) }))}
-                        className="form-input"
-                        style={{ fontSize: '0.78rem', height: '28px', padding: '0 4px', textAlign: 'center', fontWeight: 700 }}
-                      />
-                      {quantities[bp.id] > 0 && (
-                        <div style={{ fontSize: '0.52rem', textAlign: 'center', color: 'hsl(var(--color-info))', marginTop: '1px' }}>
-                          = {((quantities[bp.id] || 0) * bp.unit_price).toLocaleString('fr-FR')} FC
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* §3.1 Rendement monétaire — calcul automatique en FC */}
-              {totalBreads > 0 && flourSacks > 0 && (
-                <div style={{ backgroundColor: `hsl(${rendementColor} / 0.06)`, border: `1px solid hsl(${rendementColor} / 0.35)`, borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-muted))', textTransform: 'uppercase', marginBottom: '8px' }}>
-                    Rendement Monétaire (§3.1) — Valeur FC produite vs théorique
-                  </div>
-                  {/* Main KPIs */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', fontSize: '0.7rem', marginBottom: '8px' }}>
-                    <div>
-                      <div style={{ color: 'hsl(var(--text-secondary))' }}>Valeur réelle</div>
-                      <div style={{ fontWeight: 800, color: `hsl(${rendementColor})`, fontSize: '0.82rem' }}>{formatFC(totalFcProd)}</div>
-                    </div>
-                    <div>
-                      <div style={{ color: 'hsl(var(--text-secondary))' }}>Théorique ({flourSacks} sacs)</div>
-                      <div style={{ fontWeight: 800 }}>{formatFC(theoreticalFc)}</div>
-                    </div>
-                    <div>
-                      <div style={{ color: 'hsl(var(--text-secondary))' }}>Efficacité</div>
-                      <div style={{ fontWeight: 800, color: `hsl(${rendementColor})` }}>
-                        {rendementPct.toFixed(1)}%
-                      </div>
-                    </div>
-                  </div>
-                  {/* Progress bar */}
-                  <div style={{ height: '6px', borderRadius: '3px', backgroundColor: 'hsl(var(--border-color))', overflow: 'hidden', marginBottom: '8px' }}>
-                    <div style={{ height: '100%', width: `${Math.min(Math.max(rendementPct, 0), 100)}%`, backgroundColor: `hsl(${rendementColor})`, transition: 'width 0.3s ease' }} />
-                  </div>
-                  {/* Écart manquant / excédent */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: `1px solid hsl(${rendementColor} / 0.2)`, paddingTop: '8px', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-secondary))' }}>
-                      {ecartFc >= 0 ? '▲ EXCÉDENT' : '▼ MANQUANT'}
-                    </span>
-                    <span style={{ fontSize: '0.9rem', fontWeight: 800, color: ecartFc >= 0 ? `hsl(${rendementColor})` : 'hsl(var(--color-danger))' }}>
-                      {ecartFc >= 0 ? '+' : ''}{formatFC(ecartFc)}
-                    </span>
-                  </div>
-                  {/* Breakdown per bread type */}
-                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(breadPrices.length, 4)}, 1fr)`, gap: '4px', fontSize: '0.6rem' }}>
-                    {breadPrices.filter(bp => (quantities[bp.id] || 0) > 0).map(bp => {
-                      const qty = quantities[bp.id] || 0;
-                      const fcLine = qty * bp.unit_price;
-                      return (
-                        <div key={bp.id} style={{ backgroundColor: 'hsl(var(--bg-tertiary))', borderRadius: '3px', padding: '4px 5px' }}>
-                          <div style={{ color: 'hsl(var(--text-muted))', fontWeight: 700 }}>{bp.label}</div>
-                          <div style={{ fontWeight: 800 }}>{qty} pains</div>
-                          <div style={{ color: `hsl(${rendementColor})`, fontWeight: 700 }}>{fcLine.toLocaleString('fr-FR')} FC</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {/* Equivalences display */}
-                  <div style={{ fontSize: '0.58rem', marginTop: '6px', color: 'hsl(var(--text-muted))', borderTop: '1px solid hsl(var(--border-color))', paddingTop: '5px' }}>
-                    Équivalences théoriques (1 sac = {formatFC(sacValueFc)}) : &nbsp;
-                    {breadPrices.map(bp => `${Math.round(sacValueFc / bp.unit_price)} × ${bp.label}`).join(' = ')}
-                  </div>
-                </div>
-              )}
-
-              {/* Consommables utilisés pendant la fournée */}
-              <div style={{ borderTop: '1px solid hsl(var(--border-color))', paddingTop: '10px' }}>
-                <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '5px', textTransform: 'uppercase' }}>
-                  Consommables Utilisés <span style={{ fontWeight: 400, color: 'hsl(var(--text-muted))' }}>(réduit les stocks)</span>
-                </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
-                  {[
-                    { key: 'SALT',  label: 'Sel',    icon: '🧂', unit: 'g',       step: '1',    placeholder: '500' },
-                    { key: 'YEAST', label: 'Levure', icon: '💥', unit: 'paquets', step: '0.01', placeholder: '0.50' },
-                    { key: 'OIL',   label: 'Huile',  icon: '💧', unit: 'litres',  step: '0.01', placeholder: '0.25' },
-                  ].map(({ key, label, icon, unit, step, placeholder }) => (
-                    <div key={key}>
-                      <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '2px', textAlign: 'center' }}>{icon} {label} ({unit})</div>
-                      <input
-                        type="number" min="0" step={step}
-                        value={consumablesUsed[key]}
-                        placeholder={placeholder}
-                        onChange={e => setConsumablesUsed(prev => ({ ...prev, [key]: e.target.value }))}
-                        className="form-input"
-                        style={{ fontSize: '0.75rem', height: '28px', padding: '0 6px', textAlign: 'center' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {prodError && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: 'hsl(var(--color-danger) / 0.1)', border: '1px solid hsl(var(--color-danger) / 0.3)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '0.68rem', color: 'hsl(var(--color-danger))' }}>
-                  {isStockInsufficientError(prodError) && <FiAlertTriangle style={{ flexShrink: 0 }} />}
-                  <span>{prodError}</span>
-                </div>
-              )}
-              <button type="submit" className="btn btn-primary" style={{ padding: '6px', fontSize: '0.78rem' }}>Enregistrer la Fournée</button>
-            </form>
-          </div>
+          {/* BUG-306 : déclaration par nombre de sacs + fournée en cours (BatchInProgressPanel). */}
+          <BatchInProgressPanel
+            nodeFilter={viewNode || user?.node || undefined}
+            canDeclare={!!user?.node}
+            workDate={workDate}
+            rotationActive={rotationActive}
+            serviceTeam={serviceTeam}
+            onServiceTeam={setServiceTeam}
+            sacValueFc={sacValueFc}
+            onChanged={() => { void loadData(); }}
+          />
 
           {/* BUG-151 : accès manuel à la confirmation du reste d'hier pour une AUTRE
               équipe que celle déjà confirmée (même garde de rôle que la boîte modale
@@ -1606,7 +1404,7 @@ export const Production: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {[...selectedSession.lines].sort((a, b) => (a.unit_price || 0) - (b.unit_price || 0)).map((line, i) => (
+                      {mergeSessionLines(selectedSession.lines).map((line, i) => (
                         <tr key={i} style={{ borderTop: '1px solid hsl(var(--border-color))' }}>
                           <td style={{ padding: '5px 10px', fontWeight: 700, color: 'hsl(var(--accent-color))' }}>
                             {line.bread_price_display || `Pain ${line.unit_price} FC`}
@@ -1630,6 +1428,14 @@ export const Production: React.FC = () => {
                     </tfoot>
                   </table>
                 </div>
+                {carryoverLines(selectedSession.lines).length > 0 && (
+                  <div style={{ marginTop: '6px', fontSize: '0.68rem', color: 'hsl(var(--text-muted))' }}>
+                    Reste d'hier confirmé (non compté dans le total) :{' '}
+                    {carryoverLines(selectedSession.lines)
+                      .map(l => `${l.quantity} × ${l.bread_price_display || `Pain ${l.unit_price} FC`}`)
+                      .join(', ')}
+                  </div>
+                )}
               </div>
             )}
 

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
+import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
 
 // BUG-120 (volet frontend) : écran dédié « Clôture Journalière », réunissant en un seul
@@ -93,9 +94,6 @@ export const ClotureJournaliere: React.FC = () => {
   }, [effectiveNodeCode, date, fetchReport]);
 
   const totals = report?.totals;
-  // BUG-272 : en rotation, le serveur fournit `reste_du_jour_fin_journee` (reste de fin de journée
-  // = dernier reste déclaré de la date). Les restes des deux équipes ne sont jamais additionnés.
-  const hasEndOfDayRest = !!report?.categories.some(c => c.reste_du_jour_fin_journee !== undefined);
   const repartitionRows = totals
     ? (repartitionMode === 'QUANTITE' ? totals.repartition_pct_par_quantite : totals.repartition_pct_par_valeur)
     : [];
@@ -214,44 +212,7 @@ export const ClotureJournaliere: React.FC = () => {
       {report && totals && (
         <>
           {/* Bloc de totaux */}
-          <div className="kpi-grid" style={{ gap: '12px' }}>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Total du Jour</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{formatFC(totals.total_du_jour_fc)}</div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Net Produit</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'hsl(var(--color-success))' }}>{formatFC(totals.net_produit_fc)}</div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Écart / Facture</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800, color: parseFloat(totals.ecart_facture_fc) > 0 ? 'hsl(var(--color-warning))' : 'hsl(var(--text-primary))' }}>
-                {formatFC(totals.ecart_facture_fc)}
-              </div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Nombre de Sacs Produits</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800 }}>{totals.nombre_sacs_produits}</div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Moyenne Produit / Sac</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800 }}>{formatFC(totals.moyenne_produit_par_sac_fc)}</div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Tarif Vente (fixe)</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800 }}>{formatFC(totals.tarif_vente_fc)}</div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Écart / Production</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800, color: parseFloat(totals.ecart_production_fc) < 0 ? 'hsl(var(--color-danger))' : 'hsl(var(--color-success))' }}>
-                {formatFC(totals.ecart_production_fc)}
-              </div>
-            </div>
-            <div className="glass-card" style={{ padding: '10px 12px' }}>
-              <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))', fontWeight: 700, textTransform: 'uppercase' }}>Pains Produits / Facturés</div>
-              <div style={{ fontSize: '1rem', fontWeight: 800 }}>{formatQty(totals.total_breads_produced)} / {formatQty(totals.total_breads_billed)}</div>
-            </div>
-          </div>
+          <ClotureKpiCards report={report} />
 
           {/* Répartition en % — sélecteur quantité/valeur, aucun rechargement serveur */}
           <div className="glass-card" style={{ padding: '14px' }}>
@@ -305,15 +266,8 @@ export const ClotureJournaliere: React.FC = () => {
                     <th style={{ textAlign: 'right' }}>Produit</th>
                     <th style={{ textAlign: 'right' }}>Facture/Jr</th>
                     <th style={{ textAlign: 'right' }}>CM/Jr</th>
-                    <th style={{ textAlign: 'right' }}>Reste Jour (A)</th>
-                    <th style={{ textAlign: 'right' }}>Reste Jour (B)</th>
-                    <th style={{ textAlign: 'right' }}>Reste Hier (A)</th>
-                    <th style={{ textAlign: 'right' }}>Reste Hier (B)</th>
-                    {hasEndOfDayRest && (
-                      <th style={{ textAlign: 'right' }} title="Dernier reste déclaré du jour (les deux équipes ne sont pas additionnées). Vide tant qu'une fournée du jour n'est pas clôturée.">
-                        Reste fin de journée
-                      </th>
-                    )}
+                    <th style={{ textAlign: 'right' }} title="Reste du jour (journée entière, sans équipe). Vide tant qu'il n'est pas déclaré.">Reste du Jour</th>
+                    <th style={{ textAlign: 'right' }} title="Reste d'hier reporté sur la journée (sans équipe).">Reste d'Hier</th>
                     <th style={{ textAlign: 'right' }}>Appro Effectué</th>
                     <th style={{ textAlign: 'right' }}>Appro Reçu</th>
                     <th style={{ textAlign: 'right' }} title={NON_SERVI_HELP}>Non Servi</th>
@@ -339,13 +293,8 @@ export const ClotureJournaliere: React.FC = () => {
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.facture_jr.fc)}</div>
                       </td>
                       <td style={{ textAlign: 'right' }}>{formatFC(cat.commission_jr.fc)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_jour.A)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_jour.B)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_hier.A)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_hier.B)}</td>
-                      {hasEndOfDayRest && (
-                        <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatQty(cat.reste_du_jour_fin_journee)}</td>
-                      )}
+                      <td style={{ textAlign: 'right', fontWeight: 700 }}>{cat.reste_du_jour_jour == null ? '—' : formatQty(cat.reste_du_jour_jour)}</td>
+                      <td style={{ textAlign: 'right' }}>{formatQty(cat.reste_du_hier_jour)}</td>
                       <td style={{ textAlign: 'right' }}>
                         {formatQty(cat.appro_effectue.quantity)}
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_effectue.fc)}</div>

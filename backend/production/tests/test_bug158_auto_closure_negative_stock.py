@@ -235,8 +235,12 @@ class PendingValidationNegativeStockTests(_ShiftEndBase):
         # Simple lecture répétée toutes les 10 s : aucune alerte en mode pending.
         self.assertEqual(SystemNotification.objects.count(), notifications_before)
 
-    def test_suggested_values_are_accepted_by_voluntary_close(self):
-        """Les valeurs pré-remplies (dont la négative) sont acceptées par `close()`."""
+    def test_negative_suggested_value_is_rejected_by_voluntary_close(self):
+        """
+        BUG-303 (remarque.md 2026-11-19) : la saisie volontaire de clôture
+        refuse les négatifs (la suggestion reste le stock physique réel, le
+        gérant doit saisir une quantité >= 0).
+        """
         self._make_500_negative()
         resp = self._status(_aware(13, 20))
         payload = [
@@ -248,15 +252,17 @@ class PendingValidationNegativeStockTests(_ShiftEndBase):
             f'/api/production/sessions/{self.session_id}/close/',
             {'remaining': payload}, format='json',
         )
-        self.assertEqual(resp.status_code, 200, resp.data)
-        self.assertTrue(ProductionSession.objects.get(pk=self.session_id).is_closed)
-        remaining = self._remaining_by_bread_price()
-        self.assertEqual(remaining.get(self.bp_500.pk), -20)
-        self.assertEqual(remaining.get(self.bp_200.pk), 60)
-        snap = DailyBreadStockSnapshot.objects.get(
-            node=self.node, bread_price=self.bp_500, date=SESSION_DATE, team='A',
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertFalse(ProductionSession.objects.get(pk=self.session_id).is_closed)
+
+        for item in payload:
+            item['quantity'] = max(item['quantity'], 0)
+        resp = self.client_api.post(
+            f'/api/production/sessions/{self.session_id}/close/',
+            {'remaining': payload}, format='json',
         )
-        self.assertEqual(snap.qty_at_close, -20)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(self._remaining_by_bread_price().get(self.bp_500.pk), 0)
 
 
 class NegativeQuantityOnlyForRemainingTests(_ShiftEndBase):

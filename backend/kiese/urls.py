@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/finance/', include('finance.urls')),
     path('api/blockchain/', include('blockchain.urls')),
     path('api/sync/', include('sync.urls')),
+    path('api/chat/', include('chat.urls')),
 
     # API Schema & Documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

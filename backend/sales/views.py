@@ -739,6 +739,17 @@ class InvoiceViewSet(
             delivered_at_dt = _combine_date_with_now_time(requested_delivery_date, invoice.node)
 
         invoice.deliver(request.user, delivered_at=delivered_at_dt)
+        # BUG-306 : les pains livrés alimentent la fournée « en cours »
+        # (déclarée par nombre de sacs) de l'équipe en service.
+        from production.services import apply_delivered_invoice_to_open_batch
+        batch = apply_delivered_invoice_to_open_batch(invoice)
+        if batch is not None:
+            log_activity(
+                request.user, "Avancement Fournée",
+                f"Facture {invoice.receipt_number} : fournée Éq.{batch.team} {batch.date} "
+                f"à {batch.total_fc_produced} / {batch.theoretical_yield} FC.",
+                node_origin=invoice.node.code,
+            )
         log_activity(
             request.user, "Livraison Confirmée",
             f"Facture {invoice.receipt_number} livrée — Nouvelle BP : {invoice.debt_after} FC.",

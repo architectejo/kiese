@@ -22,7 +22,14 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
     node_display        = serializers.StringRelatedField(source='node', read_only=True)
     declared_by_display = serializers.SerializerMethodField()
     team_display        = serializers.CharField(source='get_team_display', read_only=True)
-    lines               = ProductionSessionLineSerializer(many=True)
+    # BUG-306 : `lines` facultatif — une fournée peut être déclarée par le seul
+    # nombre de sacs (pains alors incrémentés à la livraison des ventes).
+    lines               = ProductionSessionLineSerializer(many=True, required=False)
+    # BUG-306 : objectif et avancement (lecture seule). Voir get_* ci-dessous.
+    objective_fc        = serializers.SerializerMethodField()
+    progress_value_fc   = serializers.SerializerMethodField()
+    progress_pct        = serializers.SerializerMethodField()
+    is_in_progress      = serializers.SerializerMethodField()
     # node auto-assigned from user in perform_create — not required in payload
     node                = serializers.PrimaryKeyRelatedField(
         queryset=Node.objects.all(), required=False, allow_null=True,
@@ -37,9 +44,11 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
             'breads_300', 'breads_400', 'breads_500', 'breads_1000', 'total_breads',
             'total_fc_produced', 'theoretical_yield', 'yield_gap', 'sac_value_fc_used',
             'is_closed', 'closed_at', 'closure_summary',
+            'auto_track', 'objective_fc', 'progress_value_fc', 'progress_pct', 'is_in_progress',
             'notes', 'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = [
+            'auto_track',
             'id', 'total_breads', 'total_fc_produced', 'theoretical_yield', 'yield_gap',
             'breads_300', 'breads_400', 'breads_500', 'breads_1000', 'sac_value_fc_used',
             'is_closed', 'closed_at', 'closure_summary',
@@ -52,6 +61,58 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
 
     def get_declared_by_display(self, obj):
         return obj.declared_by.get_full_name() if obj.declared_by else None
+
+    def get_objective_fc(self, obj):
+        # Montant à atteindre = sacs x valeur théorique du sac (figée à la
+        # déclaration, BUG-038) ; entier en FC.
+        return obj.theoretical_yield
+
+    def get_progress_value_fc(self, obj):
+        # Valeur déjà produite/livrée sur la fournée (lignes DECLARED au prix
+        # catalogue) ; pour une fournée auto : valeur vendue/livrée.
+        return obj.total_fc_produced
+
+    def get_progress_pct(self, obj):
+        # Pourcentage d'avancement, 2 décimales, NON plafonné (peut dépasser 100).
+        from decimal import Decimal, ROUND_HALF_UP
+        if not obj.theoretical_yield:
+            return '0.00'
+        pct = Decimal(obj.total_fc_produced) * Decimal('100') / Decimal(obj.theoretical_yield)
+        return str(pct.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+    def get_is_in_progress(self, obj):
+        return not obj.is_closed
+
+    # BUG-309 : borne haute de sécurité (le modèle autorise 999 999,99).
+    MAX_FLOUR_SACKS = 100000
+
+    def to_internal_value(self, data):
+        # BUG-309 : `flour_sacks_used` invalide (négatif, non numérique,
+        # NaN/infini, trop grand, > 2 décimales) -> 400 {"detail": "..."} en
+        # français, au lieu d'une IntegrityError (CHECK theoretical_yield) = 500.
+        # 0 reste accepté (contrat BUG-306 : fournée non « en cours »).
+        from decimal import Decimal, InvalidOperation
+        if hasattr(data, 'get') and 'flour_sacks_used' in data:
+            raw = data.get('flour_sacks_used')
+            msg = None
+            if raw is None or isinstance(raw, bool) or (isinstance(raw, str) and not raw.strip()):
+                msg = "« flour_sacks_used » : nombre de sacs invalide."
+            else:
+                try:
+                    val = Decimal(str(raw).strip())
+                except (InvalidOperation, ValueError):
+                    val = None
+                if val is None or not val.is_finite():
+                    msg = "« flour_sacks_used » : nombre de sacs invalide (valeur numérique finie attendue)."
+                elif val < 0:
+                    msg = "« flour_sacks_used » : le nombre de sacs ne peut pas être négatif."
+                elif val > self.MAX_FLOUR_SACKS:
+                    msg = f"« flour_sacks_used » : le nombre de sacs ne peut pas dépasser {self.MAX_FLOUR_SACKS}."
+                elif val != val.quantize(Decimal('0.01')):
+                    msg = "« flour_sacks_used » : 2 décimales maximum."
+            if msg:
+                raise serializers.ValidationError({'detail': msg})
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         # BUG-142 (remarque.md) : une session existante pour (node, team,

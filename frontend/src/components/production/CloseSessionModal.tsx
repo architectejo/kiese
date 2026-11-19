@@ -19,6 +19,19 @@ import { ShiftEndPendingState } from '@/store/shiftEndStore';
 // sous-composants ajoutés à une page de plus de ~1000 lignes), à l'image de
 // `StockDuJourSection.tsx` (BUG-145) et `OpeningConfirmationManualSection.tsx` (BUG-151).
 
+// BUG-310 : le serveur peut préfixer le message par un nom de champ technique
+// (« « remaining » : la quantité ne peut pas être négative. »). On retire ce préfixe.
+const humanizeCloseError = (message: string): string => {
+  const cleaned = message
+    .replace(/^\s*[«"]?\s*\w+\s*[»"]?\s*:\s+/, '')
+    .replace(/\s*—\s*[«"]?\s*\w+\s*[»"]?\s*:\s+/g, ' — ')
+    .trim();
+  if (/ne peut pas être négative/i.test(cleaned)) {
+    return 'Le reste du jour ne peut pas être négatif. Corrigez les quantités avant de clôturer la fournée.';
+  }
+  return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : message;
+};
+
 export interface CloseSessionModalProps {
   isOpen: boolean;
   /** BUG-188 : masquée mais montée (saisie conservée) pendant la désignation d'équipe. */
@@ -159,6 +172,11 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
 
   const handleConfirm = async () => {
     setError(null);
+    // BUG-303 : valeurs négatives refusées à la clôture (le serveur les refuse aussi).
+    if (hasNegative) {
+      setError('Le reste du jour ne peut pas être négatif. Corrigez les quantités avant de clôturer la fournée.');
+      return;
+    }
     setSubmitting(true);
     try {
       const remaining = categories.map(cat => ({
@@ -174,7 +192,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
         onClose();
       }
     } catch (err: unknown) {
-      setError(getErrorDetail(err, 'Erreur lors de la clôture de la fournée.'));
+      setError(humanizeCloseError(getErrorDetail(err, 'Erreur lors de la clôture de la fournée.')));
     } finally {
       setSubmitting(false);
     }
@@ -214,7 +232,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={submitting}
+            disabled={submitting || hasNegative}
             className="btn btn-primary"
             style={{
               flex: isForced ? 1 : 2, padding: '9px', fontSize: '0.8rem', display: 'flex', alignItems: 'center',
@@ -245,8 +263,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
 
       <p style={{ fontSize: '0.74rem', color: 'hsl(var(--text-secondary))', marginBottom: '12px' }}>
         Pour chaque catégorie produite par cette fournée, indiquez le reste du jour (pains
-        invendus, non livrés). Laissez à 0 si tout a été écoulé. Le reste peut être négatif
-        si les ventes et sorties dépassent la production (stock négatif enregistré tel quel). Cette action recoupe
+        invendus, non livrés). Laissez à 0 si tout a été écoulé. Le reste ne peut pas être négatif. Cette action recoupe
         automatiquement les ventes et dispositions du jour avec la production déclarée —
         elle est <strong>irréversible</strong> : la fournée ne sera plus modifiable.
       </p>
@@ -288,6 +305,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
                   setQuantities(prev => ({ ...prev, [cat.bread_price]: n }));
                 }}
                 disabled={submitting}
+                allowNegative={false}
                 ariaLabel={`Reste du jour — ${cat.label}`}
               />
             </div>
@@ -302,7 +320,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
           padding: '7px 10px', borderRadius: 'var(--radius-sm)',
         }}>
           <FiAlertTriangle style={{ flexShrink: 0, marginTop: '1px' }} />
-          <span>Stock négatif : ventes/sorties supérieures à la production. La valeur sera enregistrée telle quelle.</span>
+          <span>Une quantité négative est refusée : saisissez 0 ou plus pour chaque catégorie.</span>
         </div>
       )}
 

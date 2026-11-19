@@ -13,10 +13,12 @@ interface SignedIntegerFieldProps {
   width?: string;
   /** Affiche le libellé « Stock négatif » sous le champ (défaut : oui). */
   showNegativeLabel?: boolean;
+  /** BUG-303 : false = valeurs négatives refusées (pas de « ± », « - » ignoré). Défaut : true. */
+  allowNegative?: boolean;
 }
 
 export const SignedIntegerField: React.FC<SignedIntegerFieldProps> = ({
-  value, onChange, ariaLabel, disabled = false, width = '100%', showNegativeLabel = true,
+  value, onChange, ariaLabel, disabled = false, width = '100%', showNegativeLabel = true, allowNegative = true,
 }) => {
   // Saisie brute en cours : permet l'état intermédiaire « - » sans l'écraser.
   const [raw, setRaw] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export const SignedIntegerField: React.FC<SignedIntegerFieldProps> = ({
   }, [value]);
 
   const handleChange = (text: string) => {
-    const cleaned = text.replace(/[^0-9-]/g, '').replace(/(?!^)-/g, '');
+    const cleaned = (allowNegative ? text.replace(/[^0-9-]/g, '') : text.replace(/[^0-9]/g, '')).replace(/(?!^)-/g, '');
     setRaw(cleaned);
     onChange(Math.trunc(Number(cleaned)) || 0);
   };
@@ -42,7 +44,7 @@ export const SignedIntegerField: React.FC<SignedIntegerFieldProps> = ({
   return (
     <div style={{ width, minWidth: 0 }}>
       <div style={{ display: 'flex', gap: '4px' }}>
-        <button
+        {allowNegative && <button
           type="button"
           onClick={toggleSign}
           disabled={disabled}
@@ -52,11 +54,11 @@ export const SignedIntegerField: React.FC<SignedIntegerFieldProps> = ({
           title="Changer le signe (+/-)"
         >
           ±
-        </button>
+        </button>}
         <input
           type="text"
-          inputMode="text"
-          pattern="-?[0-9]*"
+          inputMode={allowNegative ? 'text' : 'numeric'}
+          pattern={allowNegative ? '-?[0-9]*' : '[0-9]*'}
           value={raw ?? String(value)}
           onChange={e => handleChange(e.target.value)}
           disabled={disabled}

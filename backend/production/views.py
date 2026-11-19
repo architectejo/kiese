@@ -702,6 +702,11 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         lines_data = serializer.validated_data.get('lines') or []
         flour_add = serializer.validated_data.get('flour_sacks_used')
 
+        # BUG-306 : déclaration par le seul nombre de sacs (aucune quantité de
+        # pains) = fournée « en cours » dont les pains sont incrémentés à la
+        # livraison des ventes (`production.services`).
+        sacs_only = bool(flour_add) and not any((l.get('quantity') or 0) > 0 for l in lines_data)
+
         new_declared_lines = []
         with transaction.atomic():
             existing = ProductionSession.objects.select_for_update().filter(
@@ -722,6 +727,11 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                 if flour_add:
                     session.flour_sacks_used = session.flour_sacks_used + flour_add
                     session.save(update_fields=['flour_sacks_used'])
+                if sacs_only and not session.auto_track and not session.lines.filter(
+                    source=ProductionSessionLine.Source.DECLARED,
+                ).exists():
+                    session.auto_track = True
+                    session.save(update_fields=['auto_track'])
                 for line_data in lines_data:
                     qty = line_data.get('quantity', 0)
                     if qty <= 0:
@@ -749,6 +759,7 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                         node=node, team=team, date=date,
                         declared_by=user, node_origin=node.code,
                         flour_sacks_used=flour_add if flour_add else '0.00',
+                        auto_track=sacs_only,
                         notes=serializer.validated_data.get('notes', ''),
                     )
                 except IntegrityError:
@@ -790,7 +801,9 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
 
         _check_overconsumption(session, processed_entries)
 
-        if session.yield_gap < 0:
+        # BUG-306 : fournée « en cours » (sacs seuls) — aucun pain encore
+        # produit, l'écart n'a pas de sens avant la clôture : pas d'alerte.
+        if session.yield_gap < 0 and not sacs_only:
             create_notification(
                 title=f"Manquant de Rendement — {session.node.code}",
                 message=(
@@ -804,7 +817,8 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         log_activity(
             self.request.user, "Déclaration Production",
             f"{session.node.code} Éq.{session.team} {session.date} : "
-            f"{session.flour_sacks_used} sacs → {session.total_breads} pains "
+            + ("fournée en cours (suivi automatique des ventes) — " if sacs_only else "")
+            + f"{session.flour_sacks_used} sacs → {session.total_breads} pains "
             f"({session.total_fc_produced:,} FC).",
             node_origin=session.node_origin
         )
@@ -945,7 +959,7 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         BUG-152 (remarque.md, après l.408 — « les restes des pains en stock
         [...] doivent aller dans la clôture journalière reste du jour selon
         la catégorie ») : le corps de la requête peut fournir, en option,
-        `remaining` : `[{"bread_price": <id>, "quantity": <entier, négatif admis — BUG-158>}, ...]`
+        `remaining` : `[{"bread_price": <id>, "quantity": <entier >= 0 ; négatif refusé — BUG-303>}, ...]`
         pour déclarer le « RESTE DU JOUR » par catégorie EN MÊME TEMPS que la
         clôture, en un seul geste, au lieu d'exiger un passage préalable par
         le formulaire séparé `BreadDisposalViewSet` (type `REMAINING`).
@@ -955,7 +969,7 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
         - Si `remaining` est fourni : une entrée invalide (quantité non
           entière, catégorie absente ou introuvable) → 400, RIEN n'est
           appliqué (session non clôturée, aucune disposition créée). Une
-          quantité négative est acceptée depuis BUG-158 (instruction client).
+          quantité négative est refusée (400) depuis BUG-303, qui remplace BUG-158 pour cette saisie.
           Sinon, pour chaque catégorie fournie, la ligne `REMAINING` de
           CETTE session pour cette catégorie est créée ou REMPLACÉE
           (idempotent — un nouvel appel avec les mêmes valeurs ne duplique
@@ -991,8 +1005,15 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                 bp_id = entry.get('bread_price') if isinstance(entry, dict) else None
                 qty   = entry.get('quantity') if isinstance(entry, dict) else None
                 try:
-                    qty_int = int(qty)
-                except (TypeError, ValueError):
+                    # BUG-309 : pas de troncature silencieuse (-0,5 -> 0) ;
+                    # seuls les entiers (ou décimaux sans partie fractionnaire) passent.
+                    if isinstance(qty, bool):
+                        raise ValueError
+                    qty_dec = Decimal(str(qty).strip())
+                    if not qty_dec.is_finite() or qty_dec != qty_dec.to_integral_value():
+                        raise ValueError
+                    qty_int = int(qty_dec)
+                except (TypeError, ValueError, ArithmeticError):
                     return Response(
                         {'detail': "« remaining » : quantité invalide."},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -1002,10 +1023,17 @@ class ProductionSessionViewSet(viewsets.ModelViewSet):
                         {'detail': "« remaining » : catégorie de pain (bread_price) requise."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                # BUG-158 (instruction client, 2026-11-10) : une quantité
-                # négative est acceptée — le reste du jour reprend le stock
-                # physique, qui peut être négatif (l'ancien refus HTTP 400 de
-                # BUG-152 est levé).
+                # BUG-303 (remarque.md, 2026-11-19, postérieure à BUG-158 du
+                # 2026-11-10) : « Ne pas accepter les négatifs sur Clôturer la
+                # Fournée ». La saisie du reste par catégorie refuse les
+                # négatifs (400). Le stock/consommable négatif (BUG-143/158)
+                # reste accepté ailleurs ; la clôture FORCÉE automatique, qui
+                # reprend le stock physique calculé, n'est pas une saisie.
+                if qty_int < 0:
+                    return Response(
+                        {'detail': "« remaining » : la quantité ne peut pas être négative."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 remaining_entries.append((bp_id, qty_int))
 
             bp_ids = {bp_id for bp_id, _ in remaining_entries}
@@ -2399,6 +2427,18 @@ def _build_daily_closure_report(node, report_date=None):
         for line in confirmation.lines.all():
             confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
     confirmed_bp_ids_any_team = {bp_id for (_team, bp_id) in confirmed_reste_du_hier_by_team_bp}
+    # BUG-304 : reste d'hier du JOUR (indépendant des équipes) hors rotation =
+    # stock de départ confirmé le plus tôt dans la journée, sinon dernier reste
+    # de la veille (toutes équipes). `(confirmed_at, qty)` par catégorie.
+    day_start_confirmed_by_bp = {}
+    if not rotation:
+        for confirmation in DailyOpeningConfirmation.objects.filter(
+            node=node, date=report_date,
+        ).prefetch_related('lines'):
+            for line in confirmation.lines.all():
+                known = day_start_confirmed_by_bp.get(line.bread_price_id)
+                if known is None or confirmation.confirmed_at < known[0]:
+                    day_start_confirmed_by_bp[line.bread_price_id] = (confirmation.confirmed_at, line.qty_confirmed)
 
     category_ids = (
         set(BreadPrice.objects.filter(is_active=True).values_list('id', flat=True))
@@ -2413,6 +2453,8 @@ def _build_daily_closure_report(node, report_date=None):
     total_commission_fc = Decimal('0.00')
     total_mvm_interne_fc = Decimal('0.00')
     total_produced_value_fc = Decimal('0.00')
+    total_reste_hier_jour_fc = Decimal('0.00')
+    total_reste_jour_jour_fc = Decimal('0.00')
     total_breads_billed = 0
 
     for bp_id in sorted(category_ids, key=lambda i: categories_by_id[i].unit_price if i in categories_by_id else 0):
@@ -2512,6 +2554,28 @@ def _build_daily_closure_report(node, report_date=None):
             reste_du_jour_fc = _m(sum(Decimal(v or 0) for v in reste_du_jour_by_team.values()) * catalog_price)
         reste_du_hier_fc = _m(sum(Decimal(v or 0) for v in reste_du_hier_by_team.values()) * catalog_price)
 
+        # BUG-304 (remarque.md 2026-11-19) : « le reste d'hier et le reste du
+        # jour ne dépendent pas des équipes, ils sont pris pour le jour ».
+        # Valeurs JOURNALIÈRES additives (les dicts par équipe sont conservés
+        # pour ne pas casser l'historique ni les totaux déjà vérifiés).
+        # Convention de signe de `reste_du_hier` (négatif) inchangée.
+        if rotation:
+            reste_du_hier_jour = sum(v or 0 for v in reste_du_hier_by_team.values())
+            reste_du_jour_jour = reste_du_jour_fin
+        else:
+            if bp_id in day_start_confirmed_by_bp:
+                reste_du_hier_jour = -day_start_confirmed_by_bp[bp_id][1]
+            else:
+                reste_du_hier_jour = DailyBreadStockSnapshot.reste_du_hier_chained(node, bp, report_date)
+            day_last_snap = (
+                DailyBreadStockSnapshot.objects
+                .filter(node=node, bread_price=bp, date=report_date)
+                .order_by('-updated_at', '-pk').first()
+            )
+            reste_du_jour_jour = day_last_snap.qty_at_close if day_last_snap else None
+        reste_du_hier_jour_fc = _m(Decimal(reste_du_hier_jour or 0) * catalog_price)
+        reste_du_jour_jour_fc = _m(Decimal(reste_du_jour_jour or 0) * catalog_price)
+
         appro_effectue_qty = appro_effectue_by_bp.get(bp_id, 0)
         appro_recu_qty = appro_recu_by_bp.get(bp_id, 0)
         appro_effectue_fc = _m(Decimal(appro_effectue_qty) * catalog_price)
@@ -2553,6 +2617,9 @@ def _build_daily_closure_report(node, report_date=None):
             'reste_du_jour': reste_du_jour_by_team,
             **({'reste_du_jour_fin_journee': reste_du_jour_fin} if rotation else {}),
             'reste_du_hier': reste_du_hier_by_team,
+            # BUG-304 : valeurs du JOUR, sans équipe (quantité, null = pas encore connu).
+            'reste_du_hier_jour': reste_du_hier_jour,
+            'reste_du_jour_jour': reste_du_jour_jour,
             'appro_effectue': {'quantity': appro_effectue_qty, 'fc': str(appro_effectue_fc)},
             'appro_recu':     {'quantity': appro_recu_qty, 'fc': str(appro_recu_fc)},
             # `fc` = montant POSITIF affiché ; `fc_signe` = contribution
@@ -2576,6 +2643,8 @@ def _build_daily_closure_report(node, report_date=None):
         total_commission_fc += commission_fc
         total_mvm_interne_fc += mvm_interne_fc
         total_produced_value_fc += produced_value_fc
+        total_reste_hier_jour_fc += reste_du_hier_jour_fc
+        total_reste_jour_jour_fc += reste_du_jour_jour_fc
         # BUG-177 : NS exclue (pas une commande servie) ; RG incluse via `reg`.
         total_breads_billed += (normal.get('qty') or 0) + (soldee.get('qty') or 0) + reg['qty']
 
@@ -2654,6 +2723,8 @@ def _build_daily_closure_report(node, report_date=None):
             'moyenne_produit_par_sac_fc': str(moyenne_produit_par_sac_fc) if moyenne_produit_par_sac_fc is not None else None,
             'tarif_vente_fc': str(tarif_vente_fc),
             'ecart_production_fc': str(ecart_production_fc),
+            'reste_du_hier_jour_fc': str(_m(total_reste_hier_jour_fc)),
+            'reste_du_jour_jour_fc': str(_m(total_reste_jour_jour_fc)),
             'total_breads_produced': total_breads_produced,
             'total_breads_billed': total_breads_billed,
             'repartition_pct_par_quantite': repartition_pct_par_quantite,

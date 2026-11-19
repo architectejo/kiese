@@ -49,6 +49,16 @@ class ProductionSession(SyncableModel):
         default=200000, verbose_name=_("Valeur du sac utilisée (figée à la déclaration, FC)")
     )
 
+    # BUG-306 (remarque.md 2026-11-19) : fournée déclarée par le seul nombre de
+    # sacs. Tant qu'elle est ouverte (`is_closed=False`) pour l'équipe en
+    # service, chaque livraison de vente incrémente automatiquement ses lignes
+    # DECLARED par catégorie (voir `production.services`). Faux par défaut :
+    # une fournée déclarée avec des quantités de pains (flux historique) n'est
+    # jamais modifiée automatiquement.
+    auto_track = models.BooleanField(
+        default=False, verbose_name=_("Pains incrémentés automatiquement à la livraison des ventes"),
+    )
+
     is_closed = models.BooleanField(default=False, verbose_name=_("Session clôturée"))
     # BUG-093 : horodatage de la clôture (action `close`), et snapshot figé du
     # recoupement automatique (produit/vendu/soldé-déclassé-invendu-gratuit/

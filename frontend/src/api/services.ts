@@ -294,6 +294,8 @@ export interface ProductionSessionLine {
   unit_price?: number;
   quantity: number;
   line_fc?: number;
+  /** DECLARED (production) ou CARRYOVER (reste d'hier confirmé, hors total produit). */
+  source?: 'DECLARED' | 'CARRYOVER' | string;
 }
 
 export interface ProductionSession {
@@ -320,6 +322,15 @@ export interface ProductionSession {
   is_closed?: boolean;
   closed_at?: string | null;
   closure_summary?: ProductionClosureSummary | null;
+  // BUG-306 : fournée « en cours » déclarée par nombre de sacs (lecture seule).
+  auto_track?: boolean;
+  is_in_progress?: boolean;
+  /** Objectif = sacs × valeur du sac (FC). */
+  objective_fc?: number;
+  /** Valeur déjà livrée sur la fournée (FC, prix catalogue). */
+  progress_value_fc?: number;
+  /** Pourcentage décimal sérialisé (« 37.50 »), non plafonné. */
+  progress_pct?: string;
 }
 
 // BUG-051 : réponse de GET /api/production/sessions/reconciliation/
@@ -373,6 +384,10 @@ export interface DailyClosureCategory {
   reste_du_jour: Record<string, number | null>;
   // Rotation : porté par l'équipe en service à minuit (l'autre vaut 0), écart de relève inclus.
   reste_du_hier: Record<string, number | null>;
+  /** BUG-304 : reste d'hier / reste du jour pris pour la JOURNÉE (sans équipe).
+   *  `reste_du_jour_jour` = `null` tant que le reste du jour n'est pas déclaré. */
+  reste_du_hier_jour?: number | null;
+  reste_du_jour_jour?: number | null;
   /** BUG-272, rotation seulement : reste de fin de journée (dernier reste déclaré de la date,
    *  connu quand toutes les sessions sont clôturées ; `null` sinon). Absent hors rotation. */
   reste_du_jour_fin_journee?: number | null;
@@ -406,6 +421,9 @@ export interface DailyClosureTotals {
   ecart_production_fc: string;
   total_breads_produced: number;
   total_breads_billed: number;
+  /** BUG-304 : valeur FC du reste d'hier / du jour (journée) ; `reste_du_jour_jour_fc` null = non déclaré. */
+  reste_du_hier_jour_fc?: string | null;
+  reste_du_jour_jour_fc?: string | null;
   repartition_pct_par_quantite: DailyClosureRepartitionRow[];
   repartition_pct_par_valeur: DailyClosureRepartitionRow[];
 }
@@ -1665,4 +1683,57 @@ export const blockchainApi = {
     runCheck: (nodeId?: string) =>
       apiClient.post('/api/blockchain/snapshots/run_check/', nodeId ? { node: nodeId } : {}),
   },
+};
+
+// ── Messagerie (BUG-307) ─────────────────────────────────────────────────────
+
+export type ChatConversationKind = 'DIRECT' | 'NODE' | 'DIRECTION';
+
+export interface ChatMessage {
+  id: string;
+  conversation: string;
+  sender: string;
+  sender_name: string;
+  is_mine: boolean;
+  body: string;
+  created_at: string;
+}
+
+export interface ChatUser {
+  id: string;
+  name: string;
+  role: string;
+  role_label: string;
+  node: string | null;
+  node_code: string | null;
+}
+
+export interface ChatConversation {
+  id: string;
+  kind: ChatConversationKind;
+  node: string | null;
+  title: string;
+  last_message_at: string | null;
+  last_message: ChatMessage | null;
+  unread_count: number;
+  other_user: ChatUser | null;
+}
+
+export const chatApi = {
+  conversations: () => apiClient.get<ChatConversation[]>('/api/chat/conversations/'),
+  direct: (userId: string) =>
+    apiClient.post<ChatConversation>('/api/chat/conversations/direct/', { user: userId }),
+  nodeThread: () => apiClient.get<ChatConversation>('/api/chat/conversations/node/'),
+  directionThread: () => apiClient.get<ChatConversation>('/api/chat/conversations/direction/'),
+  messages: (conversationId: string, params?: Record<string, string>) =>
+    getPage<ChatMessage>(`/api/chat/conversations/${conversationId}/messages/`, params),
+  send: (conversationId: string, body: string) =>
+    apiClient.post<ChatMessage>(`/api/chat/conversations/${conversationId}/messages/`, { body }),
+  markRead: (conversationId: string) =>
+    apiClient.post<{ id: string; unread_count: number }>(`/api/chat/conversations/${conversationId}/read/`),
+  unreadCount: () => apiClient.get<{ unread_count: number }>('/api/chat/unread-count/'),
+  users: (search?: string) =>
+    apiClient.get<ChatUser[] | PaginatedResponse<ChatUser>>('/api/chat/users/', {
+      params: search ? { search } : undefined,
+    }),
 };

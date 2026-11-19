@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     'finance.apps.FinanceConfig',
     'blockchain.apps.BlockchainConfig',
     'sync.apps.SyncConfig',
+    'chat.apps.ChatConfig',
 ]
 
 MIDDLEWARE = [

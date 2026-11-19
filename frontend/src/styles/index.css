@@ -638,3 +638,22 @@ select.form-input {
   .vitrine-title { font-size: 1.7rem !important; }
   .vitrine-actions .btn span { display: none; }
 }
+
+/* ── Messagerie (BUG-307) ── */
+.chat-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 120;
+  width: 420px; max-width: 100vw; display: flex; flex-direction: column;
+  background: hsl(var(--bg-secondary)); border-left: 1px solid hsl(var(--border-color));
+  box-shadow: var(--glass-shadow); outline: none;
+}
+.chat-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid hsl(var(--border-color)); }
+.chat-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.chat-composer { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-top: 1px solid hsl(var(--border-color)); }
+.chat-icon-btn { background: none; border: none; cursor: pointer; color: hsl(var(--text-secondary)); font-size: 1.2rem; min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+.chat-row { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; padding: 12px; min-height: 56px; background: none; border: none; border-bottom: 1px solid hsl(var(--border-color)); color: hsl(var(--text-primary)); cursor: pointer; }
+.chat-row:hover, .chat-row:focus-visible { background: hsl(var(--bg-tertiary)); }
+.chat-badge { background: hsl(var(--color-danger)); color: #fff; font-size: 0.7rem; font-weight: 800; border-radius: 10px; min-width: 20px; height: 20px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.chat-empty { padding: 32px 16px; text-align: center; color: hsl(var(--text-muted)); font-size: 0.85rem; }
+.chat-error { margin: 12px; padding: 10px 12px; border-radius: var(--radius-md); font-size: 0.85rem; font-weight: 600; background: hsl(var(--color-danger) / 0.12); color: hsl(var(--color-danger)); border: 1px solid hsl(var(--color-danger) / 0.3); }
+@media (max-width: 768px) { .chat-panel { width: 100vw; border-left: none; } }
+@media (min-width: 1600px) { .chat-panel { width: 520px; } .chat-row { font-size: 1.05rem; } }
