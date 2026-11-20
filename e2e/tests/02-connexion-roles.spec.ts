@@ -75,7 +75,7 @@ for (const cas of CAS) {
 
 test('un identifiant/mot de passe invalide affiche une erreur et ne connecte pas', async ({ page }) => {
   await page.goto('/login');
-  await page.getByPlaceholder('Ex: pierre').fill('demo_facturier_k1_e2e');
+  await page.getByPlaceholder('Ex: pierre').fill('zz_demo_facturier_k1');
   await page.getByPlaceholder('••••••••').fill('mauvais-mot-de-passe');
   await page.getByRole('button', { name: /se connecter/i }).click();
   await expect(page).toHaveURL(/\/login/);

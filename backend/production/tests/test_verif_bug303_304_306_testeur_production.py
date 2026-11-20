@@ -13,7 +13,7 @@ from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from core.testing import make_node, make_user, make_bread_price
-from core.workday import work_date_for
+from core.workday import business_date, work_date_for
 from production.models import (
     BreadDisposal, BreadStock, DailyBreadStockSnapshot, DailyTeamAssignment,
     ProductionSession, ProductionSessionLine,
@@ -338,7 +338,11 @@ class V306IncrementTests(_Base):
     def test_rotation_targets_service_team_only(self):
         self.node.team_rotation_enabled = True
         self.node.save()
-        DailyTeamAssignment.objects.create(node=self.node, work_date=self.today, team='B')
+        # La désignation est rattachée à la PÉRIODE de service (business_date,
+        # avant l'heure de relève = veille), pas à la date calendaire : sinon le
+        # test dépend de l'heure d'exécution (échec entre 00:00 et la relève).
+        DailyTeamAssignment.objects.create(
+            node=self.node, work_date=business_date(self.node), team='B')
         sa = ProductionSession.objects.create(node=self.node, team='A', date=self.today,
                                               flour_sacks_used=Decimal('1'), auto_track=True)
         sb = ProductionSession.objects.create(node=self.node, team='B', date=self.today,
@@ -346,6 +350,31 @@ class V306IncrementTests(_Base):
         self._sell([(self.bp5, 6)])
         self.assertFalse(sa.lines.exists())
         self.assertEqual(sb.lines.get(bread_price=self.bp5).quantity, 6)
+
+    def test_rotation_targets_service_team_at_fixed_instants(self):
+        """Robustesse horaire : même résultat avant/après la relève et à deux dates."""
+        from unittest import mock
+        from django.utils import timezone
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo('Africa/Kinshasa')
+        self.node.team_rotation_enabled = True
+        self.node.save()
+        for i, (y, m, d, h) in enumerate([(2026, 11, 20, 2), (2026, 11, 20, 14), (2026, 3, 5, 2), (2026, 3, 5, 23)]):
+            fake = timezone.datetime(y, m, d, h, 30, tzinfo=tz)
+            with mock.patch('django.utils.timezone.now', return_value=fake):
+                today = work_date_for(self.node)
+                DailyTeamAssignment.objects.filter(node=self.node).delete()
+                DailyTeamAssignment.objects.create(
+                    node=self.node, work_date=business_date(self.node), team='B')
+                sa = ProductionSession.objects.create(
+                    node=self.node, team='A', date=today, flour_sacks_used=Decimal('1'), auto_track=True)
+                sb = ProductionSession.objects.create(
+                    node=self.node, team='B', date=today, flour_sacks_used=Decimal('1'), auto_track=True)
+                self._sell([(self.bp5, 6)])
+                self.assertFalse(sa.lines.exists(), (y, m, d, h))
+                self.assertEqual(sb.lines.get(bread_price=self.bp5).quantity, 6, (y, m, d, h))
+                sa.delete()
+                sb.delete()
 
     def test_backdated_delivery_goes_to_that_days_batch_or_none(self):
         # fournée du jour ouverte ; livraison antidatée à hier : ne doit pas incrémenter la fournée du jour

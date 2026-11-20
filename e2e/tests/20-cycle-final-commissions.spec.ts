@@ -33,7 +33,7 @@ test('Commissions direction : Net negatif sans Regler, message 400', async ({ pa
   await login(page, 'zz_direction');
   await later(page);
   await ouvrirCommissionsK4(page, true);
-  await page.getByPlaceholder('Rechercher un client...').fill('K4-001');
+  await page.getByPlaceholder('Rechercher un client...').fill('K4-09');
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${CAP}/cf-${info.project.name}-commissions-direction.png`, fullPage: true });
   expect(await overflow(page)).toBeLessThanOrEqual(1);

@@ -1,5 +1,17 @@
 import { test, expect, Page, APIRequestContext } from '@playwright/test';
-import { CAP, API, login, later, overflow, apiToken } from '../fixtures/cycle';
+import { CAP, API, login, later, overflow, apiToken, idx } from '../fixtures/cycle';
+
+/**
+ * Une seule cloture de caisse par boulangerie et par jour : une boulangerie (et ses comptes zz_*) par largeur
+ * d'ecran. pos -> K5, tablette -> B1, bureau (et tv) -> K4. Sans changer ce qui est verifie.
+ */
+const CFG = [
+  { node: 'K5', ger: 'zz_demo_gerant_k5', facA: 'zz_demo_facturier_k5a', facB: 'zz_demo_facturier_k5b', cliA: 'K5-0950', cliB: 'K5-0951' },
+  { node: 'B1', ger: 'zz_demo_gerant_b1', facA: 'zz_demo_facturier_b1', facB: 'zz_demo_facturier_b1b', cliA: 'B1-0950', cliB: 'B1-0951' },
+  { node: 'K4', ger: 'zz_clients_gerant', facA: 'zz_treso_facturier_a', facB: 'zz_clients_facturier', cliA: 'K4-0950', cliB: 'K4-0951' },
+  { node: 'K4', ger: 'zz_clients_gerant', facA: 'zz_treso_facturier_a', facB: 'zz_clients_facturier', cliA: 'K4-0950', cliB: 'K4-0951' },
+];
+const cfg = (info: { project: { name: string } }) => CFG[idx(info.project.name)];
 
 /**
  * Cycle final (testeur-e2e, 2026-11-14) - a lancer sur UNE seule taille d'ecran (bureau) : une seule
@@ -31,20 +43,22 @@ async function allerTreso(page: Page) {
   await later(page);
 }
 
-async function filtrerK4(page: Page) {
-  const f = page.locator('select').filter({ has: page.locator('option', { hasText: /K4/ }) }).first();
-  if (await f.count()) await f.selectOption({ label: (await f.locator('option', { hasText: /K4/ }).first().innerText()).trim() });
+async function filtrerK4(page: Page, node = 'K4') {
+  const re = new RegExp(node);
+  const f = page.locator('select').filter({ has: page.locator('option', { hasText: re }) }).first();
+  if (await f.count()) await f.selectOption({ label: (await f.locator('option', { hasText: re }).first().innerText()).trim() });
 }
 
 test('Gerant K4 : cloture avec billetage et ecart', async ({ page, request }, info) => {
+  const C = cfg(info);
   test.setTimeout(480_000);
   // 10 000 FC cash integral + 5 000 FC verses sur 20 000 : cash du jour = 15 000 FC
   if (!process.env.E2E_SKIP_SETUP) { // rejeu : les rapports du jour existent deja (livraison bloquee apres rapport)
-  await creerVenteCash(request, 'zz_treso_facturier_a', 'K4-0050', 20, 10_000); // equipe A
-  await creerVenteCash(request, 'zz_clients_facturier', 'K4-0051', 40, 5_000); // equipe B
+  await creerVenteCash(request, C.facA, C.cliA, 20, 10_000); // equipe A
+  await creerVenteCash(request, C.facB, C.cliB, 40, 5_000); // equipe B
   }
 
-  await login(page, 'zz_clients_gerant');
+  await login(page, C.ger);
   await allerTreso(page);
   await page.getByRole('button', { name: /générer rapport du jour/i }).click();
   await expect(page.getByText(/TOTAL CASH DU JOUR/)).toBeVisible();
@@ -81,10 +95,11 @@ test('Gerant K4 : cloture avec billetage et ecart', async ({ page, request }, in
 });
 
 test('BUG-277 : transfert en litige -> confirmation de cloture bloquee, puis resolue et inscrite', async ({ page }, info) => {
+  const C = cfg(info);
   test.setTimeout(900_000);
   if (!process.env.E2E_SKIP_TRANSFER_SETUP) {
   // 1) K4 demande 2 pains de 200 FC a K3
-  await login(page, 'zz_clients_gerant');
+  await login(page, C.ger);
   await page.goto('/production', { waitUntil: 'domcontentloaded' });
   await later(page);
   await page.getByRole('button', { name: /transferts/i }).first().click();
@@ -111,7 +126,7 @@ test('BUG-277 : transfert en litige -> confirmation de cloture bloquee, puis res
   }
 
   // 3) K4 recoit 1 sur 2 -> litige
-  await login(page, 'zz_clients_gerant');
+  await login(page, C.ger);
   await page.goto('/production', { waitUntil: 'domcontentloaded' });
   await later(page);
   await page.getByRole('button', { name: /transferts/i }).first().click();
@@ -125,7 +140,7 @@ test('BUG-277 : transfert en litige -> confirmation de cloture bloquee, puis res
   // 4) direction : confirmation de la cloture K4 refusee
   await login(page, 'zz_direction');
   await allerTreso(page);
-  await filtrerK4(page);
+  await filtrerK4(page, C.node);
   const dialogues: string[] = [];
   page.on('dialog', async d => { dialogues.push(d.message()); await d.dismiss(); });
   await page.getByText('Cliquez pour confirmer / infirmer').first().click();
@@ -149,7 +164,7 @@ test('BUG-277 : transfert en litige -> confirmation de cloture bloquee, puis res
   // 6) direction : confirmation OK puis inscription au livre de caisse
   await login(page, 'zz_direction');
   await allerTreso(page);
-  await filtrerK4(page);
+  await filtrerK4(page, C.node);
   await page.getByText('Cliquez pour confirmer / infirmer').first().click();
   await page.getByRole('button', { name: /^confirmer$/i }).first().click();
   await page.getByRole('button', { name: /confirmer la clôture/i }).click();
@@ -160,11 +175,12 @@ test('BUG-277 : transfert en litige -> confirmation de cloture bloquee, puis res
 });
 
 test('Livre de caisse : solde progressif et verification d\'integrite verte (direction)', async ({ page }, info) => {
+  const C = cfg(info);
   test.setTimeout(240_000);
   await login(page, 'zz_direction');
   await allerTreso(page);
-  await filtrerK4(page);
-  await expect(page.getByText(/Versement Journalier K4/).first()).toBeVisible({ timeout: 60_000 });
+  await filtrerK4(page, C.node);
+  await expect(page.getByText(new RegExp(`Versement Journalier ${C.node}`)).first()).toBeVisible({ timeout: 60_000 });
   const dialogues: string[] = [];
   page.on('dialog', async d => { dialogues.push(d.message()); await d.dismiss(); });
   await page.getByRole('button', { name: /vérifier intégrité/i }).click();

@@ -223,7 +223,9 @@ class CaisseSocialeTests(Base):
         self.assertEqual(r.status_code, 400)
         d = api.post('/api/clients/distributions/', {'node': self.k4.pk, 'year': 2097, 'tarif': '700'}).data
         self.assertEqual(api.patch(f"/api/clients/distributions/{d['id']}/", {'tarif': '-5'}).status_code, 400)
-        api.patch(f"/api/clients/distributions/{d['id']}/", {'is_closed': True})
+        # BUG-316 : la cloture est reservee a la direction.
+        direction = _api(make_user('DIRECTION', node=None, team='', username='b260_dir'))
+        direction.patch(f"/api/clients/distributions/{d['id']}/", {'is_closed': True})
         r = api.patch(f"/api/clients/distributions/{d['id']}/", {'is_closed': False})
         self.assertTrue(SocialDistribution.objects.get(pk=d['id']).is_closed, 'une distribution clôturée ne doit pas se rouvrir par PATCH')
 

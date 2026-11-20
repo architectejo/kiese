@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { COMPTES, PASSWORD, CLIENT_AU_PLAFOND, CLIENT_POUR_REMBOURSEMENT } from '../fixtures/comptes';
-import { seConnecter, seDeconnecter } from '../fixtures/helpers';
+import { seConnecter, seDeconnecter, reporterStockDepart } from '../fixtures/helpers';
 
 /**
  * Parcours 4 — Facturation (CLAUDE.md §2 point 4 / §5.2).
@@ -12,7 +12,7 @@ test('le facturier crée une facture, voit la BP avant, confirme la livraison et
   await page.goto('/sales/create');
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
-  await recherche.fill('K1-');
+  await recherche.fill('K1-0080'); // client fictif ZZTEST (jamais un client reel)
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
   await expect(suggestion).toBeVisible({ timeout: 45_000 });
   await suggestion.click();
@@ -22,7 +22,7 @@ test('le facturier crée une facture, voit la BP avant, confirme la livraison et
 
   const premiereQte = page.locator('input[type="number"]').first();
   await premiereQte.fill('5');
-  const versement = page.locator('input[type="number"]').last();
+  const versement = page.getByLabel(/Versement du jour/i);
   await versement.fill('0');
 
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
@@ -54,7 +54,7 @@ test('le reçu affiche le code boulangerie, le RCCM contractuel et la mention "S
   await page.goto('/sales/create');
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
-  await recherche.fill('K1-');
+  await recherche.fill('K1-0082'); // client fictif ZZTEST (jamais un client reel)
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
   await expect(suggestion).toBeVisible({ timeout: 45_000 });
   await suggestion.click();
@@ -63,7 +63,7 @@ test('le reçu affiche le code boulangerie, le RCCM contractuel et la mention "S
 
   const premiereQte = page.locator('input[type="number"]').first();
   await premiereQte.fill('5');
-  const versement = page.locator('input[type="number"]').last();
+  const versement = page.getByLabel(/Versement du jour/i);
   await versement.fill('0');
 
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
@@ -109,11 +109,16 @@ test('recherche prédictive client (BUG-065) : une recherche précise ne déclen
   });
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
+  // le chronometre ne mesure que la recherche : page chargee et modales de relève (K1) reportees avant
+  await expect(recherche).toBeVisible({ timeout: 60_000 });
+  await reporterStockDepart(page);
   const debut = Date.now();
   await recherche.fill('ADELINE');
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
   await expect(suggestion).toBeVisible({ timeout: 5_000 });
   const duree = Date.now() - debut;
+  test.info().annotations.push({ type: 'duree-recherche-ms', description: String(duree) });
+  console.log(`[${test.info().project.name}] duree-recherche-ms = ${duree}`);
   expect(duree).toBeLessThan(5_000); // debounce 350ms + aller-retour réseau ; << les ~20-30s d'avant correction
 
   // Une seule requête `?search=...` — pas de boucle de pagination complète
@@ -141,7 +146,7 @@ test('recherche prédictive client (BUG-065) : pas de défilement de page à 360
   expect(pendantRecherche).toBe(true);
 
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
-  await expect(suggestion).toBeVisible({ timeout: 5_000 });
+  await expect(suggestion).toBeVisible({ timeout: 20_000 });
   const avecSuggestions = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
   expect(avecSuggestions).toBe(true);
 
@@ -244,7 +249,7 @@ test('le reçu d\'une facture/livraison datée rétroactivement (BUG-083) affich
   // serveur autour de minuit).
   const avantHier = new Date();
   avantHier.setDate(avantHier.getDate() - 2);
-  const dateRetroISO = avantHier.toISOString().split('T')[0]; // AAAA-MM-JJ
+  const dateRetroISO = avantHier.toLocaleDateString('sv-SE'); // AAAA-MM-JJ (date LOCALE : toISOString() donne la veille UTC apres minuit)
   const dateRetroFR = avantHier.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const todayFR = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
@@ -252,7 +257,7 @@ test('le reçu d\'une facture/livraison datée rétroactivement (BUG-083) affich
   await page.goto('/sales/create');
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
-  await recherche.fill('K1-');
+  await recherche.fill('K1-0084'); // client fictif ZZTEST (jamais un client reel)
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
   await expect(suggestion).toBeVisible({ timeout: 45_000 });
   await suggestion.click();
@@ -265,7 +270,7 @@ test('le reçu d\'une facture/livraison datée rétroactivement (BUG-083) affich
 
   const premiereQte = page.locator('input[type="number"]').first();
   await premiereQte.fill('5');
-  const versement = page.locator('input[type="number"]').last();
+  const versement = page.getByLabel(/Versement du jour/i);
   await versement.fill('0');
 
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();

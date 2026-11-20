@@ -139,10 +139,25 @@ test('(305) Detail Fournee : une seule ligne par categorie, total inchange', asy
   expect(await lignes.count()).toBe(2); // 500 FC et 300 FC
   const l500 = (await lignes.filter({ hasText: 'Pain 500 FC' }).innerText()).replace(/\s+/g, ' ');
   test.info().annotations.push({ type: 'ligne-500', description: l500 });
-  expect(nb(l500)).toContain('15'); // 10 + 5
+  // BUG-310 : le reste d'hier (CARRYOVER) n'est plus additionne au tableau : 10 declares, pas 15
+  expect(nb(l500)).toContain('10');
+  expect(nb(l500)).not.toMatch(/(^|[^0-9])15([^0-9]|$)/);
   const pied = nb(await modal.locator('tfoot').innerText());
   test.info().annotations.push({ type: 'pied', description: `${pied} (API total_fc_produced=${total})` });
   expect(pied).toContain(String(total));
+  // somme des lignes du tableau = total du pied (BUG-310)
+  let somme = 0; let pains = 0;
+  for (const tr of await lignes.all()) {
+    const tds = await tr.locator('td').allInnerTexts();
+    pains += Number(nb(tds[1])); somme += Number(nb(tds[3]).replace(/FC/, ''));
+  }
+  expect(somme, 'somme des lignes (FC) = total du pied').toBe(total);
+  expect(pains, 'somme des quantites = pains produits').toBe(14);
+  expect(total).toBe(6200);
+  // le reste d'hier est liste a part, hors tableau
+  await expect(modal.getByText(/Reste d.hier confirmé \(non compté dans le total\)/)).toBeVisible();
+  expect(nb(await modal.getByText(/Reste d.hier confirmé/).innerText())).toMatch(/5×/);
+  await expect(modal.locator('table').getByText(/Reste d.hier/)).toHaveCount(0);
   await sansDebordement(page, info, 'detail fournee');
   await page.screenshot({ path: `${CAP}/e307-${info.project.name}-305-detail.png`, fullPage: true });
 });
@@ -441,9 +456,11 @@ test('(306) fournee en cours (K1, rotation, equipe B) : objectif, progression ro
     cumul += q;
     await livrerEtVerifier(page, request, tf, cl.id, panneau, q, t, re, `${CAP}/e307-bur-306-${t}.png`, f === 0.5);
   }
-  await expect(panneau.getByText(`${cumul.toLocaleString('fr-FR')} pains`)).toBeVisible();
-  await sansDebordement(page, info, 'fournee a 100 % (9 sacs)');
   const sF = (await etatK1(request, tg))!;
+  // pains de 1000 FC affiches = lignes serveur de la fournee (d'autres livraisons K1 de la meme periode, ex. pains de 200 FC, n'y comptent pas)
+  const q1000 = (sF.lines as Rec[]).filter(l => l.bread_price === P.p1000).reduce((a, l) => a + Number(l.quantity), 0);
+  await expect(panneau.getByText(`${q1000.toLocaleString('fr-FR')} pains`)).toBeVisible();
+  await sansDebordement(page, info, 'fournee a 100 % (9 sacs)');
   expect(Number(sF.flour_sacks_used)).toBe(sacsAvant);
   expect(Number(sF.objective_fc ?? sF.theoretical_yield)).toBe(obj);
 });
@@ -482,12 +499,15 @@ test('(303) cloture : saisie negative impossible, refus serveur en francais, clo
     await route.continue({ postData: JSON.stringify({ remaining: [{ bread_price: P.p1000, quantity: -3 }] }) });
   });
   await m.getByRole('button', { name: 'Confirmer la clôture' }).click();
-  const alerte = m.getByText(/négati/i).first();
+  const alerte = m.getByText(/Le reste du jour ne peut pas être négatif/i); // (le texte d'aide « Le reste ne peut pas être négatif » est un autre element)
   await expect(alerte).toBeVisible({ timeout: 15_000 });
   const msg = (await alerte.innerText()).trim();
   test.info().annotations.push({ type: 'message-refus', description: msg });
   expect(msg).toMatch(/négati/i);
   expect(msg).not.toMatch(/must|cannot|invalid|negative/i);
+  // BUG-310 : aucun nom de champ technique dans le message
+  expect(msg, 'nom de champ technique visible').not.toMatch(/remaining|«|»/i);
+  expect(msg).toMatch(/Le reste du jour ne peut pas être négatif/i);
   expect(corps).toContain('remaining');
   await page.unroute('**/api/production/sessions/*/close/');
   await expect(m).toBeVisible(); // la fournee n'est pas cloturee
@@ -582,7 +602,7 @@ test('(307a) icone + badge, conversation 1-a-1 entre deux comptes, plein ecran 3
     // le badge de B retombe a sa valeur d'avant (les messages de cette conversation sont marques lus ; les autres conversations gardent leurs non-lus)
     await expect.poll(async () => (await (await request.get(`${API}/api/chat/unread-count/`, { headers: H(tb) })).json()).unread_count, { timeout: 30_000 }).toBe(avant);
     const nomApres = avant > 0 ? `Messagerie, ${avant} message(s) non lu(s)` : 'Messagerie';
-    await expect(B.page.getByRole('button', { name: nomApres })).toBeVisible({ timeout: 30_000 });
+    await expect(B.page.getByRole('button', { name: nomApres, exact: true })).toBeVisible({ timeout: 30_000 });
     // A voit la reponse (sondage)
     await expect(A.page.getByRole('log', { name: 'Messages' })).toContainText(m2, { timeout: 30_000 });
     // Echap ferme, bouton retour OK
@@ -725,3 +745,37 @@ test('(307d) limites : 2000/2001 caracteres, texte HTML litteral, 429 en francai
     await U.page.screenshot({ path: `${CAP}/e307-${info.project.name}-307d-429.png` });
   } finally { await U.ctx.close(); await R.ctx.close(); }
 });
+
+/* (place en dernier : le mode serie interrompt les tests suivants en cas d'echec) */
+/* BUG-311 : la valeur du sac n'est jamais affichee avant le chargement de la config */
+test('(311) valeur du sac : ni « 1 sac = » ni 200 000 FC avant le chargement, puis la valeur de la boulangerie', async ({ page, request }, info) => {
+  test.setTimeout(180_000);
+  const tg = await apiToken(request, 'zz_e307_ger6');
+  const noeud = liste(await (await request.get(`${API}/api/core/nodes/`, { headers: H(tg) })).json()).find(n => n.code === 'K6')!;
+  const valeurSac = Number(noeud.sac_value_fc);
+  expect(valeurSac, 'precondition : la valeur du sac de K6 differe de 200 000').not.toBe(200000);
+  await login(page, 'zz_e307_ger6');
+  await later(page);
+  await annonces(page);
+  let libere!: () => void;
+  const porte = new Promise<void>(r => { libere = r; });
+  // la valeur du sac de Production vient de la liste des boulangeries + config (Promise.all) : retenir /nodes/ suffit
+  // (retenir /config/ bloque aussi l'ecran de connexion au serveur central du gabarit)
+  await page.route('**/api/core/nodes/**', async route => { await porte; await route.continue(); });
+  await page.goto('/production', { waitUntil: 'domcontentloaded' });
+  const panneau = page.getByTestId('batch-in-progress-panel');
+  await expect(panneau).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(2_500); // config et noeuds retenus : le panneau est rendu sans la valeur
+  const avant = nb(await page.locator('body').innerText());
+  test.info().annotations.push({ type: 'avant-chargement', description: /1sac=/.test(avant) ? 'valeur affichee' : 'aucune valeur du sac affichee' });
+  expect(avant, 'valeur du sac affichee avant chargement').not.toMatch(/1sac=/);
+  expect(avant, '200 000 FC affiche avant chargement').not.toContain('200000FC');
+  expect(avant).not.toMatch(/Montantàatteindre/);
+  await page.screenshot({ path: `${CAP}/e307-${info.project.name}-311-avant.png` });
+  libere();
+  await expect.poll(async () => nb(await panneau.innerText()), { timeout: 20_000 }).toContain(nb(`1 sac = ${valeurSac.toLocaleString('fr-FR')} FC`));
+  expect(nb(await page.locator('body').innerText())).not.toContain('1sac=200000FC');
+  await sansDebordement(page, info, 'valeur du sac');
+  await page.screenshot({ path: `${CAP}/e307-${info.project.name}-311-apres.png` });
+});
+

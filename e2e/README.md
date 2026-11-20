@@ -1,5 +1,11 @@
 # E2E — ETS. KIESE (Playwright)
 
+> Mise a jour 2026-11-20 : les comptes de demonstration sont desormais `zz_demo_*` (mot de passe = identifiant) et
+> les donnees de test sont creees par les scripts de `fixtures/seed/` (voir `fixtures/seed/LISEZMOI.txt`).
+> Plusieurs parcours sont limites a une execution par jour et par boulangerie (cloture, fournee, stock de depart) :
+> la boulangerie utilisee depend de la largeur d'ecran (voir les tables en tete de 05, 10, 19, 21).
+
+
 Parcours Playwright contre le serveur de dev réel (`backend/db.sqlite3` partagé
 avec les autres agents de la session — voir `docs/qa/PLAN_2026-10-22.md` §0.1).
 

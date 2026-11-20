@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 // Navigation « domcontentloaded » : l'évènement « load » de la page n'arrive pas en 15 s (ressources externes ?), voir rapport.
 async function seConnecter(page: import('@playwright/test').Page, username: string, password: string) {
+  // modale « Stock de départ » (K1, rotation) : reportée automatiquement quand elle apparaît (y compris tardivement)
+  await page.addLocatorHandler(page.getByRole('button', { name: /plus tard/i }), async b => { await b.click(); });
   await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 90_000 });
   await page.getByPlaceholder('Ex: pierre').fill(username, { timeout: 60_000 });
   await page.getByPlaceholder('••••••••').fill(password);
@@ -15,7 +17,7 @@ async function seConnecter(page: import('@playwright/test').Page, username: stri
  * Lancer : npx playwright test tests/12-ventes-vague1-db.spec.ts --project=pos --project=bureau
  */
 const FACTURIER = 'zz_ventes_facturier';
-const PWD = 'zzVentes#2026';
+const PWD = FACTURIER; // mot de passe = identifiant (comptes zz_*)
 
 async function choisirClient(page: import('@playwright/test').Page, code: string) {
   // Modale « Stock de départ du jour » (rotation) : la reporter, sans rien valider sur K1.
@@ -44,7 +46,7 @@ test('facturer, livrer, reçu complet (équipe, BP avant/après, en-tête légal
   await expect(page.getByText(/BP\s*:/)).toBeVisible();
   await sansDebordementHorizontal(page);
   await page.locator('input[type="number"]').first().fill('5');
-  await page.locator('input[type="number"]').last().fill('0');
+  await page.getByLabel(/Versement du jour/i).fill('0');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.locator('text=/BP avant/').first()).toBeVisible({ timeout: 15_000 });
   await sansDebordementHorizontal(page);
@@ -70,7 +72,7 @@ test('refus (déficit net du mois) : message clair, aucune facture créée', asy
   await page.goto('/sales/create', { waitUntil: 'domcontentloaded', timeout: 90_000 });
   await choisirClient(page, 'K1-0085'); // ZZTEST Ventes 8 : BP 20 000 (< plafond) mais déficit net du mois 75 000 >= 50 000
   await page.locator('input[type="number"]').first().fill('1');
-  await page.locator('input[type="number"]').last().fill('0');
+  await page.getByLabel(/Versement du jour/i).fill('0');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.getByText(/(d[ée]ficit net du mois|plafond de cr[ée]dit)/i).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: `../docs/qa/captures/ventes-vague1-plafond-${test.info().project.name}.png`, fullPage: true });

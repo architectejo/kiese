@@ -1,5 +1,7 @@
+from decimal import Decimal
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
+from core.mixins import NodeImmutableForNonHQMixin
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -418,7 +420,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         ])
 
 
-class SocialContributionViewSet(viewsets.ModelViewSet):
+class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     serializer_class = SocialContributionSerializer
     permission_classes = [IsGerant]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
@@ -489,7 +491,7 @@ class SocialContributionViewSet(viewsets.ModelViewSet):
         return Response({'created': created, 'skipped': skipped})
 
 
-class SocialDistributionViewSet(viewsets.ModelViewSet):
+class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     serializer_class = SocialDistributionSerializer
     permission_classes = [IsGerant]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
@@ -504,17 +506,43 @@ class SocialDistributionViewSet(viewsets.ModelViewSet):
             qs = qs.filter(node=user.node)
         return qs
 
+    @staticmethod
+    def _can_set_tarif_and_close(user):
+        # BUG-316 : TARIF fixé par la direction (adaptes.md [4.2]) ; la clôture,
+        # irréversible, lui est réservée aussi. COMPTABLE et gérants exclus.
+        return user.is_superuser or user.role in ('ADMIN', 'DIRECTION')
+
+    def _check_direction_fields(self, serializer, current_tarif, current_closed):
+        if self._can_set_tarif_and_close(self.request.user):
+            return
+        data = serializer.validated_data
+        if ('tarif' in data and data['tarif'] != current_tarif) or            ('is_closed' in data and data['is_closed'] != current_closed):
+            raise PermissionDenied(
+                "Le tarif et la clôture d'une distribution sont réservés à la direction.")
+
     def perform_create(self, serializer):
         user = self.request.user
+        extra = {}
+        if not self._can_set_tarif_and_close(user):
+            # BUG-316 : à la création, tarif et is_closed envoyés par un non-direction
+            # sont ignorés (valeurs par défaut ; même politique que `node`, BUG-313).
+            extra = {'tarif': Decimal(str(SocialDistribution._meta.get_field('tarif').get_default())),
+                     'is_closed': False}
         if not user.can_access_all_nodes:
             # BUG-022 (écriture) : même motif que ClientViewSet (BUG-025) —
             # ne jamais lire `node` dans le payload pour un non-HQ.
             node = user.node
         else:
             node = serializer.validated_data.get('node') or user.node
-        serializer.save(node=node)
+        serializer.save(node=node, **extra)
 
     def perform_update(self, serializer):
+        # BUG-313 : l'année d'une distribution clôturée est figée.
+        instance = serializer.instance
+        self._check_direction_fields(serializer, instance.tarif, instance.is_closed)
+        new_year = serializer.validated_data.get('year')
+        if instance.is_closed and new_year is not None and new_year != instance.year:
+            raise ValidationError({'detail': "Distribution clôturée : l'année ne peut plus être modifiée."})
         distribution = serializer.save()
         if not distribution.is_closed:
             # BUG-295 : REMISE = INDICE × TARIF + MÉRITE ; un nouveau tarif

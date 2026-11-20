@@ -10,6 +10,8 @@ const FACTURIER = 'zz_ventes_facturier';
 const PWD = 'zz_ventes_facturier';
 
 async function seConnecter(page: Page) {
+  // modale « Stock de départ » (K1, rotation) : reportée automatiquement quand elle apparaît (y compris tardivement)
+  await page.addLocatorHandler(page.getByRole('button', { name: /plus tard/i }), async b => { await b.click(); });
   await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await page.getByPlaceholder('Ex: pierre').fill(FACTURIER, { timeout: 60_000 });
   await page.getByPlaceholder('••••••••').fill(PWD);
@@ -39,13 +41,13 @@ test('BUG-229/230 : client à risque proposé, refus plafond affiché, puis règ
   await expect(page.getByText(/Client à risque — BP/)).toBeVisible();
   await sansDebordement(page);
   await page.locator('input[type="number"]').first().fill('1');
-  await page.locator('input[type="number"]').last().fill('0');
+  await page.getByLabel(/Versement du jour/i).fill('0');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.getByText(/plafond de cr[ée]dit atteint/i).first()).toBeVisible({ timeout: 120_000 });
   await page.screenshot({ path: `../docs/qa/captures/ventes-vague2-refus-${test.info().project.name}.png`, fullPage: true });
   await sansDebordement(page);
   // règlement intégral (1 pain de la 1re catégorie = 200 FC) : doit être accepté
-  await page.locator('input[type="number"]').last().fill('200');
+  await page.getByLabel(/Versement du jour/i).fill('200');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.locator('text=/BP avant/').first()).toBeVisible({ timeout: 120_000 });
   await sansDebordement(page);
@@ -73,8 +75,8 @@ test('BUG-230 : vente occasionnelle forcée au comptant (versement = commande), 
   await page.getByText('Vente occasionnelle (sans client enregistré)').click();
   await expect(page.locator('input[type="number"]').first()).toBeEnabled({ timeout: 240_000 });
   await page.locator('input[type="number"]').first().fill('2');
-  await expect(page.locator('input[type="number"]').last()).toBeDisabled();
-  await expect(page.locator('input[type="number"]').last()).toHaveValue('400');
+  await expect(page.getByLabel(/Versement du jour/i)).toBeDisabled();
+  await expect(page.getByLabel(/Versement du jour/i)).toHaveValue('400');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.locator('text=/BP avant|CLIENT DIVERS|Imprimer le reçu/i').first()).toBeVisible({ timeout: 120_000 });
   await sansDebordement(page);

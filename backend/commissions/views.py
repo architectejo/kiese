@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db.models import F, Q, Sum
+from core.mixins import NodeImmutableForNonHQMixin
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -15,7 +16,7 @@ from .models import CommissionPeriod, ClientCommission
 from .serializers import CommissionPeriodSerializer, ClientCommissionSerializer
 
 
-class CommissionPeriodViewSet(viewsets.ModelViewSet):
+class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = CommissionPeriod.objects.select_related('node').all()
     serializer_class = CommissionPeriodSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -198,7 +199,7 @@ class CommissionPeriodViewSet(viewsets.ModelViewSet):
         return Response(CommissionPeriodSerializer(period).data)
 
 
-class ClientCommissionViewSet(viewsets.ModelViewSet):
+class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ClientCommission.objects.select_related('period__node', 'client').all()
     serializer_class = ClientCommissionSerializer
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]

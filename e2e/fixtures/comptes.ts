@@ -13,17 +13,17 @@
  * `docs/qa/rapports/testeur-e2e-2026-10-22.md` pour le script complet.
  */
 
-export const PASSWORD = 'DemoE2E2026!';
+export const PASSWORD = ''; // comptes zz_* : mot de passe = identifiant (voir helpers.seConnecter)
 
 export const COMPTES = {
-  admin: { username: 'demo_admin_e2e', password: PASSWORD, role: 'ADMIN' },
-  direction: { username: 'demo_direction_e2e', password: PASSWORD, role: 'DIRECTION' },
-  comptable: { username: 'demo_comptable_e2e', password: PASSWORD, role: 'COMPTABLE' },
-  gerantK1: { username: 'demo_gerant_k1_e2e', password: PASSWORD, role: 'GERANT', node: 'K1' },
-  gerantK2: { username: 'demo_gerant_k2_e2e', password: PASSWORD, role: 'GERANT', node: 'K2' },
-  facturierK1: { username: 'demo_facturier_k1_e2e', password: PASSWORD, role: 'FACTURIER', node: 'K1' },
-  facturierK2: { username: 'demo_facturier_k2_e2e', password: PASSWORD, role: 'FACTURIER', node: 'K2' },
-  livreurK1: { username: 'demo_livreur_k1_e2e', password: PASSWORD, role: 'LIVREUR', node: 'K1' },
+  admin: { username: 'zz_demo_admin', password: PASSWORD, role: 'ADMIN' },
+  direction: { username: 'zz_demo_direction', password: PASSWORD, role: 'DIRECTION' },
+  comptable: { username: 'zz_demo_comptable', password: PASSWORD, role: 'COMPTABLE' },
+  gerantK1: { username: 'zz_demo_gerant_k1', password: PASSWORD, role: 'GERANT', node: 'K1' },
+  gerantK2: { username: 'zz_demo_gerant_k2', password: PASSWORD, role: 'GERANT', node: 'K2' },
+  facturierK1: { username: 'zz_demo_facturier_k1', password: PASSWORD, role: 'FACTURIER', node: 'K1' },
+  facturierK2: { username: 'zz_demo_facturier_k2', password: PASSWORD, role: 'FACTURIER', node: 'K2' },
+  livreurK1: { username: 'zz_demo_livreur_k1', password: PASSWORD, role: 'LIVREUR', node: 'K1' },
 } as const;
 
 /** Client fictif pré-seedé à K1 pour le test de recherche inter-boulangeries. */

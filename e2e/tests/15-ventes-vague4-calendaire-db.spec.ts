@@ -8,6 +8,8 @@ import { test, expect, Page } from '@playwright/test';
 const FACTURIER = 'zz_ventes_facturier';
 
 async function seConnecter(page: Page) {
+  // modale « Stock de départ » (K1, rotation) : reportée automatiquement quand elle apparaît (y compris tardivement)
+  await page.addLocatorHandler(page.getByRole('button', { name: /plus tard/i }), async b => { await b.click(); });
   await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await page.getByPlaceholder('Ex: pierre').fill(FACTURIER, { timeout: 60_000 });
   await page.getByPlaceholder('••••••••').fill(FACTURIER);
@@ -37,7 +39,7 @@ test('reçu : date du jour calendaire, équipe désignée, mentions légales, sa
   await suggestion.click();
   await sansDebordement(page);
   await page.locator('input[type="number"]').first().fill('1');
-  await page.locator('input[type="number"]').last().fill('200');
+  await page.getByLabel(/Versement du jour/i).fill('200');
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
   await expect(page.locator('text=/BP avant/').first()).toBeVisible({ timeout: 120_000 });
   await page.getByRole('button', { name: /imprimer le reçu/i }).first().click();

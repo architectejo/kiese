@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from core.mixins import NodeImmutableForNonHQMixin
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -546,7 +547,7 @@ def _close_production_session(session, remaining_entries, request_user, record_s
     return {'result': result, 'nv_breads': nv_breads, 'is_anomaly': is_anomaly}
 
 
-class ProductionSessionViewSet(viewsets.ModelViewSet):
+class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ProductionSession.objects.select_related('node', 'declared_by').all()
     serializer_class = ProductionSessionSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -1292,7 +1293,7 @@ class ConsumableTypeViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-class ConsumableStockViewSet(viewsets.ModelViewSet):
+class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableStock.objects.select_related('node').all()
     serializer_class = ConsumableStockSerializer
     filter_backends  = [DjangoFilterBackend]
@@ -1368,7 +1369,7 @@ class ConsumableStockViewSet(viewsets.ModelViewSet):
         return qs
 
 
-class ConsumableMovementViewSet(viewsets.ModelViewSet):
+class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableMovement.objects.select_related('node', 'stock', 'session', 'recorded_by').all()
     serializer_class = ConsumableMovementSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -1453,7 +1454,7 @@ class ConsumableMovementViewSet(viewsets.ModelViewSet):
         ])
 
 
-class ConsumableCountViewSet(viewsets.ModelViewSet):
+class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """Physical inventory counts per bakery per consumable."""
     queryset = ConsumableCount.objects.select_related('node', 'counted_by').all()
     serializer_class = ConsumableCountSerializer
@@ -2079,7 +2080,7 @@ class BreadStockByDateView(APIView):
         })
 
 
-class BreadDisposalViewSet(viewsets.ModelViewSet):
+class BreadDisposalViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = BreadDisposal.objects.select_related('node', 'session', 'bread_price').all()
     serializer_class = BreadDisposalSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]

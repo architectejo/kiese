@@ -2,6 +2,7 @@
 Core API views — Authentication, Config, Nodes, Users management.
 """
 
+from .mixins import NodeImmutableForNonHQMixin
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
 from rest_framework.exceptions import PermissionDenied
@@ -432,7 +433,7 @@ class SystemNotificationViewSet(viewsets.ModelViewSet):
         return Response({'status': 'notification marked read'})
 
 
-class ColisDistributionViewSet(viewsets.ModelViewSet):
+class ColisDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     serializer_class = ColisDistributionSerializer
     permission_classes = [IsGerant]
     filter_backends = [DjangoFilterBackend]

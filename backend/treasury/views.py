@@ -7,6 +7,7 @@ from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import ProtectedError
 from django.db.models import Sum, F, Q
 from django.utils import timezone
+from core.mixins import NodeImmutableForNonHQMixin
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -213,7 +214,7 @@ def append_cashbook_entry(validate_balance=None, **entry_kwargs) -> CashbookEntr
     raise last_exc
 
 
-class LocalExpenseViewSet(viewsets.ModelViewSet):
+class LocalExpenseViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = LocalExpense.objects.select_related('node', 'gerant').all()
     serializer_class = LocalExpenseSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -262,7 +263,7 @@ class LocalExpenseViewSet(viewsets.ModelViewSet):
         )
 
 
-class FacturierReportViewSet(viewsets.ModelViewSet):
+class FacturierReportViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = FacturierReport.objects.select_related('node', 'facturier', 'validated_by').all()
     serializer_class = FacturierReportSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -392,7 +393,7 @@ _MAX_MONEY = Decimal('999999999999.99')
 _CLOSURE_MONEY_DEFER = ('physical_cash_total', 'cash_gap', 'net_cash')
 
 
-class CashClosureViewSet(viewsets.ModelViewSet):
+class CashClosureViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = CashClosure.objects.select_related('node', 'gerant').prefetch_related('cashbook_entries').all()
     serializer_class = CashClosureSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -771,7 +772,7 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         ])
 
 
-class DisbursementVoucherViewSet(viewsets.ModelViewSet):
+class DisbursementVoucherViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Bordereaux de versement — sorties de caisse Direction, financées par
     l'argent consolidé reçu de toutes les boulangeries. Chaque bordereau
@@ -937,7 +938,7 @@ class DirectionCashCountViewSet(
         )
 
 
-class JournalEntryViewSet(viewsets.ModelViewSet):
+class JournalEntryViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Journal de Caisse par Boulangerie (§5.1.4).
     Supports filtering by node, date, month, year.
@@ -1212,7 +1213,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
         })
 
 
-class DailySavingsViewSet(viewsets.ModelViewSet):
+class DailySavingsViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Épargne journalière par boulangerie (§5.1.5).
     savings_amount is auto-computed: daily_revenue × savings_rate.

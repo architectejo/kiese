@@ -24,6 +24,17 @@ class NodeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at']
 
+    def validate_monthly_social_contribution(self, value):
+        # BUG-314 : jamais négatif (NaN/inf/trop grand sont déjà refusés par DRF).
+        if value is not None and value < 0:
+            raise serializers.ValidationError("La cotisation sociale mensuelle ne peut pas être négative.")
+        return value
+
+    def validate_sac_value_fc(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("La valeur du sac ne peut pas être négative.")
+        return value
+
 
 class UserSerializer(serializers.ModelSerializer):
     node_display = serializers.StringRelatedField(source='node', read_only=True)

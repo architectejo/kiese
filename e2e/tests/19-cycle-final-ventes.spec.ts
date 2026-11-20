@@ -2,10 +2,21 @@ import { test, expect, Page } from '@playwright/test';
 import { CAP, API, login, later, overflow, idx, apiToken } from '../fixtures/cycle';
 
 /**
+ * Une fois le rapport facturier (niveau 1) genere par le parcours 21, la livraison de la vacation est bloquee
+ * (regle metier) : une boulangerie par largeur d'ecran. pos -> K2, tablette -> B1, bureau (et tv) -> K4.
+ */
+const CFG19 = [
+  { node: 'K2', fac: 'zz_demo_facturier_k2', liv: 'zz_demo_livreur_k2' },
+  { node: 'B1', fac: 'zz_demo_facturier_b1', liv: 'zz_demo_livreur_b1' },
+  { node: 'K4', fac: 'zz_treso_facturier_a', liv: 'zz_treso_livreur' },
+  { node: 'K4', fac: 'zz_treso_facturier_a', liv: 'zz_treso_livreur' },
+];
+
+/**
  * Cycle final (testeur-e2e, 2026-11-14) - facturier et livreur K4 sur db.sqlite3, plafond 50 000 FC.
  * Comptes zz_* (autorises par l'utilisateur). Une paire de clients par taille d'ecran.
  */
-const BASE = Number(process.env.E2E_CLIENT_BASE || 10); // fenetre de clients K4 (rejeu : changer la base)
+const BASE = Number(process.env.E2E_CLIENT_BASE || 900); // fenetre de clients K4 (rejeu : changer la base)
 const QTE_500 = 2; // index de la ligne « Pain 500 FC » dans les champs numeriques
 
 async function menuMobile(page: Page) {
@@ -25,7 +36,7 @@ async function facturer(page: Page, code: string, qte500: number, verse: number)
   await choisirClient(page, code);
   const nb = page.locator('input[type="number"]');
   await nb.nth(QTE_500).fill(String(qte500));
-  await nb.last().fill(String(verse));
+  await page.getByLabel(/Versement du jour/i).fill(String(verse));
   await page.getByRole('button', { name: /facturer & mettre en attente/i }).click();
 }
 
@@ -33,9 +44,10 @@ test.describe('FACTURIER K4', () => {
   test('menu, routes refusees, facturation, livraison, recu, plafond 50 000', async ({ page, request }, info) => {
     test.setTimeout(420_000);
     const i = idx(info.project.name);
-    const cExact = `K4-${String(BASE + i).padStart(4, '0')}`;   // BP = 50 000 pile apres livraison
-    const cSous = `K4-${String(BASE + 10 + i).padStart(4, '0')}`;    // BP = 49 500 (< plafond)
-    await login(page, 'zz_treso_facturier_a');
+    const C = CFG19[i];
+    const cExact = `${C.node}-${String(BASE + i).padStart(4, '0')}`;   // BP = 50 000 pile apres livraison
+    const cSous = `${C.node}-${String(BASE + 10 + i).padStart(4, '0')}`;    // BP = 49 500 (< plafond)
+    await login(page, C.fac);
     await later(page);
 
     await menuMobile(page);
@@ -65,7 +77,7 @@ test.describe('FACTURIER K4', () => {
     await expect(recu.getByText(/RCCM:?\s*021-A-650/)).toBeVisible();
     await expect(recu.getByText(/10-F4300-N85947U/)).toBeVisible();
     await expect(recu.getByText(/A1902266K/)).toBeVisible();
-    await expect(recu.getByText(/^K4 - /).first()).toBeVisible();
+    await expect(recu.getByText(new RegExp(`^${C.node} - `)).first()).toBeVisible();
     await expect(recu.getByText(/BALANCE ANTÉRIEURE \(BP\)/)).toBeVisible();
     await expect(recu.getByText(/NOUVELLE DETTE|NOUVELLE BP|BALANCE/).first()).toBeVisible();
     await expect(recu.getByText('Solde arrêté ce jour')).toBeVisible();
@@ -83,7 +95,7 @@ test.describe('FACTURIER K4', () => {
     expect(await overflow(page)).toBeLessThanOrEqual(1);
 
     // Refus cote serveur (403 + message francais), independamment de l'ecran
-    const tok = await apiToken(request, 'zz_treso_facturier_a');
+    const tok = await apiToken(request, C.fac);
     const H = { Authorization: `Bearer ${tok}` };
     const cl = await (await request.get(`${API}/api/clients/clients/?search=${cExact}`, { headers: H })).json();
     const prix = await (await request.get(`${API}/api/core/bread-prices/`, { headers: H })).json();
@@ -115,7 +127,7 @@ test.describe('FACTURIER K4', () => {
 test.describe('LIVREUR K4', () => {
   test('menu, routes refusees, livraison de la file, recu', async ({ page }, info) => {
     test.setTimeout(300_000);
-    await login(page, 'zz_treso_livreur');
+    await login(page, CFG19[idx(info.project.name)].liv);
     await later(page);
     await menuMobile(page);
     await expect(page.locator('a[href="/treasury"]')).toHaveCount(0);

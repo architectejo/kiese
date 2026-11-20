@@ -38,6 +38,8 @@ class Bug295RemiseAnnuelle(TestCase):
             SocialContribution.objects.create(client=self.b, node=self.node, month=m, year=2023,
                                               amount=D('2000'), is_paid=(m != 4))
         self.api = _api(self.gerant)
+        # BUG-316 : tarif et cloture reserves a la direction.
+        self.direction = _api(make_user('DIRECTION', node=None, team='', username='b295_d'))
         r = self.api.post(DIST, {'node': self.node.pk, 'year': 2023, 'tarif': '700'}, format='json')
         self.assertEqual(r.status_code, 201, r.data)
         self.dist = SocialDistribution.objects.get(pk=r.data['id'])
@@ -64,7 +66,7 @@ class Bug295RemiseAnnuelle(TestCase):
     def test_changement_de_tarif_recalcule_les_lignes_ouvertes(self):
         la = self.line(self.a)
         self.api.patch(f'{LINES}{la.pk}/', {'merite': '1500'}, format='json')
-        r = self.api.patch(f'{DIST}{self.dist.pk}/', {'tarif': '600'}, format='json')
+        r = self.direction.patch(f'{DIST}{self.dist.pk}/', {'tarif': '600'}, format='json')
         self.assertEqual(r.status_code, 200, r.data)
         la.refresh_from_db()
         self.assertEqual(la.remise, D('6000.00'))                 # 10 x 600
@@ -72,8 +74,8 @@ class Bug295RemiseAnnuelle(TestCase):
         self.assertEqual(self.line(self.b).remise, D('1800.00'))  # 3 x 600
 
     def test_tarif_d_une_distribution_cloturee_est_fige(self):
-        self.api.patch(f'{DIST}{self.dist.pk}/', {'is_closed': True}, format='json')
-        r = self.api.patch(f'{DIST}{self.dist.pk}/', {'tarif': '500'}, format='json')
+        self.direction.patch(f'{DIST}{self.dist.pk}/', {'is_closed': True}, format='json')
+        r = self.direction.patch(f'{DIST}{self.dist.pk}/', {'tarif': '500'}, format='json')
         self.assertEqual(r.status_code, 400, r.data)
         self.dist.refresh_from_db()
         self.assertEqual(self.dist.tarif, D('700.00'))

@@ -33,12 +33,12 @@ test.describe('Vitrine et bascule on_line', () => {
     await api.dispose();
 
     await page.goto('/login');
-    await page.getByPlaceholder('Ex: pierre').fill('demo_admin_e2e');
-    await page.getByPlaceholder('••••••••').fill('DemoE2E2026!');
+    await page.getByPlaceholder('Ex: pierre').fill('zz_demo_admin');
+    await page.getByPlaceholder('••••••••').fill('zz_demo_admin');
     await page.getByRole('button', { name: /se connecter/i }).click();
     await expect(page).toHaveURL(/\/dashboard/);
 
-    await page.goto('/settings');
+    await page.goto('/settings', { waitUntil: 'domcontentloaded' });
     const toggle = page.getByTitle(/désactiver la vitrine|activer la vitrine/i);
     await expect(toggle).toBeVisible();
 
@@ -68,7 +68,7 @@ test.describe('Vitrine et bascule on_line', () => {
       const current = (await (await apiCheck.get(`${apiBase}/api/core/config/`)).json()).on_line as boolean;
       await apiCheck.dispose();
       if (current !== initialOnLine) {
-        await page.goto('/settings');
+        await page.goto('/settings', { waitUntil: 'domcontentloaded' });
         const t = page.getByTitle(/désactiver la vitrine|activer la vitrine/i);
         if (await t.isVisible()) await t.click();
       }

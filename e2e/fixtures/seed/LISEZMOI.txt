@@ -1,0 +1,6 @@
+Scripts de preparation des donnees de test E2E (testeur-e2e, 2026-11-20), base propre db.sqlite3.
+Execution : bash run.sh <script.py>  (lance `manage.py shell -c "exec(open(script).read())"` dans backend/).
+Ordre : setup1, setup2, setup6, setup7, setup8, setup9, seed4 (API), setup11, setup12, setup15, setup16, setup17, setup18,
+setup19, setup20, seed10 (API : litiges K4->K2), seed13/seed14 (API), fix5 (categories clients ZZ).
+Tous les comptes zz_* ont pour mot de passe leur identifiant. Aucun client ni compte reel n'est modifie.
+Adapter les chemins ($TEMP) dans run.sh et api.py a la machine.

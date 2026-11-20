@@ -21,13 +21,14 @@ import { seConnecter } from '../fixtures/helpers';
  */
 
 test("la boîte modale réapparaît à chaque navigation tant qu'aucune équipe n'est confirmée, puis disparaît et ajuste le stock", async ({ page }) => {
-  await seConnecter(page, COMPTES.gerantK1.username, PASSWORD);
+  // K1 est en rotation (modale « Stock de départ de la relève », autre libellé) : parcours « du jour » joué sur K5 (hors rotation).
+  await seConnecter(page, 'zz_demo_gerant_k5', '', { reporterStockDepart: false });
 
   const modaleTitre = page.getByText('Stock de départ du jour');
 
   // 1) Doit apparaître dès le tableau de bord si aucune équipe n'est
   // confirmée aujourd'hui pour K1.
-  const dejaConfirmeeAuDepart = await modaleTitre.isVisible().catch(() => false);
+  const dejaConfirmeeAuDepart = await modaleTitre.waitFor({ state: 'visible', timeout: 25_000 }).then(() => true).catch(() => false);
   if (!dejaConfirmeeAuDepart) {
     test.skip(true, 'Les deux équipes K1 sont déjà confirmées aujourd\'hui (exécution précédente) — rien à vérifier ici, voir note du fichier.');
   }
@@ -47,7 +48,7 @@ test("la boîte modale réapparaît à chaque navigation tant qu'aucune équipe 
   // 4) Lire la première quantité proposée, la corriger, puis valider pour
   // l'équipe présélectionnée.
   const premierChamp = page.locator('.modal, [role="dialog"]').filter({ hasText: 'Stock de départ du jour' })
-    .locator('input[type="number"]').first();
+    .locator('input:not([type="checkbox"]):not([type="radio"])').first();
   await expect(premierChamp).toBeVisible();
   const valeurProposee = await premierChamp.inputValue();
   const valeurCorrigee = String(Math.max(0, parseInt(valeurProposee || '0', 10) - 1));
@@ -60,11 +61,11 @@ test("la boîte modale réapparaît à chaque navigation tant qu'aucune équipe 
   // présélectionne l'équipe restante) soit tout est confirmé (modale se
   // ferme). Dans les deux cas, naviguer à nouveau ne doit PAS réafficher la
   // modale si tout est désormais confirmé.
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(4_000); // laisse le statut de confirmation se rafraichir (la modale se ferme seule si tout est confirme)
   const encoreOuverte = await modaleTitre.isVisible().catch(() => false);
   if (encoreOuverte) {
     const deuxiemeChamp = page.locator('.modal, [role="dialog"]').filter({ hasText: 'Stock de départ du jour' })
-      .locator('input[type="number"]').first();
+      .locator('input:not([type="checkbox"]):not([type="radio"])').first();
     await expect(deuxiemeChamp).toBeVisible();
     await page.getByRole('button', { name: /^valider pour l'équipe/i }).click();
     await page.waitForTimeout(500);
@@ -106,11 +107,11 @@ test('un compte ADMIN (HQ) ne voit jamais la boîte modale « stock de départ �
  * possible dans la base de dev partagée.
  */
 test("un FACTURIER voit la boîte modale, peut confirmer, et une seule confirmation suffit (pas par équipe) — le bandeau d'ajustement de stock s'affiche (BUG-137)", async ({ page }) => {
-  await seConnecter(page, COMPTES.facturierK2.username, PASSWORD);
+  await seConnecter(page, COMPTES.facturierK2.username, PASSWORD, { reporterStockDepart: false });
 
   const modaleTitre = page.getByText('Stock de départ du jour');
 
-  const dejaConfirmeeAuDepart = await modaleTitre.isVisible().catch(() => false);
+  const dejaConfirmeeAuDepart = await modaleTitre.waitFor({ state: 'visible', timeout: 25_000 }).then(() => true).catch(() => false);
   if (!dejaConfirmeeAuDepart) {
     test.skip(true, 'K2 est déjà confirmé aujourd\'hui (exécution précédente) — BUG-138/139 déjà couverts, rien à refaire.');
   }
@@ -119,7 +120,7 @@ test("un FACTURIER voit la boîte modale, peut confirmer, et une seule confirmat
   // BUG-138 : le FACTURIER voit bien le formulaire de saisie (pas un 403
   // silencieux, pas une modale vide).
   const premierChamp = page.locator('.modal, [role="dialog"]').filter({ hasText: 'Stock de départ du jour' })
-    .locator('input[type="number"]').first();
+    .locator('input:not([type="checkbox"]):not([type="radio"])').first();
   await expect(premierChamp).toBeVisible();
 
   // Corriger la quantité proposée pour déclencher un ajustement réel

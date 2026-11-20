@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { clientsApi } from '../../api/services';
 import type { SocialDistribution, SocialDistributionLine } from '../../api/services';
 import { getErrorDetail } from '../../api/errors';
+import { useAuthStore } from '../../store/authStore';
 
 interface Props {
   node: string;
@@ -20,6 +21,9 @@ const input: React.CSSProperties = { padding: '4px 6px', borderRadius: 6, border
  * Le TARIF est fixé par année et par boulangerie, modifiable tant que la distribution n'est pas clôturée.
  */
 export const SocialDistributionPanel: React.FC<Props> = ({ node, year, canRead }) => {
+  // BUG-316 : le tarif et la clôture sont réservés à la direction (l'API répond 403 sinon).
+  const { user } = useAuthStore();
+  const canSetTarif = !!user && (user.role === 'ADMIN' || user.role === 'DIRECTION' || !!user.is_superuser);
   const [distributions, setDistributions] = useState<SocialDistribution[]>([]);
   const [openId, setOpenId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -120,8 +124,8 @@ export const SocialDistributionPanel: React.FC<Props> = ({ node, year, canRead }
                     <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Distribution {dist.year}</span>
                     <label style={{ fontSize: '0.8rem', color: 'hsl(var(--text-secondary))', display: 'flex', alignItems: 'center', gap: 6 }}>
                       Tarif (FC/indice)
-                      {dist.is_closed ? (
-                        <strong>{fmt(dist.tarif)}</strong>
+                      {dist.is_closed || !canSetTarif ? (
+                        <strong title={dist.is_closed ? undefined : 'Le tarif est fixé par la direction.'}>{fmt(dist.tarif)}</strong>
                       ) : (
                         <>
                           <input

@@ -27,7 +27,7 @@ async function sansDebordement(page: Page, ou: string) {
 
 test('gérant K2 : onglets Production sans débordement, litige visible, recomptage seulement', async ({ page }, info) => {
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await fermerModalesDepart(page);
   await expect(page.getByText(/Déclaration de Fournée/)).toBeVisible({ timeout: 120_000 });
@@ -51,26 +51,25 @@ test('gérant K2 : onglets Production sans débordement, litige visible, recompt
 
 test('BUG-246 : fournée UI, sacs décimaux (1,13) acceptés par le champ, manquant/excédent affiché', async ({ page }, info) => {
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await fermerModalesDepart(page);
   await expect(page.getByText(/Déclaration de Fournée/)).toBeVisible({ timeout: 120_000 });
-  const sacs = page.locator('input[type="number"][min="0.01"][step="0.01"]').first();
+  // BUG-306 : la déclaration se fait par sacs seuls ; l'aperçu « Montant à atteindre » remplace la grille de pains.
+  const sacs = page.getByLabel(/Nombre de sacs de farine/);
   await sacs.fill('1.13');
   const valide = await sacs.evaluate((el: HTMLInputElement) => el.validity.valid);
   console.log(`[${info.project.name}] sacs 1.13 valide (step) = ${valide}`);
   expect(valide, 'sacs 1.13 doit être saisissable').toBe(true);
   await sacs.fill('1.5');
-  const qtyInputs = page.locator('input[type="number"][min="0"]:not([step])');
-  await qtyInputs.first().fill('100', { timeout: 120_000 });
-  await expect(page.getByText(/MANQUANT|EXCÉDENT/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Montant à atteindre :/)).toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: `../docs/qa/captures/prod-v2-${info.project.name}-fournee-rendement.png`, fullPage: true });
 });
 
 test('BUG-243 : la direction voit le litige K2 après avoir choisi K2 dans le sélecteur', async ({ page }, info) => {
   test.skip(info.project.name !== 'bureau', 'bureau seulement');
   test.setTimeout(600_000);
-  await seConnecter(page, '@pierre', '@pierre');
+  await seConnecter(page, 'zz_demo_direction', 'zz_demo_direction');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await expect(page.locator('select').first().locator('option')).toHaveCount(8, { timeout: 120_000 });
   await page.waitForTimeout(15_000); // laisser finir le chargement initial (sinon le sélecteur revient sur B1)
@@ -82,7 +81,7 @@ test('BUG-243 : la direction voit le litige K2 après avoir choisi K2 dans le s�
 test('gérant K4 (émetteur) : Résoudre le litige, motif obligatoire puis succès', async ({ page }, info) => {
   test.skip(info.project.name !== 'bureau', 'résolution jouée une seule fois (bureau)');
   test.setTimeout(600_000);
-  await seConnecter(page, 'zz_prod_gerant_k4', 'ZzProd-2026!');
+  await seConnecter(page, 'zz_prod_gerant_k4', 'zz_prod_gerant_k4');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await page.getByRole('button', { name: /Transferts/ }).click();
   await expect(page.getByText(/EN LITIGE/).first()).toBeVisible({ timeout: 120_000 });
@@ -100,7 +99,7 @@ test('gérant K4 (émetteur) : Résoudre le litige, motif obligatoire puis succ�
 test('Clôture Journalière : export Excel et impression (K2)', async ({ page }, info) => {
   test.skip(info.project.name !== 'bureau', 'export testé sur bureau');
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await fermerModalesDepart(page);
   await expect(page.getByText(/Décomposition/i).first()).toBeVisible({ timeout: 120_000 });
@@ -123,7 +122,7 @@ test('Clôture Journalière : export Excel et impression (K2)', async ({ page },
 
 test('Clôture Journalière : lisible à 360 px, sans débordement de page', async ({ page }, info) => {
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   await fermerModalesDepart(page);
   await expect(page.getByText(/Décomposition/i).first()).toBeVisible({ timeout: 120_000 });
@@ -131,22 +130,26 @@ test('Clôture Journalière : lisible à 360 px, sans débordement de page', asy
   await page.screenshot({ path: `../docs/qa/captures/prod-v2-${info.project.name}-cloture-journaliere.png`, fullPage: true });
 });
 
-test('BUG-244 : KPI « Fournées enregistrées » = total réel (17), jamais partiel (15 chargées)', async ({ page }, info) => {
+test('BUG-244 : KPI « Fournées enregistrées » = total réel, jamais partiel (15 chargées)', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'bureau', 'bureau seulement');
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   const kpi = page.locator('div', { hasText: /^FOURNÉES ENREGISTRÉES$/ }).first().locator('xpath=following-sibling::div[1]');
   await expect(kpi).toBeVisible({ timeout: 120_000 });
   await expect(kpi).not.toHaveText('0', { timeout: 120_000 }); // données chargées
   console.log('KPI fournées =', (await kpi.textContent())?.trim());
-  await expect(kpi).toHaveText('17', { timeout: 120_000 });
+  // total réel côté serveur (pas les 15 premières lignes chargées) : lu par l'API avec le jeton du même compte
+  const tk = (await (await request.post('http://localhost:8000/api/core/auth/login/', { data: { username: 'zz_demo_gerant_k2', password: 'zz_demo_gerant_k2' } })).json()).access;
+  const total = (await (await request.get('http://localhost:8000/api/production/sessions/?page_size=1', { headers: { Authorization: `Bearer ${tk}` } })).json()).count as number;
+  expect(total, 'plus de 15 fournées K2 (sinon le test ne distingue pas total et page chargée)').toBeGreaterThan(15);
+  await expect(kpi).toHaveText(String(total), { timeout: 120_000 });
 });
 
 test('BUG-245 : KPI « Pains non valorisés » exclut le « reste à vendre » (attendu 23 = 8 déclassés + 12 gratuits + 3 invendus)', async ({ page }, info) => {
   test.skip(info.project.name !== 'bureau', 'bureau seulement');
   test.setTimeout(600_000);
-  await seConnecter(page, '@gerant-k2', '@gerant-k2');
+  await seConnecter(page, 'zz_demo_gerant_k2', 'zz_demo_gerant_k2');
   await page.goto('/production', { waitUntil: 'domcontentloaded', timeout: 180_000 });
   const kpi = page.locator('div', { hasText: /^PAINS NON VALORISÉS$/ }).first().locator('xpath=following-sibling::div[1]');
   await expect(kpi).toBeVisible({ timeout: 120_000 });

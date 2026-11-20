@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page, request as pwRequest } from '@playwright/test';
 
 /**
  * Vague 5 (testeur-e2e, 2026-11-12) - rejeu UI sur db.sqlite3 des tickets CORRIGE.
@@ -70,9 +70,12 @@ test('BUG-242 : /treasury refuse au facturier et au livreur, ouvert au gerant', 
   expect(await ecart(page)).toBeLessThanOrEqual(1);
 });
 
-test('BUG-276 : billetage hors borne -> message francais, aucune requete POST', async ({ page }) => {
+test('BUG-276 : billetage hors borne -> message francais, aucune requete POST', async ({ page }, info) => {
   test.setTimeout(600_000);
-  await seConnecter(page, 'zz_clients_gerant');
+  // Le formulaire de billetage disparait une fois la cloture du jour creee (parcours 21) : une boulangerie sans
+  // cloture du jour par largeur d'ecran. pos -> K2, tablette -> B1, bureau (et tv) -> K4.
+  const GER = ['zz_demo_gerant_k2', 'zz_demo_gerant_b1', 'zz_clients_gerant', 'zz_clients_gerant'];
+  await seConnecter(page, GER[Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name))]);
   await reporterModale(page);
   await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 90_000 });
@@ -100,6 +103,15 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
   test.setTimeout(600_000);
   const appels: string[] = [];
   page.on('request', r => { if (r.url().includes('/api/sales/invoices/')) appels.push(r.url()); });
+  // Donnee propre au test : une facture PENDING retro-datee (le livreur du parcours 19 vide la file de livraisons).
+  const apiReq = await pwRequest.newContext();
+  const lg = await apiReq.post(`${API}/api/core/auth/login/`, { data: { username: 'zz_clients_facturier', password: 'zz_clients_facturier' } });
+  const HA = { Authorization: `Bearer ${(await lg.json()).access}` };
+  const cl = await (await apiReq.get(`${API}/api/clients/clients/?search=K4-0964`, { headers: HA })).json();
+  const retroDate = new Date(Date.now() - 6 * 86400_000).toLocaleDateString('sv-SE');
+  const cr = await apiReq.post(`${API}/api/sales/invoices/`, { headers: HA, data: { client: cl.results[0].id, payment_type: 'CREDIT', payment_amount: '0', lines: [{ bread_price: 3, quantity: 1 }], invoice_date: retroDate } });
+  expect(cr.status(), await cr.text()).toBe(201);
+  await apiReq.dispose();
   await seConnecter(page, 'zz_clients_facturier');
   await reporterModale(page);
   await page.goto('/sales', { waitUntil: 'domcontentloaded', timeout: 240_000 });
@@ -130,7 +142,9 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
 
 test('BUG-281 : libelle « Equipe de service de la periode » (necessite un gerant de boulangerie en rotation, K3)', async ({ page }) => {
   test.setTimeout(600_000);
-  await seConnecter(page, 'zz_clients_gerant');
+  await seConnecter(page, 'zz_prod_gerant_k3'); // K3 : rotation activee (K4 ne l'est pas dans cette base)
+  const designer = page.getByRole('button', { name: /confirmer l.équipe/i });
+  if (await designer.waitFor({ state: 'visible', timeout: 30_000 }).then(() => true).catch(() => false)) await designer.click();
   const titre = page.getByText(/Stock de départ de la relève/);
   const visible = await titre.waitFor({ state: 'visible', timeout: 30_000 }).then(() => true).catch(() => false);
   test.skip(!visible, 'La modale « Stock de depart de la releve » n\'apparait pas (deja confirmee) : non verifiable en UI');

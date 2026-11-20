@@ -33,7 +33,7 @@ test('Vente Soldée (BUG-107/111) : l\'aperçu à -25% avant soumission est coh�
   await page.goto('/sales/create');
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
-  await recherche.fill('K1-');
+  await recherche.fill('K1-0082'); // client fictif ZZTEST (jamais un client reel)
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
   await expect(suggestion).toBeVisible({ timeout: 45_000 });
   await suggestion.click();
@@ -141,54 +141,71 @@ test('Vente sans commission + Vente Soldée (BUG-052) : les deux cases sont comb
 
   expect(requeteFacture.is_soldee).toBe(true);
   expect(requeteFacture.commission_exempt).toBe(true);
-  expect(Number(requeteFacture.commission_rate)).toBe(0);
+  // BUG-230 : `commission_rate` n'est plus envoye (le serveur applique le taux ; exoneree -> CM=0 cote serveur).
+  expect(requeteFacture.commission_rate).toBeUndefined();
 });
 
-test('Clôture de fournée automatisée (BUG-093/108) : l\'action "Clôturer" déclenche le recoupement et verrouille la saisie', async ({ page }) => {
-  await seConnecter(page, COMPTES.gerantK1.username, PASSWORD);
-  await page.goto('/production');
+// BUG-306 : déclaration par sacs seuls. Équipe B (les parcours 05 utilisent l'équipe A) sur une boulangerie
+// hors rotation par largeur d'écran : pos -> K2, tablette -> K5, bureau -> B1.
+const GERANT_B = ['zz_demo_gerant_k2', 'zz_prod_gerant_k4', 'zz_e301_gerant', 'zz_e301_gerant']; // pos -> K2, tablette -> K4, bureau -> B2
 
-  // Équipe B : évite le conflit `unique_together (node, team, date)` avec une
-  // fournée équipe A déjà déclarée aujourd'hui par un autre parcours E2E
-  // (ex. 05-production.spec.ts, qui utilise l'équipe A par défaut).
-  const formulaire = page.locator('form').filter({ has: page.getByRole('button', { name: /enregistrer la fournée/i }) });
-  await formulaire.locator('select').selectOption('B');
-  await formulaire.locator('input[type="number"][step="0.5"]').first().fill('1');
-  await formulaire.locator('input[placeholder="0"]').first().fill('5');
-
-  await formulaire.getByRole('button', { name: /enregistrer la fournée/i }).click();
-  await expect(page.getByText(/stock insuffisant/i)).toHaveCount(0, { timeout: 10_000 });
-
-  // `ProductionSession` est unique par (nœud, équipe, date, §5.4) : si cette
-  // suite a déjà été rejouée aujourd'hui (même date calendaire), la création
-  // échoue avec ce message explicite plutôt qu'un `stock insuffisant` — ce
-  // n'est pas une régression applicative, juste une limite attendue d'un
-  // rejeu same-day sans réinitialisation de données. On l'annonce clairement
-  // plutôt que de laisser la suite échouer plus loin sur un symptôme confus.
-  const dejaDeclaree = page.getByText(/existe déjà pour cette boulangerie, cette équipe et cette date/i);
-  if (await dejaDeclaree.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    test.skip(true, 'Fournée Équipe B déjà déclarée aujourd\'hui par un rejeu précédent de cette suite dans la même journée calendaire (unique_together node/team/date, §5.4) — non reproductible sans réinitialiser la base de test.');
+test('Clôture de fournée automatisée (BUG-093/108) : l\'action "Clôturer" déclenche le recoupement et verrouille la saisie', async ({ page, request }, info) => {
+  const i = Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name));
+  // Une seule fournée « en cours » par boulangerie : on clôture par l'API celle laissée par le parcours 05 (zz_* uniquement).
+  const API = process.env.E2E_API_URL || 'http://localhost:8000';
+  const tk = (await (await request.post(`${API}/api/core/auth/login/`, { data: { username: GERANT_B[i], password: GERANT_B[i] } })).json()).access as string;
+  const H = { Authorization: `Bearer ${tk}` };
+  const ouvertes = await (await request.get(`${API}/api/production/sessions/?is_closed=false&page_size=50`, { headers: H })).json();
+  for (const sess of (ouvertes.results ?? ouvertes) as Array<{ id: string; is_closed: boolean }>) {
+    if (!sess.is_closed) await request.post(`${API}/api/production/sessions/${sess.id}/close/`, { headers: H, data: { remaining: [] } });
   }
+  await seConnecter(page, GERANT_B[i], PASSWORD);
+  await page.goto('/production', { waitUntil: 'domcontentloaded' });
 
-  // La déclaration a bien été acceptée : la ligne de saisie des quantités de
-  // pains repasse à vide (`setQuantities({})` dans `handleAddSession`).
-  await expect(formulaire.locator('input[placeholder="0"]').first()).toHaveValue('', { timeout: 10_000 });
+  const panneau = page.getByTestId('batch-in-progress-panel');
+  await expect(panneau.getByText('Déclaration de Fournée')).toBeVisible({ timeout: 30_000 });
+  await panneau.getByLabel('Équipe', { exact: true }).selectOption('B');
+  await panneau.getByLabel(/Nombre de sacs de farine/).fill('1');
+  await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+  // (« Fournée en cours » seul serait vrai aussi dans la phrase d'aide « Aucune fournée en cours... » : on attend l'objectif)
+  await expect(panneau.getByTestId('batch-objective')).toBeVisible({ timeout: 30_000 });
 
-  // Rouvre la fournée qui vient d'être créée (équipe B, en tête d'historique) pour la clôturer.
-  const historique = page.locator('text=Historique des Fournées').locator('xpath=../..');
-  const premiereFournee = historique.locator('div[style*="cursor: pointer"]', { hasText: 'Éq.B' }).first();
-  await premiereFournee.click();
-  await expect(page.getByText('Détail Fournée')).toBeVisible({ timeout: 10_000 });
-
-  page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: /clôturer la fournée/i }).click();
+  // BUG-315 : l'historique se rafraîchit seul après la déclaration (plus de rechargement de page).
+  // Rouvre la fournée (équipe B, aujourd'hui) pour la clôturer.
+  await page.getByText(/Éq\.B/).first().click();
+  const detail = page.getByRole('dialog', { name: 'Détail Fournée' });
+  await expect(detail).toBeVisible({ timeout: 10_000 });
+  await detail.getByRole('button', { name: 'Clôturer la fournée' }).click();
+  const m = page.getByRole('dialog', { name: 'Clôturer la Fournée' });
+  await expect(m).toBeVisible();
+  await m.getByRole('button', { name: 'Confirmer la clôture' }).click();
+  await expect(m).toBeHidden({ timeout: 20_000 });
 
   await expect(page.getByText(/Fournée clôturée/)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Recoupement automatique à la clôture')).toBeVisible();
-  // Saisie verrouillée : plus de bouton "Clôturer" ni "Sauvegarder le commentaire".
+  // Saisie verrouillée : plus de bouton "Clôturer".
   await expect(page.getByRole('button', { name: /clôturer la fournée/i })).toHaveCount(0);
+});
 
-  await page.getByRole('button', { name: /fermer/i }).last().click();
+test("BUG-315 : après déclaration d'une fournée, « Historique des Fournées » l'affiche sans rechargement de la page", async ({ page, request }, info) => {
+  const i = Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name));
+  const API = process.env.E2E_API_URL || 'http://localhost:8000';
+  const tk = (await (await request.post(`${API}/api/core/auth/login/`, { data: { username: GERANT_B[i], password: GERANT_B[i] } })).json()).access as string;
+  const H = { Authorization: `Bearer ${tk}` };
+  const ouvertes = await (await request.get(`${API}/api/production/sessions/?is_closed=false&page_size=50`, { headers: H })).json();
+  for (const sess of (ouvertes.results ?? ouvertes) as Array<{ id: string; is_closed: boolean }>) {
+    if (!sess.is_closed) await request.post(`${API}/api/production/sessions/${sess.id}/close/`, { headers: H, data: { remaining: [] } });
+  }
+  await seConnecter(page, GERANT_B[i], PASSWORD);
+  await page.goto('/production', { waitUntil: 'domcontentloaded' });
+  const panneau = page.getByTestId('batch-in-progress-panel');
+  await expect(panneau.getByText('Déclaration de Fournée')).toBeVisible({ timeout: 30_000 });
+  await panneau.getByLabel('Équipe', { exact: true }).selectOption('B');
+  await panneau.getByLabel(/Nombre de sacs de farine/).fill('1');
+  await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+  await expect(panneau.getByTestId('batch-objective')).toBeVisible({ timeout: 30_000 });
+  // Sans rechargement : la ligne « Éq.B » apparaît dans l'historique.
+  await expect(page.getByText(/Éq\.B/).first()).toBeVisible({ timeout: 10_000 });
 });
 
 test('Journal de Caisse (BUG-091/105) : un écart avec la Clôture déclenche un avertissement, jamais un blocage', async ({ page }) => {

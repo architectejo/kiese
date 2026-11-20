@@ -179,6 +179,8 @@ export const Production: React.FC = () => {
   const [historySessions, setHistorySessions] = useState<ProductionSession[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // BUG-315 : incrémenté après déclaration / modification des sacs / clôture pour relire l'historique.
+  const [historyTick, setHistoryTick] = useState(0);
 
   // §3.2 Approvisionnement
   const [showApproModal, setShowApproModal] = useState(false);
@@ -346,7 +348,7 @@ export const Production: React.FC = () => {
       .catch(err => setHistoryError(getErrorDetail(err, "Erreur lors du chargement de l'historique des fournées.")))
       .finally(() => setHistoryLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewNode, user?.node, selectedDate]);
+  }, [viewNode, user?.node, selectedDate, historyTick]);
 
   const handleInventoryCount = async () => {
     setCountError(null);
@@ -703,7 +705,7 @@ export const Production: React.FC = () => {
             serviceTeam={serviceTeam}
             onServiceTeam={setServiceTeam}
             sacValueFc={sacValueFc}
-            onChanged={() => { void loadData(); }}
+            onChanged={() => { void loadData(); setHistoryTick(t => t + 1); }}
           />
 
           {/* BUG-151 : accès manuel à la confirmation du reste d'hier pour une AUTRE
@@ -1509,6 +1511,8 @@ export const Production: React.FC = () => {
           setHistorySessions(prev => prev.map(s => s.id === updated.id ? updated : s));
           setSelectedSession(updated);
           setSessionNotes(updated.notes || '');
+          setHistoryTick(t => t + 1);
+          void loadData();
         }}
       />
 
