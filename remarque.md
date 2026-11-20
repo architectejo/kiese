@@ -423,6 +423,41 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Au niveau de "Production & Stocks" lors de l'envoi du formulaire "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)" l'utilisateur doit voir que la demande a été envoyer. — traité sous BUG-170 : message de succès persistant + bouton « Envoi en cours… » anti double envoi. VÉRIFIÉ par relecture de code le 2026-11-11.
 
-[] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.
 
-[] Dans le tableau de "Décomposition par Catégorie de Pain" enleve le "?" des colones "Non Servi" et "Régularisation"
+
+[c] Au niveau de "Clôture Journalière" les sections "Total du Jour", "Net Produit", "Écart / Facture", "Nombre de Sacs Produits", "Moyenne Produit / Sac", "Tarif Vente (fixe)", "Écart / Production" et "Pains Produits / Facturés" doivent ouvrir une boite nodel avec les détails une fois qu'on clique déssus.
+
+[c] Ne pas accepter les négatifs sur "Clôturer la Fournée"
+
+[c] Sur "Clôture Journalière" le reste d'hier et reste du jour ne dependent pas des équipes, ils sont pris pour le jour.
+
+[c] Sur "Détail Fournée" il y a répétition des catégories des pains
+
+[c] Pour la declaration de fournée, le client veut que le nombre des pains par catégorie puisse s'incrémanté automatiquement lors des ventes, le gérant va seulement saisir le nombre de sacs et enregistrer, la fournée sera en cours pour l'équipe en service, il pourra augmenté le nombre de sac, le montant à atteindre (nombre de sacs X valeur théorique de sac de la boulangerie) doit s'afficher clairement et la bar de progréssion va commencer à augmenter à chaque vente (du rouge, en orange, en suite jaune et en fin verte)
+
+[c] Le client demande un systeme de chat pour que les utilisateurs échangent des messages entre eux
+
+[c] Ne plus accepter des negatifs sur "Stock de départ de la relève"
+
+[c] Au niveau de "Facturation (Facturier)" section "File des Livraisons — Confirmation & Impression Reçu" parmit les factures en Attentes, on doit avoir la possibilité de déclarer une facture "Non Servi", avoir un bouton permetant de faire ça, on peut modifier le nombre des pains car la facture peut-être servi en partie
+
+[c] Au niveau "Production & Stocks" section "Stock Pains du Jour" chaque pains vendu par categorie, j'ajoute au fornée" on ne connais plus le stoque disponible, on compte que le pains vendu, qui vont s'ajouter aux pains produits à la cloture on va déclarer les restes du jour et on va ajouter au pains produits pour avoir le nombre total.
+
+
+[] Au niveau "Clôture Journalière" on doit voir un bouton qui ouvre une boite nodal avec la liste du jour, avec le detail comme nombre des tours(nombre des factures), montant total versé, commussion, BP Actuel etc...
+
+[] Au niveau de "Production & Stocks" section "Stock Pains du Jour - ...." enleve les pains disponible, affiche que les pains produit qui sont les pains comptabiliser lors de la facturaton ou vente, lors de la cloture, les pains déclarer restant vont completer le nombre total des pains produits par catégorie.
+
+[] Au niveau de "Production & Stocks" section "Fournée en cours" le champ "Augmenter les sacs (nouveau total)" doit incrémanter le nombre de sac de la valeur saisit dans ce champ, d'ou le champ doit s'appeler "Augmenter les sacs" et pas "(nouveau total)"
+
+[] Au niveau de "Production & Stocks" section "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)", on doit donner à un gérant la possibilité d'envoyer les pains à une autre boulangerie sans avoir réçu la demande de cette autre boulangarie
+
+[] Au niveau de "Configuration" les valaure du formulaire "§2.3 — Algorithme des Commissions (CM)" sont propre à chaque boulangerie, le frais de carte est à prendre à compte dans les commussions des clients
+
+[] Dans "Commissions CM" on doit prendre en compte les valeurs de carte et cotisation social qui dependent de la boulangerie à deduire de la commussion de chaque client, le filtre doit aussi se faire sur le mois de l'année.
+
+[] Dans "Clôture & Caisse" la section "Versement" doit aussi être visible chez les membres de la direction centrale
+
+[] Dans "Clôture & Caisse" toutes les options de cloture doivent être placer dans "Clôture Journalière" et supprimer dans "Clôture & Caisse" d'ou la page doit simplement s'appeler "Caisse" puisqu'elle aurea que les options de la "Caisse"
+
+[] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.

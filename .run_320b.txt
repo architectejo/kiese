@@ -1,0 +1,57 @@
+Creating test database for alias 'default'...
+......................................................................................................................................................................................................................................................................................E.........................................................................................................................x...................treasury.0016 : 5 écriture(s) numérotée(s) (5 suivies par previous_hash, 0 en repli date/created_at).
+.................................E..............................................................................................................................................................................................................................................................F.....................
+======================================================================
+ERROR: test_bug320_versement_non_servi_dans_le_cash_theorique (sales.tests.test_verif_bug318_testeur_ventes.RegressionsAnomalies.test_bug320_versement_non_servi_dans_le_cash_theorique)
+BUG-320 : le versement conserve d'une facture NOT_SERVED n'entre pas dans le rapport facturier.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\kiesse\backend\sales\tests\test_verif_bug318_testeur_ventes.py", line 461, in test_bug320_versement_non_servi_dans_le_cash_theorique
+    total = sum(r.total_cash for r in FacturierReport.objects.filter(node=self.node))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Projects\kiesse\backend\sales\tests\test_verif_bug318_testeur_ventes.py", line 461, in <genexpr>
+    total = sum(r.total_cash for r in FacturierReport.objects.filter(node=self.node))
+                ^^^^^^^^^^^^
+AttributeError: 'FacturierReport' object has no attribute 'total_cash'
+
+======================================================================
+ERROR: test_fournee_incremente_stock_et_lignes_mais_pas_le_rapport_en_montants (treasury.tests.test_regression_528875c_2026_11_19.Regression304_306_SansEffetSurLaCaisse.test_fournee_incremente_stock_et_lignes_mais_pas_le_rapport_en_montants)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\kiesse\backend\treasury\tests\test_regression_528875c_2026_11_19.py", line 331, in test_fournee_incremente_stock_et_lignes_mais_pas_le_rapport_en_montants
+    self.assertEqual(s.lines.get(bread_price=self.bp).quantity, 42)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\MUABILU PC\Desktop\projects\credit\venv\Lib\site-packages\django\db\models\manager.py", line 87, in manager_method
+    return getattr(self.get_queryset(), name)(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\MUABILU PC\Desktop\projects\credit\venv\Lib\site-packages\django\db\models\query.py", line 635, in get
+    raise self.model.DoesNotExist(
+production.models.ProductionSessionLine.DoesNotExist: ProductionSessionLine matching query does not exist.
+
+======================================================================
+FAIL: test_no_500_no_duplicate_receipt_number_no_lost_stock_under_concurrent_morning_peak (sales.tests.test_charge_morning_peak.MorningPeakMultiNodeTests.test_no_500_no_duplicate_receipt_number_no_lost_stock_under_concurrent_morning_peak)
+BUG-062 (CORRIGÉ) : `InvoiceViewSet.create` (sales/views.py) retente
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Projects\kiesse\backend\sales\tests\test_charge_morning_peak.py", line 130, in test_no_500_no_duplicate_receipt_number_no_lost_stock_under_concurrent_morning_peak
+    self.assertEqual(errors, [], f"Exceptions inattendues côté client de test : {errors}")
+AssertionError: Lists differ: [OperationalError('database table is locke[824 chars]ce')] != []
+
+First list contains 15 additional elements.
+First extra element 0:
+OperationalError('database table is locked: sales_invoice')
+
+Diff is 921 characters long. Set self.maxDiff to None to see it. : Exceptions inattendues côté client de test : [OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked'), OperationalError('database table is locked'), OperationalError('database table is locked'), OperationalError('database table is locked: clients_client'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice'), OperationalError('database table is locked: sales_invoice')]
+
+----------------------------------------------------------------------
+Ran 730 tests in 5197.894s
+
+FAILED (failures=1, errors=2, expected failures=1)
+Destroying test database for alias 'default'...
+Found 730 test(s).
+System check identified no issues (0 silenced).
+DAILY 2700 300 4 REPORT 2700.00 [('A', '2000.00', '0.00'), ('A', '700.00', '600.00')]
+CLOSURE 201 2700.00
+[0014_bug085_recompute_hash_is_correction] 5 écriture(s) recalculée(s) avec la formule v3, 5 effectivement modifiée(s) (is_correction=True), aucune rupture détectée sous la formule v2.
+[0014_bug085_recompute_hash_is_correction] 1 écriture(s) recalculée(s) avec la formule v3 (1 effectivement modifiée(s), is_correction=True). ATTENTION : rupture détectée sous la formule v2 a l'écriture pk=ac23bd6a-5616-4cd0-bd37-6955f4942ffa — cette écriture et toutes les suivantes n'ont PAS été recalculées (hash v2 legacy, non vérifiable rétroactivement). Lancez un contrôle d'intégrité blockchain après la migration pour les identifier précisément et ouvrir une TamperAlert si nécessaire.
+EXIT 1

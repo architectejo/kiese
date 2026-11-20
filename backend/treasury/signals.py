@@ -75,7 +75,17 @@ def block_delivery_on_already_reported_vacation(sender, instance, **kwargs):
     # mode rotation (BUG-161 B3).
     from core.workday import work_date_for
 
-    delivery_date = work_date_for(instance.node, instance.delivered_at)
+    delivered_at = instance.delivered_at
+    if isinstance(delivered_at, str):
+        # BUG-323 : robustesse si une chaîne ISO atteint le signal.
+        from django.utils import timezone
+        from django.utils.dateparse import parse_datetime
+        parsed = parse_datetime(delivered_at)
+        if parsed is None:
+            return
+        delivered_at = timezone.make_aware(parsed) if timezone.is_naive(parsed) else parsed
+
+    delivery_date = work_date_for(instance.node, delivered_at)
     already_reported = FacturierReport.objects.filter(
         node_id=instance.node_id,
         team=instance.team,

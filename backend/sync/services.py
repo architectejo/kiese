@@ -288,6 +288,33 @@ def _push_client(node, record):
     return _record_result(record_id, True)
 
 
+def _parse_aware_datetime(value):
+    """
+    BUG-323 : normalise une date/heure de payload JSON (chaîne ISO, datetime
+    ou None) en datetime aware. Lève ValueError si la valeur est illisible.
+    """
+    from datetime import datetime as _datetime
+
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+
+    if value in (None, ''):
+        return None
+    if isinstance(value, str):
+        try:
+            parsed = parse_datetime(value.strip())
+        except ValueError:
+            parsed = None
+        if parsed is None:
+            raise ValueError(f"date/heure invalide : {value!r}")
+        value = parsed
+    elif not isinstance(value, _datetime):
+        raise ValueError(f"date/heure invalide : {value!r}")
+    if timezone.is_naive(value):
+        value = timezone.make_aware(value)
+    return value
+
+
 def _push_invoice(node, record):
     from clients.models import Client
     from sales.models import Invoice
@@ -295,6 +322,12 @@ def _push_invoice(node, record):
     record_id = record.get('id')
     if not record_id:
         return _record_result(record_id, False, "id manquant")
+
+    try:
+        delivered_at = _parse_aware_datetime(record.get('delivered_at'))
+        not_served_at = _parse_aware_datetime(record.get('not_served_at'))
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
 
     existing = Invoice.objects.filter(pk=record_id).first()
     if existing:
@@ -306,16 +339,18 @@ def _push_invoice(node, record):
             if existing.status == 'PENDING' and new_status in ('DELIVERED', 'CANCELLED', 'NOT_SERVED'):
                 existing.status = new_status
                 changed_fields.append('status')
-                if record.get('delivered_at'):
-                    existing.delivered_at = record['delivered_at']
+                if delivered_at:
+                    existing.delivered_at = delivered_at
                     changed_fields.append('delivered_at')
                 # BUG-321 : Non servi / livraison partielle (BUG-318) — les
                 # montants réduits et le motif remontent avec la transition.
                 if new_status == 'NOT_SERVED':
-                    for fname in ('not_served_reason', 'not_served_at'):
-                        if record.get(fname) not in (None, ''):
-                            setattr(existing, fname, record[fname])
-                            changed_fields.append(fname)
+                    if record.get('not_served_reason') not in (None, ''):
+                        existing.not_served_reason = record['not_served_reason']
+                        changed_fields.append('not_served_reason')
+                    if not_served_at:
+                        existing.not_served_at = not_served_at
+                        changed_fields.append('not_served_at')
                 for fname in ('order_total', 'payment_amount', 'debt_after', 'initial_order_total'):
                     if record.get(fname) not in (None, ''):
                         setattr(existing, fname, _to_decimal(record[fname]))
@@ -353,7 +388,7 @@ def _push_invoice(node, record):
         special_code=record.get('special_code', ''),
         is_debt_repayment=bool(record.get('is_debt_repayment', False)),
         receipt_number=record.get('receipt_number', ''),
-        delivered_at=record.get('delivered_at'),
+        delivered_at=delivered_at,
         node_origin=record.get('node_origin', bakery_code),
     )
     invoice.save(_sync_bypass=True)
@@ -370,12 +405,29 @@ def _push_invoice_line(node, record):
         # BUG-321 : quantité servie réduite (livraison partielle / non servi).
         # Le prix figé et le commandé initial restent inchangés ; on ne
         # propage que quantity / ordered_quantity (line_total recalculé).
+        # BUG-324 : un push rejoué/retardé ne doit jamais ramener la ligne
+        # d'une facture terminale (NOT_SERVED/DELIVERED/CANCELLED) à une
+        # quantité plus ancienne : sur statut terminal, la quantité servie ne
+        # peut que diminuer et le commandé initial n'est plus touché.
+        inv_status = Invoice.objects.filter(pk=existing_line.invoice_id).values_list(
+            'status', flat=True).first()
+        terminal = inv_status in ('NOT_SERVED', 'DELIVERED', 'CANCELLED')
         changed = []
         for fname in ('quantity', 'ordered_quantity'):
             val = record.get(fname)
-            if val is not None and not isinstance(val, bool) and int(val) != getattr(existing_line, fname):
-                setattr(existing_line, fname, int(val))
-                changed.append(fname)
+            if val is None or isinstance(val, bool):
+                continue
+            try:
+                val = int(val)
+            except (TypeError, ValueError):
+                return _record_result(record_id, False, f"{fname} invalide")
+            current = getattr(existing_line, fname)
+            if val == current:
+                continue
+            if terminal and (fname == 'ordered_quantity' or val > current):
+                continue
+            setattr(existing_line, fname, val)
+            changed.append(fname)
         if changed:
             # update() : `InvoiceLine.save()` re-lirait le prix du catalogue.
             InvoiceLine.objects.filter(pk=existing_line.pk).update(

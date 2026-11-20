@@ -294,14 +294,12 @@ class Bug321Sync(Base):
         self.assertEqual((i.status, i.order_total, i.initial_order_total), ('DELIVERED', D('1600'), D('2600')))
         self.assertEqual((la.quantity, la.ordered_quantity, la.line_total), (2, 4, 1000))
 
-    @expectedFailure  # BUG-323
     def test_bug323_livraison_avec_delivered_at_iso_ne_plante_pas(self):
         i = self.mk(pay='0.00')
         self.push_inv({'id': str(i.pk), 'status': 'DELIVERED', 'delivered_at': timezone.now().isoformat()})
         i.refresh_from_db()
         self.assertEqual(i.status, 'DELIVERED')
 
-    @expectedFailure  # BUG-324
     def test_rejeu_ancienne_ligne_sur_facture_non_servie_ne_ressuscite_pas_les_quantites(self):
         """Un push rejoue/retarde avec l'ancienne quantite ne doit pas rendre incoherente une facture terminale."""
         i = self.mk(pay='1000.00')
@@ -313,3 +311,28 @@ class Bug321Sync(Base):
                         'quantity': 4, 'ordered_quantity': 4})
         la.refresh_from_db()
         self.assertEqual(la.quantity, 0, "BUG-324 : quantite servie d'une facture NOT_SERVED reecrite par un push perime")
+
+    def test_bug323_delivered_at_invalide_rejete_sans_500(self):
+        i = self.mk(pay='0.00')
+        r = self.push_inv({'id': str(i.pk), 'status': 'DELIVERED', 'delivered_at': 'pas une date'})
+        self.assertEqual(r['status'], 'REJECTED')
+        self.assertIn('invalide', r['reason'])
+        i.refresh_from_db()
+        self.assertEqual(i.status, 'PENDING')
+
+    def test_bug323_delivered_at_iso_naif_et_not_served_at_iso(self):
+        i = self.mk(pay='0.00')
+        self.push_inv({'id': str(i.pk), 'status': 'DELIVERED', 'delivered_at': '2026-11-20T10:00:00'})
+        i.refresh_from_db()
+        self.assertEqual(i.status, 'DELIVERED')
+        self.assertTrue(timezone.is_aware(i.delivered_at))
+
+    def test_bug324_ligne_facture_livree_ne_remonte_pas_en_quantite(self):
+        i = self.mk(pay='0.00')
+        la = i.lines.get(bread_price=self.bpa)
+        Invoice.objects.filter(pk=i.pk).update(status='DELIVERED')
+        InvoiceLine.objects.filter(pk=la.pk).update(quantity=2, line_total=1000)
+        self.push_line({'id': la.pk, 'invoice': str(i.pk), 'bread_price': self.bpa.pk,
+                        'quantity': 4, 'ordered_quantity': 9})
+        la.refresh_from_db()
+        self.assertEqual((la.quantity, la.ordered_quantity, la.line_total), (2, 4, 1000))

@@ -2915,6 +2915,181 @@ class DailyClosureReportView(APIView):
         return Response(_build_daily_closure_report(node, report_date))
 
 
+class DailyClosureClientsView(APIView):
+    """
+    BUG-327 (remarque.md l.447) : liste du jour des clients servis, pour la
+    boîte modale de la Clôture journalière. Lecture seule, une seule requête
+    agrégée (+ une pour les « Non servi »), aucun N+1.
+
+    `GET /api/production/daily-closure/clients/?node=<code ou pk>&date=<AAAA-MM-JJ>[&team=A|B][&page=1&page_size=500]`
+    Mêmes règles que `daily-closure/` : date obligatoire, `node` obligatoire
+    pour HQ et ignoré pour un non-HQ (jamais d'autre nœud que le sien),
+    permission `IsGerant` (gérant et supérieurs, comptable, direction).
+    Factures `DELIVERED` livrées le jour de travail (`delivered_at`).
+    """
+    permission_classes = [IsGerant]
+    DEFAULT_PAGE_SIZE = 500
+    MAX_PAGE_SIZE = 1000
+
+    def get(self, request):
+        from django.db.models import Case, When, Count, OuterRef, Subquery, Value
+        from sales.models import Invoice
+
+        user = request.user
+        params = request.query_params
+        date_str = params.get('date')
+        if not date_str:
+            return Response({'detail': "Le paramètre `date` (AAAA-MM-JJ) est requis."}, status=status.HTTP_400_BAD_REQUEST)
+        report_date = _safe_parse_date(date_str)
+        if report_date is None:
+            return Response({'detail': "Date invalide — format attendu AAAA-MM-JJ."}, status=status.HTTP_400_BAD_REQUEST)
+
+        team = (params.get('team') or '').strip().upper()
+        if team and team not in ProductionSession.Team.values:
+            return Response({'detail': f"Équipe invalide — valeurs possibles : {list(ProductionSession.Team.values)}."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            page = int(params.get('page', 1))
+            page_size = int(params.get('page_size', self.DEFAULT_PAGE_SIZE))
+        except (TypeError, ValueError):
+            return Response({'detail': "`page` et `page_size` doivent être des entiers."}, status=status.HTTP_400_BAD_REQUEST)
+        if page < 1 or page_size < 1:
+            return Response({'detail': "`page` et `page_size` doivent être strictement positifs."}, status=status.HTTP_400_BAD_REQUEST)
+        page_size = min(page_size, self.MAX_PAGE_SIZE)
+
+        if not user.can_access_all_nodes:
+            if not user.node_id:
+                return Response({'detail': "Compte non assigné à une boulangerie."}, status=status.HTTP_400_BAD_REQUEST)
+            node = user.node
+        else:
+            node_param = params.get('node')
+            if not node_param:
+                return Response({'detail': "Le paramètre `node` (code ou identifiant) est requis."}, status=status.HTTP_400_BAD_REQUEST)
+            node = _resolve_node(node_param)
+            if node is None:
+                return Response({'detail': f"Boulangerie « {node_param} » introuvable."}, status=status.HTTP_400_BAD_REQUEST)
+
+        base = Invoice.objects.filter(node=node, is_adjustment=False)
+        if team:
+            base = base.filter(team=team)
+        served = base.filter(
+            status=Invoice.Status.DELIVERED,
+            **delivered_on_work_date_filter(node, report_date),
+        ).exclude(special_code=Invoice.SpecialCode.NS)
+
+        # Typage exclusif (priorité décroissante).
+        q_remb = Q(is_debt_repayment=True)
+        q_rg = ~q_remb & Q(special_code=Invoice.SpecialCode.RG)
+        q_mvt = ~q_remb & ~q_rg & ~Q(special_code__in=['', Invoice.SpecialCode.NV])
+        q_epargne = ~q_remb & ~q_rg & ~q_mvt & Q(order_total=0) & ~Q(payment_amount=0)
+        q_solde = ~q_remb & ~q_rg & ~q_mvt & ~q_epargne & Q(is_soldee=True)
+        q_cash = ~q_remb & ~q_rg & ~q_mvt & ~q_epargne & ~q_solde & Q(commission_exempt=True)
+        q_tour = ~q_remb
+        q_cm = ~q_remb & ~q_rg & ~q_mvt & ~Q(is_soldee=True) & ~Q(commission_exempt=True)
+
+        first_bp = Subquery(
+            served.filter(client_id=OuterRef('client_id'))
+            .order_by('delivered_at', 'created_at').values('debt_before')[:1],
+            output_field=DecimalField(max_digits=14, decimal_places=2),
+        )
+        money = DecimalField(max_digits=18, decimal_places=4)
+        rows_qs = (
+            served.annotate(bp_first=first_bp)
+            .values('client_id', 'client__code', 'client__first_name', 'client__last_name',
+                    'client__current_debt', 'bp_first')
+            .annotate(
+                tours=Count('pk', filter=q_tour),
+                value=Sum(Case(When(q_tour, then=F('order_total')), default=Value(0), output_field=money)),
+                paid=Sum('payment_amount'),
+                cm=Sum(Case(
+                    When(q_cm, then=ExpressionWrapper(F('order_total') * F('commission_rate'), output_field=money)),
+                    default=Value(0), output_field=money,
+                )),
+                n_epargne=Count('pk', filter=q_epargne),
+                n_solde=Count('pk', filter=q_solde),
+                n_cash=Count('pk', filter=q_cash),
+                n_remb=Count('pk', filter=q_remb),
+                n_rg=Count('pk', filter=q_rg),
+                n_mvt=Count('pk', filter=q_mvt),
+            )
+            .order_by('client__last_name', 'client__first_name', 'client_id')
+        )
+
+        def q2(v):
+            return Decimal(v or 0).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        rows = []
+        tot_tours = 0
+        tot_value = tot_paid = tot_cm = Decimal('0.00')
+        for r in rows_qs:
+            n_other = r['tours'] - (r['n_epargne'] + r['n_solde'] + r['n_cash'] + r['n_rg'] + r['n_mvt'])
+            types = [t for t, n in (
+                ('REGULIER', n_other), ('SOLDE', r['n_solde']), ('CASH', r['n_cash']),
+                ('EPARGNE', r['n_epargne']), ('REMBOURSEMENT', r['n_remb']),
+                ('REGULARISATION', r['n_rg']), ('MOUVEMENT_INTERNE', r['n_mvt']),
+            ) if n > 0]
+            value, paid, cm = q2(r['value']), q2(r['paid']), q2(r['cm'])
+            has_client = r['client_id'] is not None
+            rows.append({
+                'client': str(r['client_id']) if has_client else None,
+                'client_code': r['client__code'] if has_client else '',
+                'client_name': (
+                    f"{r['client__first_name']} {r['client__last_name']}".strip() if has_client
+                    else 'Client de passage'
+                ),
+                'tours': r['tours'],
+                'order_value': value,
+                'paid': paid,
+                'commission': cm,
+                'bp_before': q2(r['bp_first']) if r['bp_first'] is not None else None,
+                'bp_current': q2(r['client__current_debt']) if has_client else None,
+                'sale_types': types,
+            })
+            tot_tours += r['tours']
+            tot_value += value
+            tot_paid += paid
+            tot_cm += cm
+
+        ns_rows = list(
+            base.filter(is_debt_repayment=False).filter(
+                Q(status=Invoice.Status.NOT_SERVED, not_served_at__date=report_date)
+                | (Q(special_code=Invoice.SpecialCode.NS, invoice_date=report_date)
+                   & ~Q(status=Invoice.Status.CANCELLED))
+            ).values('client_id', 'client__code', 'client__first_name', 'client__last_name')
+            .annotate(count=Count('pk')).order_by('client__last_name', 'client__first_name', 'client_id')
+        )
+        non_servis = [{
+            'client': str(r['client_id']) if r['client_id'] is not None else None,
+            'client_code': r['client__code'] or '',
+            'client_name': (
+                f"{r['client__first_name']} {r['client__last_name']}".strip()
+                if r['client_id'] is not None else 'Client de passage'
+            ),
+            'count': r['count'],
+        } for r in ns_rows]
+
+        count = len(rows)
+        start = (page - 1) * page_size
+        return Response({
+            'node': node.code,
+            'date': str(report_date),
+            'team': team or None,
+            'count': count,
+            'page': page,
+            'page_size': page_size,
+            'results': rows[start:start + page_size],
+            'non_servis': {'count': sum(x['count'] for x in non_servis), 'results': non_servis},
+            'totals': {
+                'clients': count,
+                'tours': tot_tours,
+                'order_value': tot_value,
+                'paid': tot_paid,
+                'commission': tot_cm,
+            },
+        })
+
+
 def _opening_confirmation_resolve_node(request, node_param):
     """
     Même règle que `DailyClosureReportView.get()`/`_resolve_node()` : un
@@ -3141,6 +3316,16 @@ class DailyOpeningConfirmationView(APIView):
             for bs in BreadStock.objects.filter(node=node, bread_price__in=categories)
         }
         rotation = node.team_rotation_enabled
+        if not rotation:
+            # BUG-325 : depuis BUG-319, BreadStock n'est plus crédité du
+            # « produit » ; hors rotation on reprend donc, comme en rotation,
+            # le dernier reste DÉCLARÉ à une clôture (jamais négatif, BUG-317).
+            for bp in categories:
+                previous = DailyBreadStockSnapshot.last_snapshot_upto(node, bp, report_date)
+                if previous is not None:
+                    proposed_by_bp[bp.id] = max(previous.qty_at_close, 0)
+                elif proposed_by_bp.get(bp.id, 0) < 0:
+                    proposed_by_bp[bp.id] = 0
         if rotation:
             # BUG-161 (B4) : chaînage inter-équipes — la quantité proposée est
             # le dernier reste déclaré à une clôture du nœud avant cette
