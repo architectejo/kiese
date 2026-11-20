@@ -1,0 +1,3 @@
+# Le registre des bugs est append-heavy : en cas de fusion, garder les lignes des deux côtés
+# (le gestionnaire-git vérifie ensuite les doublons de BUG-NNN).
+docs/qa/REGISTRE_BUGS.md merge=union
