@@ -115,12 +115,12 @@ class V303NegativeTests(_Base):
         }, format='json')
         self.assertEqual(r.status_code, 201, r.data)  # constat : négatif accepté
 
-    def test_path_opening_confirmation_negative_still_accepted(self):
+    def test_path_opening_confirmation_negative_refused_bug317(self):
         r = self.g.post('/api/production/opening-confirmation/', {
             'team': 'A', 'date': str(self.today),
             'lines': [{'bread_price': self.bp5.pk, 'qty': -6}],
         }, format='json')
-        self.assertEqual(r.status_code, 200, r.data)  # constat : négatif accepté
+        self.assertEqual(r.status_code, 400, r.data)  # BUG-317 : négatif refusé
 
     def test_path_forced_closure_accepts_negative_physical_stock(self):
         from datetime import time
@@ -210,8 +210,10 @@ class V306DeclareTests(_Base):
         self.assertEqual(p.data['objective_fc'], 840000)
         self.assertEqual(p.data['progress_pct'], '50.00')
         # les lignes auto ne sont pas effacées par un PATCH sans `lines`
-        self.assertEqual(ProductionSession.objects.get(pk=sid).lines.get(bread_price=self.bp5).quantity, 840)
-        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp5).qty_produced, 840)
+        # BUG-319 (remarque.md l.445, spécification modifiée) : la livraison ne crée plus de lignes DECLARED ni de qty_produced ; seule `delivered_value_fc` avance.
+        self.assertEqual(ProductionSession.objects.get(pk=sid).delivered_value_fc, 420000)
+        self.assertFalse(ProductionSession.objects.get(pk=sid).lines.exists())
+        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp5).qty_produced, 0)
 
     def test_progress_over_100_not_capped(self):
         sid = self._sacs('1.00').data['id']  # objectif 210 000
@@ -226,26 +228,26 @@ class V306IncrementTests(_Base):
         sid = self._sacs('2.00').data['id']
         self._sell([(self.bp5, 10), (self.bp3, 4)])
         s = ProductionSession.objects.get(pk=sid)
-        self.assertEqual(s.lines.get(bread_price=self.bp5, source='DECLARED').quantity, 10)
-        self.assertEqual(s.lines.get(bread_price=self.bp3, source='DECLARED').quantity, 4)
-        # 10x500 + 4x300 = 6200
-        self.assertEqual(s.total_fc_produced, 6200)
-        self.assertEqual(s.total_breads, 14)
+        # BUG-319 (remarque.md l.445, spécification modifiée) : la livraison ne crée plus de lignes DECLARED ni de qty_produced ; seule `delivered_value_fc` avance.
+        self.assertFalse(s.lines.filter(source='DECLARED').exists())
+        # 10x500 + 4x300 = 6200 (valeur livrée, pas une production)
+        self.assertEqual(s.delivered_value_fc, 6200)
+        self.assertEqual((s.total_fc_produced, s.total_breads), (0, 0))
         got = self.g.get(f'/api/production/sessions/{sid}/').data
         # 6200*100/420000 = 1.476 -> 1.48
         self.assertEqual(got['progress_pct'], '1.48')
         self.assertEqual(got['progress_value_fc'], 6200)
-        # stock net : +produit (batch) -envoyé (vente) = 0
+        # stock : plus de « produit » à la livraison (BUG-319), -envoyé (vente)
         st = BreadStock.objects.get(node=self.node, bread_price=self.bp5)
-        self.assertEqual((st.qty_produced, st.qty_sent, st.qty_available), (10, 10, 0))
-        # yield_gap = 6200 - 420000
-        self.assertEqual(s.yield_gap, -413800)
+        self.assertEqual((st.qty_produced, st.qty_sent, st.qty_available), (0, 10, -10))
+        # pas d'écart avant clôture
+        self.assertEqual(s.yield_gap, 0)
 
     def test_soldee_sale_counts_at_catalog_price(self):
         sid = self._sacs('2.00').data['id']
         self._sell([(self.bp5, 10)], extra={'is_soldee': True})
         s = ProductionSession.objects.get(pk=sid)
-        self.assertEqual(s.total_fc_produced, 5000)
+        self.assertEqual(s.delivered_value_fc, 5000)  # BUG-319 : prix catalogue
 
     def test_ignored_cases(self):
         sid = self._sacs('2.00').data['id']
@@ -277,7 +279,7 @@ class V306IncrementTests(_Base):
         }, format='json')
         self.assertIn(adj.status_code, (200, 201), adj.data)
         s = ProductionSession.objects.get(pk=sid)
-        self.assertEqual(s.lines.get(bread_price=self.bp5).quantity, 10)
+        self.assertEqual(s.delivered_value_fc, 5000)  # BUG-319 : l'ajustement n'ajoute rien
 
     def test_cancelled_pending_does_not_increment_and_sale_before_declaration_ignored(self):
         self._sell([(self.bp5, 5)])  # avant toute fournée : rien
@@ -306,7 +308,7 @@ class V306IncrementTests(_Base):
         sid2 = self._sacs('1.00', api=g2).data['id']
         self._sell([(self.bp5, 3)])
         self.assertEqual(ProductionSession.objects.get(pk=sid2).lines.count(), 0)
-        self.assertEqual(ProductionSession.objects.get(pk=sid).lines.get(bread_price=self.bp5).quantity, 3)
+        self.assertEqual(ProductionSession.objects.get(pk=sid).delivered_value_fc, 1500)  # BUG-319
 
     def test_gerant_other_node_cannot_read_or_patch_my_batch(self):
         sid = self._sacs('2.00').data['id']
@@ -332,8 +334,8 @@ class V306IncrementTests(_Base):
         sb = self._sacs('1.00', team='B').data['id']
         self._sell([(self.bp5, 10)])
         # constat : la fournée la plus récente (B) reçoit la vente
-        self.assertEqual(ProductionSession.objects.get(pk=sb).lines.get(bread_price=self.bp5).quantity, 10)
-        self.assertFalse(ProductionSession.objects.get(pk=sa).lines.exists())
+        self.assertEqual(ProductionSession.objects.get(pk=sb).delivered_value_fc, 5000)  # BUG-319
+        self.assertEqual(ProductionSession.objects.get(pk=sa).delivered_value_fc, 0)
 
     def test_rotation_targets_service_team_only(self):
         self.node.team_rotation_enabled = True
@@ -348,8 +350,9 @@ class V306IncrementTests(_Base):
         sb = ProductionSession.objects.create(node=self.node, team='B', date=self.today,
                                               flour_sacks_used=Decimal('1'), auto_track=True)
         self._sell([(self.bp5, 6)])
-        self.assertFalse(sa.lines.exists())
-        self.assertEqual(sb.lines.get(bread_price=self.bp5).quantity, 6)
+        sa.refresh_from_db(); sb.refresh_from_db()  # BUG-319
+        self.assertEqual(sa.delivered_value_fc, 0)
+        self.assertEqual(sb.delivered_value_fc, 3000)
 
     def test_rotation_targets_service_team_at_fixed_instants(self):
         """Robustesse horaire : même résultat avant/après la relève et à deux dates."""
@@ -371,8 +374,9 @@ class V306IncrementTests(_Base):
                 sb = ProductionSession.objects.create(
                     node=self.node, team='B', date=today, flour_sacks_used=Decimal('1'), auto_track=True)
                 self._sell([(self.bp5, 6)])
-                self.assertFalse(sa.lines.exists(), (y, m, d, h))
-                self.assertEqual(sb.lines.get(bread_price=self.bp5).quantity, 6, (y, m, d, h))
+                sa.refresh_from_db(); sb.refresh_from_db()  # BUG-319
+                self.assertEqual(sa.delivered_value_fc, 0, (y, m, d, h))
+                self.assertEqual(sb.delivered_value_fc, 3000, (y, m, d, h))
                 sa.delete()
                 sb.delete()
 
@@ -520,10 +524,9 @@ class V306SequentialAccumulationTests(_Base):
         stale = ProductionSession.objects.get(pk=sid)  # instance périmée en mémoire
         for q in (30, 70, 1):
             self._sell([(self.bp5, q)])
-        self.assertEqual(stale.lines.get(bread_price=self.bp5).quantity, 101)
-        s = ProductionSession.objects.get(pk=sid)
-        self.assertEqual(s.total_fc_produced, 50500)   # 101 x 500
-        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp5).qty_produced, 101)
+        s = ProductionSession.objects.get(pk=sid)  # BUG-319 : valeur livrée cumulée via F()
+        self.assertEqual(s.delivered_value_fc, 50500)   # 101 x 500
+        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp5).qty_produced, 0)
 
 
 class V309SacsValidationTests(_Base):

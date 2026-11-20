@@ -665,7 +665,7 @@ class ExpiryCleanupTests(TestCase):
             )
         return invoice
 
-    def test_cleanup_deletes_pending_invoices_older_than_12h_and_reverses_debt(self):
+    def test_cleanup_marks_expired_not_served_without_deleting_and_reverses_debt(self):
         """Comportement réellement en vigueur : seul un GERANT (ou +) peut appeler cleanup_expired — voir BUG-031."""
         old_invoice = self._create_invoice(qty=3, payment=0, created_offset_hours=13)
         self.client_obj.refresh_from_db()
@@ -674,8 +674,9 @@ class ExpiryCleanupTests(TestCase):
 
         resp = self.api_gerant.post('/api/sales/invoices/cleanup_expired/')
         self.assertEqual(resp.status_code, 200, resp.data)
-        self.assertEqual(resp.data['deleted'], 1)
-        self.assertFalse(Invoice.objects.filter(pk=old_invoice.pk).exists())
+        self.assertEqual(resp.data['expired'], 1)
+        # BUG-318 : jamais supprimée, passée en « Non servi ».
+        self.assertEqual(Invoice.objects.get(pk=old_invoice.pk).status, Invoice.Status.NOT_SERVED)
 
         self.client_obj.refresh_from_db()
         self.assertEqual(self.client_obj.current_debt, Decimal('0.00'))
@@ -683,8 +684,8 @@ class ExpiryCleanupTests(TestCase):
     def test_cleanup_does_not_touch_recent_pending_invoices(self):
         recent = self._create_invoice(qty=3, payment=0, created_offset_hours=2)
         resp = self.api_gerant.post('/api/sales/invoices/cleanup_expired/')
-        self.assertEqual(resp.data['deleted'], 0)
-        self.assertTrue(Invoice.objects.filter(pk=recent.pk).exists())
+        self.assertEqual(resp.data['expired'], 0)
+        self.assertEqual(Invoice.objects.get(pk=recent.pk).status, Invoice.Status.PENDING)
 
     def test_facturier_cannot_trigger_cleanup_expired(self):
         """

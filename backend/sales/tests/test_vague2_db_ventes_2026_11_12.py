@@ -133,8 +133,9 @@ class LivraisonEtExpirationTests(Base):
         recent = self.post(qty=1).data['id']
         r = self.as_user(self.gerant).post(f'{INV}cleanup_expired/')  # BUG-284 : GERANT+
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data['deleted'], 1)
-        self.assertFalse(Invoice.objects.filter(pk=old).exists())
+        self.assertEqual(r.data['expired'], 1)
+        # BUG-318 : conservée en « Non servi », jamais supprimée.
+        self.assertEqual(Invoice.objects.get(pk=old).status, Invoice.Status.NOT_SERVED)
         self.assertTrue(Invoice.objects.filter(pk=delivered).exists())
         self.assertTrue(Invoice.objects.filter(pk=recent).exists())
         self.cl.refresh_from_db()

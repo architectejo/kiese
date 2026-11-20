@@ -89,19 +89,22 @@ class Bug306BatchInProgressTests(_Base):
         self.assertEqual(r.data['progress_pct'], '0.00')
         self.assertFalse(SystemNotification.objects.filter(title__startswith='Manquant de Rendement').exists())
 
-    def test_delivery_increments_lines_stock_and_progress(self):
+    def test_delivery_increments_progress_only(self):
+        # BUG-319 (changement de spécification voulu, remarque.md l.445) : la
+        # livraison ne produit plus de pains (ni lignes DECLARED, ni
+        # qty_produced) ; seule la valeur livrée avance la barre.
         sid = self._declare_sacs('2.00').data['id']
         self._sell_and_deliver(100)
         s = ProductionSession.objects.get(pk=sid)
-        line = s.lines.get(bread_price=self.bp, source='DECLARED')
-        self.assertEqual(line.quantity, 100)
-        self.assertEqual(s.total_fc_produced, 50000)
-        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp).qty_produced, 100)
+        self.assertFalse(s.lines.filter(source='DECLARED').exists())
+        self.assertEqual(s.total_fc_produced, 0)
+        self.assertEqual(s.delivered_value_fc, 50000)
+        self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp).qty_produced, 0)
         got = self.api.get(f'/api/production/sessions/{sid}/').data
         self.assertEqual(got['progress_value_fc'], 50000)
         self.assertEqual(got['progress_pct'], '11.90')
         self._sell_and_deliver(50, who=_api(make_user('LIVREUR', node=self.node)))
-        self.assertEqual(ProductionSession.objects.get(pk=sid).lines.get(bread_price=self.bp).quantity, 150)
+        self.assertEqual(ProductionSession.objects.get(pk=sid).delivered_value_fc, 75000)
 
     def test_pending_invoice_does_not_increment(self):
         sid = self._declare_sacs().data['id']

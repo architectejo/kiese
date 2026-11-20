@@ -33,11 +33,10 @@ export interface StockDuJourSectionProps {
    *  autres appels scopés de Production.tsx), utilisé pour l'endpoint `by-date` sur un jour passé. */
   nodeFilter?: string;
   currentNodeLabel?: string;
-  onSelectBreadStock: (bs: BreadStock) => void;
 }
 
 export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
-  selectedDate, onSelectDate, liveBreadStocks, nodeFilter, currentNodeLabel, onSelectBreadStock,
+  selectedDate, onSelectDate, liveBreadStocks, nodeFilter, currentNodeLabel,
 }) => {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<BreadStockByDate | null>(null);
@@ -47,6 +46,27 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
   // BUG-161 (F3) : « jour courant » = jour calendaire du serveur (repli : date locale).
   const workDate = useWorkDate();
   const isToday = selectedDate === workDate;
+
+  // BUG-319 : colonnes affichées selon les données ; avant clôture seul « Vendu » (+ transferts).
+  const hasReceived = liveBreadStocks.some(bs => bs.qty_received > 0);
+  const hasSent = liveBreadStocks.some(bs => bs.qty_sent > 0);
+  const anyClosed = liveBreadStocks.some(bs => bs.closed);
+  const [ecartFc, setEcartFc] = useState<number | null>(null);
+  const reportNode = nodeFilter || liveBreadStocks[0]?.node;
+
+  // Écart sacs (manquant/excédent) lu dans le rapport de clôture, une fois la journée clôturée.
+  useEffect(() => {
+    if (!isToday || !anyClosed || !reportNode) { setEcartFc(null); return; }
+    let cancelled = false;
+    productionApi.dailyClosure.get(reportNode, selectedDate)
+      .then(res => {
+        if (cancelled) return;
+        const n = parseFloat(res.data.totals.ecart_production_fc);
+        setEcartFc(Number.isNaN(n) ? null : n);
+      })
+      .catch(() => { if (!cancelled) setEcartFc(null); });
+    return () => { cancelled = true; };
+  }, [isToday, anyClosed, reportNode, selectedDate]);
 
   useEffect(() => {
     if (isToday) {
@@ -98,35 +118,62 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
         </button>
       </div>
 
+      <p style={{ fontSize: '0.64rem', color: 'hsl(var(--text-secondary))', margin: '0 0 8px' }}>
+        Pendant la journée on compte les pains vendus ; à la clôture, les restes déclarés s'ajoutent pour donner le total produit.
+      </p>
+
       {isToday ? (
         liveBreadStocks.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.7rem' }}>
             Aucun stock de pains suivi pour l'instant.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {liveBreadStocks.map(bs => (
-              <div
-                key={bs.id}
-                onClick={() => onSelectBreadStock(bs)}
-                style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))', fontSize: '0.68rem', cursor: 'pointer', transition: 'background 0.15s' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'hsl(var(--bg-tertiary))')}
-                onMouseLeave={e => (e.currentTarget.style.background = '')}
-              >
-                <div>
-                  <span style={{ fontWeight: 800 }}>{bs.bread_price_display}</span>
-                  <span style={{ color: 'hsl(var(--text-muted))', marginLeft: '6px', fontSize: '0.6rem' }}>
-                    produits: {bs.qty_produced} · reçus: <span style={{ color: 'hsl(var(--color-info))' }}>{bs.qty_received}</span> · sortis: {bs.qty_sent} · disposés: {bs.qty_disposed}
-                  </span>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span style={{ fontWeight: 800, fontSize: '0.75rem', color: bs.qty_available > 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                    {bs.qty_available} dispo
-                  </span>
-                  <span style={{ display: 'block', fontSize: '0.55rem', color: 'hsl(var(--text-muted))' }}>voir détail</span>
-                </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="premium-table" style={{ width: '100%', fontSize: '0.68rem' }}>
+              <thead>
+                <tr style={{ fontSize: '0.58rem', textTransform: 'uppercase' }}>
+                  <th>Catégorie</th>
+                  <th style={{ textAlign: 'right' }}>Vendu</th>
+                  {hasReceived && <th style={{ textAlign: 'right' }}>Reçus</th>}
+                  {hasSent && <th style={{ textAlign: 'right' }}>Envoyés</th>}
+                  {anyClosed && <th style={{ textAlign: 'right' }}>Restes déclarés</th>}
+                  {anyClosed && <th style={{ textAlign: 'right' }}>Total produit</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {liveBreadStocks.map(bs => {
+                  const incoherent = bs.closed && bs.produced_total != null && bs.produced_total < 0;
+                  return (
+                    <tr key={bs.id}>
+                      <td style={{ fontWeight: 800 }}>{bs.bread_price_display}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800 }}>{(bs.sold_qty ?? 0).toLocaleString('fr-FR')}</td>
+                      {hasReceived && <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{bs.qty_received}</td>}
+                      {hasSent && <td style={{ textAlign: 'right' }}>{bs.qty_sent}</td>}
+                      {anyClosed && (
+                        <td style={{ textAlign: 'right' }}>
+                          {bs.closed && bs.remaining_qty != null ? bs.remaining_qty.toLocaleString('fr-FR') : '—'}
+                        </td>
+                      )}
+                      {anyClosed && (
+                        <td style={{ textAlign: 'right', fontWeight: 800, color: incoherent ? 'hsl(var(--color-danger))' : undefined }}>
+                          {bs.closed && bs.produced_total != null ? bs.produced_total.toLocaleString('fr-FR') : '—'}
+                          {incoherent && (
+                            <div style={{ fontSize: '0.56rem', fontWeight: 700 }} title="Les restes déclarés dépassent ce qui était disponible : vérifiez la déclaration.">
+                              incohérence
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {anyClosed && ecartFc !== null && (
+              <div style={{ marginTop: '8px', fontSize: '0.7rem', fontWeight: 800, color: ecartFc < 0 ? 'hsl(var(--color-danger))' : ecartFc > 0 ? 'hsl(var(--color-success))' : undefined }}>
+                Écart sacs : {ecartFc === 0 ? 'aucun écart' : `${ecartFc < 0 ? 'manquant' : 'excédent'} de ${formatFC(Math.abs(ecartFc))}`}
               </div>
-            ))}
+            )}
           </div>
         )
       ) : loading ? (

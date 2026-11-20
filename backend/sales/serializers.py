@@ -13,8 +13,8 @@ class InvoiceLineSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = InvoiceLine
-        fields = ['id', 'bread_price', 'bread_label', 'quantity', 'unit_price', 'line_total', 'loss']
-        read_only_fields = ['id', 'unit_price', 'line_total', 'loss']
+        fields = ['id', 'bread_price', 'bread_label', 'quantity', 'ordered_quantity', 'unit_price', 'line_total', 'loss']
+        read_only_fields = ['id', 'ordered_quantity', 'unit_price', 'line_total', 'loss']
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
@@ -49,6 +49,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'is_soldee', 'commission_exempt', 'special_code', 'is_debt_repayment', 'motif', 'total_loss',
             'adjusts', 'is_adjustment', 'adjustment_sign', 'adjustments_count',
             'invoice_date', 'delivered_at',
+            'initial_order_total', 'not_served_reason', 'not_served_at',
             'lines',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
@@ -57,6 +58,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'client_code', 'client_photo', 'client_current_debt',
             'facturier_display', 'livreur_display', 'status_display', 'payment_type_display',
             'order_total', 'debt_after', 'invoice_date', 'delivered_at', 'total_loss',
+            'initial_order_total', 'not_served_reason', 'not_served_at',
             'adjusts', 'is_adjustment', 'adjustment_sign', 'adjustments_count',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]

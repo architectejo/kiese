@@ -213,11 +213,11 @@ class FullRotationDayTests(_Base):
             before_session = self._session_row(J, 'A')
             before_snaps = self._snaps(J)
             c = self.g.post(OPENING, {'lines': [
-                {'bread_price': bp5.pk, 'qty': 44}, {'bread_price': bp3.pk, 'qty': -30},
+                {'bread_price': bp5.pk, 'qty': 44},  # BUG-317 : plus de ligne négative (bp3 omis)
             ]}, format='json')
             self.assertEqual(c.status_code, 200, c.data)
             c = self.g.post(OPENING, {'lines': [
-                {'bread_price': bp5.pk, 'qty': 40}, {'bread_price': bp3.pk, 'qty': -30},
+                {'bread_price': bp5.pk, 'qty': 40},
             ]}, format='json')
             self.assertEqual(c.status_code, 200, c.data)
             self.assertEqual(_strip(self.g.get(CLOSURE, {'date': str(J)}).data), before_report)

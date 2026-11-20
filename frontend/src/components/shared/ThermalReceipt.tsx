@@ -13,6 +13,12 @@ export interface ReceiptData {
   clientName: string;
   lines: ReceiptLine[];
   orderTotal: number;
+  /**
+   * BUG-318 : valeur commandée avant livraison partielle. Les lignes et `orderTotal` portent les
+   * quantités SERVIES ; si cette valeur diffère de `orderTotal`, la mention « commandé initial »
+   * est imprimée.
+   */
+  initialOrderTotal?: number;
   versement: number;
   commissionRate: number;
   debtBefore: number;
@@ -245,6 +251,12 @@ export const ThermalReceipt: React.FC<{
               <td colSpan={3} style={{ ...cellR, fontWeight: 'bold' }}>SOUS-TOTAL</td>
               <td style={{ ...cellR, fontWeight: 'bold' }}>{receipt.orderTotal.toLocaleString('fr-FR')}</td>
             </tr>
+            {receipt.initialOrderTotal != null && receipt.initialOrderTotal !== receipt.orderTotal && (
+              <tr>
+                <td colSpan={3} style={cellR}>COMMANDÉ INITIAL (livraison partielle)</td>
+                <td style={cellR}>{receipt.initialOrderTotal.toLocaleString('fr-FR')}</td>
+              </tr>
+            )}
             <tr>
               <td colSpan={3} style={cellR}>VERSEMENT DU JOUR</td>
               <td style={cellR}>{receipt.versement.toLocaleString('fr-FR')}</td>

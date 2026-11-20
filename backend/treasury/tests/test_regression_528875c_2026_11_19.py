@@ -328,9 +328,13 @@ class Regression304_306_SansEffetSurLaCaisse(_Day):
         node, u, today = self.build_day('R1', with_batch=True)
         s = ProductionSession.objects.get(pk=self.batch_id)
         # 40 (équipe A) + 2 (équipe B) pains de 500 livrés ; les 3 sorties n'ont pas de ligne
-        self.assertEqual(s.lines.get(bread_price=self.bp).quantity, 42)
-        self.assertEqual(BreadStock.objects.get(node=node, bread_price=self.bp).qty_produced, 42)
-        self.assertEqual(s.total_fc_produced, 21000)
+        # BUG-319 (changement de spécification voulu, remarque.md l.445) : la
+        # livraison ne crée plus de lignes DECLARED ni de qty_produced ; la
+        # fournée ne suit que la valeur livrée (barre de progression).
+        self.assertFalse(s.lines.filter(source='DECLARED').exists())
+        self.assertEqual(BreadStock.objects.get(node=node, bread_price=self.bp).qty_produced, 0)
+        self.assertEqual(s.total_fc_produced, 0)
+        self.assertEqual(s.delivered_value_fc, 21000)
         reps = {r.team: r for r in regenerate_facturier_reports(node, today)}
         self.assertEqual(reps['A'].total_cash_sales, D('15000.00'))
         # écart sacs : valeur réalisée équipe A (20 000) - 2 sacs x 210 000

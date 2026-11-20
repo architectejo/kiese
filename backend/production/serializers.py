@@ -70,14 +70,20 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
     def get_progress_value_fc(self, obj):
         # Valeur déjà produite/livrée sur la fournée (lignes DECLARED au prix
         # catalogue) ; pour une fournée auto : valeur vendue/livrée.
-        return obj.total_fc_produced
+        # BUG-319 : fournée par sacs = valeur LIVRÉE suivie (`delivered_value_fc`),
+        # jamais une production ; fournée classique = lignes DECLARED.
+        return self._progress_value(obj)
+
+    @staticmethod
+    def _progress_value(obj):
+        return obj.delivered_value_fc if obj.auto_track else obj.total_fc_produced
 
     def get_progress_pct(self, obj):
         # Pourcentage d'avancement, 2 décimales, NON plafonné (peut dépasser 100).
         from decimal import Decimal, ROUND_HALF_UP
         if not obj.theoretical_yield:
             return '0.00'
-        pct = Decimal(obj.total_fc_produced) * Decimal('100') / Decimal(obj.theoretical_yield)
+        pct = Decimal(self._progress_value(obj)) * Decimal('100') / Decimal(obj.theoretical_yield)
         return str(pct.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     def get_is_in_progress(self, obj):
@@ -156,13 +162,50 @@ class BreadStockSerializer(serializers.ModelSerializer):
     bread_price_display = serializers.StringRelatedField(source='bread_price', read_only=True)
     unit_price          = serializers.IntegerField(source='bread_price.unit_price', read_only=True)
     qty_available       = serializers.IntegerField(read_only=True)
+    # BUG-319 : lecture du jour de travail courant du nœud (vendus seuls tant
+    # que la journée n'est pas clôturée ; null = pas encore connu).
+    sold_qty            = serializers.SerializerMethodField()
+    remaining_qty       = serializers.SerializerMethodField()
+    produced_total      = serializers.SerializerMethodField()
+    closed              = serializers.SerializerMethodField()
 
     class Meta:
         model  = BreadStock
         fields = [
             'id', 'node', 'node_display', 'bread_price', 'bread_price_display', 'unit_price',
             'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted', 'qty_available',
+            'sold_qty', 'remaining_qty', 'produced_total', 'closed',
         ]
+
+    def _day(self, obj):
+        from core.workday import work_date_for
+        from .services import compute_day_production
+        cache = self.context.setdefault('_day_production_cache', {})
+        if obj.node_id not in cache:
+            cache[obj.node_id] = compute_day_production(obj.node, work_date_for(obj.node))
+        return cache[obj.node_id]
+
+    def _row(self, obj):
+        return self._day(obj)['by_bp'].get(obj.bread_price_id)
+
+    def get_sold_qty(self, obj):
+        row = self._row(obj)
+        return row['sold'] if row else 0
+
+    def get_remaining_qty(self, obj):
+        row = self._row(obj)
+        if self._day(obj)['closed']:
+            return row['remaining'] if row else 0
+        return None
+
+    def get_produced_total(self, obj):
+        row = self._row(obj)
+        if self._day(obj)['closed']:
+            return row['produced'] if row else 0
+        return None
+
+    def get_closed(self, obj):
+        return self._day(obj)['closed']
         read_only_fields = ['id', 'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted']
 
 

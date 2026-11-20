@@ -22,6 +22,7 @@ from core.workday import (
     business_date, workday_bounds, delivered_on_work_date_filter,
 )
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, DailyTeamAssignment, _adjust_bread_stock
+from .services import compute_day_production, finalize_derived_production
 from .serializers import (
     ProductionSessionSerializer, BreadStockSerializer, ConsumableTypeSerializer, ConsumableStockSerializer,
     ConsumableMovementSerializer, ConsumableCountSerializer, BreadTransferSerializer, BreadDisposalSerializer,
@@ -48,6 +49,34 @@ def _body_not_object_response(request):
     )
 
 
+_QTY_INT_MAX = 2_000_000_000
+_QTY_INT_MAX_DEC = Decimal(_QTY_INT_MAX)
+
+
+def _bounded_integral_decimal(raw):
+    """
+    BUG-322 : analyse une quantité entière saisie (int, chaîne, Decimal) SANS
+    jamais appeler `int()` sur un Decimal non borné (« 1E+999999 » bloquait un
+    worker). Les bornes (-2e9 ... 2e9) sont comparées sur le Decimal AVANT
+    toute conversion. Renvoie `(entier, None)` ; `(None, 'invalid')` si non
+    entier / non fini / booléen ; `(None, 'too_big')` si |valeur| > 2e9
+    (les négatifs dans les bornes sont renvoyés : l'appelant les refuse).
+    """
+    if isinstance(raw, bool):
+        return None, 'invalid'
+    try:
+        d = Decimal(str(raw).strip())
+        if not d.is_finite():
+            return None, 'invalid'
+        if abs(d) > _QTY_INT_MAX_DEC:
+            return None, 'too_big'
+        if d != d.to_integral_value():
+            return None, 'invalid'
+        return int(d), None
+    except (TypeError, ValueError, ArithmeticError):
+        return None, 'invalid'
+
+
 def _strict_int(value, label, minimum=0):
     """
     BUG-224 : entier strict (int ou chaîne d'entier ; ni booléen, ni décimal
@@ -64,7 +93,11 @@ def _strict_int(value, label, minimum=0):
     elif isinstance(value, str):
         s = value.strip()
         if s.lstrip('-').isdigit():
-            n = int(s)
+            # BUG-322 : chiffres Unicode / chaînes > 4300 chiffres -> ValueError.
+            try:
+                n = int(s)
+            except ValueError:
+                n = None
     if n is None:
         raise ValidationError({'detail': f"Valeur invalide pour {label} : un nombre entier est attendu."})
     if n < minimum:
@@ -342,13 +375,27 @@ def _current_bread_stocks(node):
     )
 
 
-def _remaining_suggestions(stocks):
-    """Reste suggéré par catégorie (BUG-158 : valeur réelle, y compris négative)."""
+def _suggested_qty(bs, session=None):
+    """
+    BUG-319 : pour une fournée par sacs (`auto_track`), `BreadStock` n'est plus
+    crédité du « produit » (dérivé à la clôture) : `qty_available` = départ -
+    vendus peut être négatif sans que ce soit un manquant réel. La proposition
+    de reste est alors plafonnée à 0 (aligné sur BUG-317 : pas de négatif).
+    Fournée classique : valeur réelle inchangée (BUG-158).
+    """
+    qty = bs.qty_available
+    if session is not None and getattr(session, 'auto_track', False):
+        return max(0, qty)
+    return qty
+
+
+def _remaining_suggestions(stocks, session=None):
+    """Reste suggéré par catégorie (BUG-158 : valeur réelle, y compris négative ; BUG-319 : plafonné à 0 pour une fournée par sacs)."""
     return [
         {
             'bread_price': bs.bread_price_id,
             'label': str(bs.bread_price),
-            'quantity_suggested': bs.qty_available,
+            'quantity_suggested': _suggested_qty(bs, session),
         }
         for bs in stocks
     ]
@@ -366,8 +413,8 @@ def _force_close_session(session, stocks, node, user):
     # enregistré tel quel, y compris négatif (sorties au-delà du disponible).
     # Une notification WARNING signale chaque catégorie négative — `BreadStock`
     # n'est pas corrigé ici.
-    remaining_entries = [(bs.bread_price_id, bs.qty_available) for bs in stocks]
-    negative_stocks = [bs for bs in stocks if bs.qty_available < 0]
+    remaining_entries = [(bs.bread_price_id, _suggested_qty(bs, session)) for bs in stocks]
+    negative_stocks = [bs for bs in stocks if _suggested_qty(bs, session) < 0]
     with transaction.atomic():
         # BUG-165 : relecture verrouillée.
         locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
@@ -475,26 +522,10 @@ def _close_production_session(session, remaining_entries, request_user, record_s
     l'appelant, dont le contrat de réponse diffère (`close()` renvoie le
     serializer de la session, `shift_end_status()` un contrat plus simple).
     """
-    sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
-        user=request_user, node_id=session.node_id, date=str(session.date),
-    )
-    result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
-
-    reliquat_breads = result['gap']['breads']
-    is_anomaly = reliquat_breads < 0
-    nv_breads = reliquat_breads if reliquat_breads > 0 else 0
-
-    summary = {
-        **result,
-        'nv': {'breads': nv_breads},
-        'anomaly': is_anomaly,
-    }
-
     with transaction.atomic():
         session.is_closed = True
         session.closed_at = timezone.now()
-        session.closure_summary = summary
-        session.save(update_fields=['is_closed', 'closed_at', 'closure_summary'])
+        session.save(update_fields=['is_closed', 'closed_at'])
 
         for bp_id, qty_int in remaining_entries:
             existing = BreadDisposal.objects.filter(
@@ -522,6 +553,52 @@ def _close_production_session(session, remaining_entries, request_user, record_s
         # de perdu ni de compté deux fois.
         if record_snapshot:
             DailyBreadStockSnapshot.record_snapshot(session)
+
+        # BUG-319 : fournée par sacs -> « produit » dérivé (vendus + restes ...)
+        # et écart sacs x valeur_sac calculé à la clôture, AVANT le recoupement
+        # (qui lit `total_breads` des fournées du jour).
+        derived_data = None
+        if session.auto_track:
+            derived_data = finalize_derived_production(session)
+
+        sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
+            user=request_user, node_id=session.node_id, date=str(session.date),
+        )
+        result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
+
+        reliquat_breads = result['gap']['breads']
+        is_anomaly = reliquat_breads < 0
+        nv_breads = reliquat_breads if reliquat_breads > 0 else 0
+
+        summary = {
+            **result,
+            'nv': {'breads': nv_breads},
+            'anomaly': is_anomaly,
+        }
+        if derived_data is not None:
+            summary['production_derivee'] = {
+                'produit_fc': derived_data['produced_fc'],
+                'produit_pains': derived_data['produced_qty'],
+                'theorique_jour_fc': derived_data['theoretical_day'],
+                'ecart_fc': session.yield_gap,
+                'par_categorie': {
+                    str(bp_id): row for bp_id, row in derived_data['by_bp'].items()
+                },
+            }
+        session.closure_summary = summary
+        session.save(update_fields=['closure_summary'])
+
+    if derived_data is not None and session.yield_gap < 0:
+        create_notification(
+            title=f"Manquant de Rendement — {session.node.code}",
+            message=(
+                f"Session Éq.{session.team} du {session.date} clôturée : manquant de "
+                f"{abs(session.yield_gap):,} FC (Théorique : "
+                f"{derived_data['theoretical_day']:,} FC, produit déduit des ventes et restes : "
+                f"{derived_data['produced_fc']:,} FC)."
+            ),
+            severity='WARNING', node_origin=session.node.code,
+        )
 
     if is_anomaly:
         create_notification(
@@ -1008,15 +1085,23 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
                 try:
                     # BUG-309 : pas de troncature silencieuse (-0,5 -> 0) ;
                     # seuls les entiers (ou décimaux sans partie fractionnaire) passent.
-                    if isinstance(qty, bool):
+                    # BUG-322 : bornes comparées sur le Decimal avant tout int().
+                    qty_int, qty_err = _bounded_integral_decimal(qty)
+                    if qty_err == 'invalid':
                         raise ValueError
-                    qty_dec = Decimal(str(qty).strip())
-                    if not qty_dec.is_finite() or qty_dec != qty_dec.to_integral_value():
-                        raise ValueError
-                    qty_int = int(qty_dec)
                 except (TypeError, ValueError, ArithmeticError):
                     return Response(
                         {'detail': "« remaining » : quantité invalide."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if qty_err == 'too_big':
+                    if str(qty).strip().startswith('-'):
+                        return Response(
+                            {'detail': "« remaining » : la quantité ne peut pas être négative."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    return Response(
+                        {'detail': "« remaining » : quantité trop grande."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 if not bp_id:
@@ -1167,7 +1252,7 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
                 'team': team,
                 'session': session.pk,
                 'pending_validation': True,
-                'remaining': _remaining_suggestions(stocks),
+                'remaining': _remaining_suggestions(stocks, session),
                 'auto_closed': False,
                 **time_info,
             })
@@ -1246,7 +1331,7 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
                     'team': session.team,
                     'session': session.pk,
                     'pending_validation': True,
-                    'remaining': _remaining_suggestions(stocks),
+                    'remaining': _remaining_suggestions(stocks, session),
                     'auto_closed': False,
                     **info,
                 })
@@ -2070,11 +2155,38 @@ class BreadStockByDateView(APIView):
                 for bp_id in sorted(bp_by_id, key=lambda i: bp_by_id[i].unit_price)
             ]
 
+        # BUG-319 : « vendus seuls » tant que la journée n'est pas clôturée ;
+        # restes déclarés et total produit (null avant clôture). Une date
+        # passée portant des instantanés est une journée clôturée.
+        day = compute_day_production(
+            node, requested_date,
+            assume_closed=(
+                source == 'snapshot'
+                and DailyBreadStockSnapshot.objects.filter(node=node, date=requested_date).exists()
+            ),
+        )
+        have = {c['bread_price'] for c in categories}
+        missing = [bp_id for bp_id in day['by_bp'] if bp_id not in have]
+        if missing:
+            for bp in BreadPrice.objects.filter(pk__in=missing):
+                categories.append({
+                    'bread_price': bp.pk, 'bread_price_display': str(bp),
+                    'unit_price': bp.unit_price, 'qty_available': 0,
+                })
+            categories.sort(key=lambda c: c['unit_price'])
+        for c in categories:
+            row = day['by_bp'].get(c['bread_price'])
+            c['sold_qty'] = row['sold'] if row else 0
+            c['closed'] = day['closed']
+            c['remaining_qty'] = (row['remaining'] if row else 0) if day['closed'] else None
+            c['produced_total'] = (row['produced'] if row else 0) if day['closed'] else None
+
         return Response({
             'node': node.pk,
             'node_display': str(node),
             'date': requested_date.isoformat(),
             'source': source,
+            'closed': day['closed'],
             'categories': categories,
             **work_time_info(node),
         })
@@ -2255,6 +2367,21 @@ def _build_daily_closure_report(node, report_date=None):
         .values('bread_price_id').annotate(qty=Sum('quantity'))
         .values_list('bread_price_id', 'qty')
     )
+
+    # BUG-319 (remarque.md l.445) : sur une journée à fournée « par sacs », le
+    # « produit » par catégorie n'est plus saisi ni auto-incrémenté : il est
+    # DÉRIVÉ à la clôture (vendus + reste du jour - reste d'hier + soldés/
+    # déclassés/invendus/gratuits + envoyés - reçus). Avant clôture : aucune
+    # production n'est affichée (vendus seuls, `vendu_jour`).
+    day_production = compute_day_production(node, report_date)
+    produit_derived = bool(day_production['derived'])
+    if produit_derived and day_production['closed']:
+        produced_by_bp = {
+            bp_id: row['produced'] for bp_id, row in day_production['by_bp'].items()
+        }
+    elif produit_derived:
+        produced_by_bp = {}
+    sold_day_by_bp = {bp_id: row['sold'] for bp_id, row in day_production['by_bp'].items()}
 
     node_codes = set(Node.objects.values_list('code', flat=True))
 
@@ -2444,7 +2571,7 @@ def _build_daily_closure_report(node, report_date=None):
     category_ids = (
         set(BreadPrice.objects.filter(is_active=True).values_list('id', flat=True))
         | set(produced_by_bp) | set(normal_by_bp) | set(soldee_by_bp)
-        | set(regularisation_by_bp) | set(ns_by_bp)
+        | set(regularisation_by_bp) | set(ns_by_bp) | set(sold_day_by_bp)
         | set(disposals_by_bp_type) | set(appro_effectue_by_bp) | set(appro_recu_by_bp)
     )
     categories_by_id = {bp.id: bp for bp in BreadPrice.objects.filter(id__in=category_ids)}
@@ -2613,6 +2740,11 @@ def _build_daily_closure_report(node, report_date=None):
             'label': bp.label,
             'unit_price': bp.unit_price,
             'produit': {'quantity': produced_qty, 'fc': str(produced_value_fc)},
+            # BUG-319 : additif, `produit` garde son contrat exact. `derived` =
+            # produit dérivé à la clôture ; `closed` = journée clôturée (sinon
+            # `produit.quantity` = 0 pour une journée dérivée).
+            'produit_derive': {'derived': produit_derived, 'closed': bool(day_production['closed'])},
+            'vendu_jour': {'quantity': sold_day_by_bp.get(bp_id, 0)},
             'facture_jr': {'quantity': normal.get('qty') or 0, 'fc': str(facture_fc)},
             'commission_jr': {'fc': str(commission_fc)},
             'reste_du_jour': reste_du_jour_by_team,
@@ -2643,7 +2775,7 @@ def _build_daily_closure_report(node, report_date=None):
         total_facture_fc += facture_fc
         total_commission_fc += commission_fc
         total_mvm_interne_fc += mvm_interne_fc
-        total_produced_value_fc += produced_value_fc
+        total_produced_value_fc += max(Decimal('0.00'), produced_value_fc)
         total_reste_hier_jour_fc += reste_du_hier_jour_fc
         total_reste_jour_jour_fc += reste_du_jour_jour_fc
         # BUG-177 : NS exclue (pas une commande servie) ; RG incluse via `reg`.
@@ -2688,9 +2820,9 @@ def _build_daily_closure_report(node, report_date=None):
     # DECLARED, colonne « produit »). Le dénominateur est la somme de ces
     # mêmes quantités (et non `total_breads_produced`, qui inclut les lignes
     # CARRYOVER du stock de départ, BUG-142) : la répartition somme à 100 %.
-    declared_qty_total = sum(row['produit']['quantity'] or 0 for row in categories_payload)
+    declared_qty_total = sum(max(0, row['produit']['quantity'] or 0) for row in categories_payload)
     for row in categories_payload:
-        qty = row['produit']['quantity']
+        qty = max(0, row['produit']['quantity'] or 0)
         pct_qty = (
             (Decimal(qty) * Decimal('100') / Decimal(declared_qty_total))
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -2698,7 +2830,7 @@ def _build_daily_closure_report(node, report_date=None):
         )
         repartition_pct_par_quantite.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_qty)})
 
-        value_fc = Decimal(row['produit']['fc'])
+        value_fc = max(Decimal('0.00'), Decimal(row['produit']['fc']))
         pct_val = (
             (value_fc * Decimal('100') / total_produced_value_fc)
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -3193,24 +3325,41 @@ class DailyOpeningConfirmationView(APIView):
         for entry in lines:
             if not isinstance(entry, dict):
                 return Response({'detail': "Chaque élément de `lines` doit être un objet."}, status=status.HTTP_400_BAD_REQUEST)
+            raw_qty = entry.get('qty')
+            raw_bp = entry.get('bread_price')
             try:
-                bread_price_id = int(entry.get('bread_price'))
-                qty = int(entry.get('qty'))
-            except (TypeError, ValueError):
+                if isinstance(raw_bp, bool) or isinstance(raw_qty, bool):
+                    raise ValueError
+                bread_price_id = int(raw_bp)
+                # BUG-322 : bornes comparées sur le Decimal avant tout int().
+                qty, qty_err = _bounded_integral_decimal(raw_qty)
+                if qty_err == 'invalid':
+                    raise ValueError
+            except (TypeError, ValueError, ArithmeticError):
                 return Response(
                     {'detail': "Chaque ligne doit fournir `bread_price` et `qty` entiers."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            # BUG-162 (décision client 2026-11-10 : « Enregistre le stock même
-            # s'il est négatif ») : une quantité négative est acceptée et
-            # enregistrée telle quelle (stock de départ, BreadStock.qty_adjusted).
-            # Les valeurs non entières restent refusées ci-dessus
-            # (int('1.5') lève ValueError ; un float JSON non entier est refusé
-            # ci-dessous).
-            raw_qty = entry.get('qty')
-            if isinstance(raw_qty, bool) or (isinstance(raw_qty, float) and raw_qty != qty):
+            if qty_err == 'too_big':
+                if raw_qty is not None and str(raw_qty).strip().startswith('-'):
+                    return Response(
+                        {'detail': "Le stock de départ ne peut pas être négatif."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 return Response(
-                    {'detail': "Chaque ligne doit fournir `bread_price` et `qty` entiers."},
+                    {'detail': "Le stock de départ saisi est trop grand."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # BUG-317 (remarque.md l.441, postérieure à BUG-162) : « Ne plus
+            # accepter des négatifs sur Stock de départ de la relève ».
+            if qty < 0:
+                return Response(
+                    {'detail': "Le stock de départ ne peut pas être négatif."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if qty > 2_000_000_000:
+                return Response(
+                    {'detail': "Le stock de départ saisi est trop grand."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if bread_price_id in seen_bp_ids:

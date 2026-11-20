@@ -706,7 +706,7 @@ export const Clients: React.FC = () => {
         invoiceTeam = res.data.team || '';
         // Immediately confirm delivery (no PENDING queue for client sales)
         try {
-          const deliverRes = await salesApi.deliver(res.data.id, retroactiveDate || undefined);
+          const deliverRes = await salesApi.deliver(res.data.id, undefined, retroactiveDate || undefined);
           deliveredInvoice = deliverRes.data;
         } catch (deliverErr) {
           console.error('Auto-deliver failed', deliverErr);

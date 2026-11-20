@@ -6,6 +6,7 @@ import { useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
+import { isProduitEnAttente, PRODUIT_EN_ATTENTE_HELP } from '@/utils/clotureProduit';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
 
 // BUG-120 (volet frontend) : écran dédié « Clôture Journalière », réunissant en un seul
@@ -263,7 +264,7 @@ export const ClotureJournaliere: React.FC = () => {
                 <thead>
                   <tr style={{ fontSize: '0.58rem', textTransform: 'uppercase' }}>
                     <th>Catégorie</th>
-                    <th style={{ textAlign: 'right' }}>Produit</th>
+                    <th style={{ textAlign: 'right' }} title={PRODUIT_EN_ATTENTE_HELP}>Produit</th>
                     <th style={{ textAlign: 'right' }}>Facture/Jr</th>
                     <th style={{ textAlign: 'right' }}>CM/Jr</th>
                     <th style={{ textAlign: 'right' }} title="Reste du jour (journée entière, sans équipe). Vide tant qu'il n'est pas déclaré.">Reste du Jour</th>
@@ -285,8 +286,19 @@ export const ClotureJournaliere: React.FC = () => {
                     <tr key={cat.bread_price}>
                       <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{cat.label}</td>
                       <td style={{ textAlign: 'right' }}>
-                        {formatQty(cat.produit.quantity)}
-                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.produit.fc)}</div>
+                        {isProduitEnAttente(cat) ? (
+                          <span title={PRODUIT_EN_ATTENTE_HELP}>—</span>
+                        ) : (
+                          <>
+                            <span style={cat.produit.quantity < 0 ? { color: 'hsl(var(--color-danger))', fontWeight: 800 } : undefined}>
+                              {formatQty(cat.produit.quantity)}
+                            </span>
+                            {cat.produit.quantity < 0 && (
+                              <div style={{ fontSize: '0.58rem', color: 'hsl(var(--color-danger))', fontWeight: 700 }}>incohérence</div>
+                            )}
+                            <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.produit.fc)}</div>
+                          </>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         {formatQty(cat.facture_jr.quantity)}

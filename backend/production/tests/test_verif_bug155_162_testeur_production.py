@@ -127,34 +127,27 @@ class NegativeRemainingEndToEndTests(_Base):
         proposed = next(c for c in get.data['categories'] if c['bread_price'] == self.bp.pk)
         self.assertEqual(proposed['qty_proposed'], -20)
 
+        # BUG-317 : la valeur négative proposée n'est plus acceptée à la confirmation.
         resp = self.api.post(OPENING_URL, {
             'team': 'B', 'date': NEXT_DAY.isoformat(),
             'lines': [{'bread_price': self.bp.pk, 'qty': proposed['qty_proposed']}],
         }, format='json')
-        self.assertEqual(resp.status_code, 200, resp.data)
-        line = DailyOpeningConfirmationLine.objects.get(bread_price=self.bp)
-        self.assertEqual(line.qty_confirmed, -20)
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertFalse(DailyOpeningConfirmationLine.objects.filter(bread_price=self.bp).exists())
         stock = BreadStock.objects.get(node=self.node, bread_price=self.bp)
-        self.assertEqual(stock.qty_adjusted, 0)      # validé tel que proposé : delta nul
+        self.assertEqual(stock.qty_adjusted, 0)
         self.assertEqual(stock.qty_available, -20)
 
-        # Correction du gérant : -25 -> delta -5, puis resoumission idempotente.
+        # Correction à 0 : acceptée, ajustement +20, resoumission idempotente.
         for _ in range(2):
             resp = self.api.post(OPENING_URL, {
                 'team': 'B', 'date': NEXT_DAY.isoformat(),
-                'lines': [{'bread_price': self.bp.pk, 'qty': -25}],
+                'lines': [{'bread_price': self.bp.pk, 'qty': 0}],
             }, format='json')
             self.assertEqual(resp.status_code, 200, resp.data)
         stock.refresh_from_db()
-        self.assertEqual(stock.qty_adjusted, -5)
-        self.assertEqual(stock.qty_available, -25)
-
-        # Aucune ligne de fournée CARRYOVER négative (ni positive) pour B.
-        self.assertFalse(ProductionSessionLine.objects.filter(
-            source=ProductionSessionLine.Source.CARRYOVER, quantity__lte=0).exists())
-        self.assertFalse(ProductionSessionLine.objects.filter(
-            session__team='B', bread_price=self.bp,
-            source=ProductionSessionLine.Source.CARRYOVER).exists())
+        self.assertEqual(stock.qty_adjusted, 20)
+        self.assertEqual(stock.qty_available, 0)
 
         # La clôture de la veille est INCHANGÉE (snapshot, REMAINING, session, rapport).
         self.assertEqual(self._snapshot(), snap_before)
@@ -166,11 +159,6 @@ class NegativeRemainingEndToEndTests(_Base):
         self.assertEqual(session_after.closed_at, session_before.closed_at)
         self.assertEqual(session_after.closure_summary, session_before.closure_summary)
         self.assertEqual(self._row(DAY), row_before)
-
-        # Rapport du lendemain : reste_du_hier de B = -(-25) = +25 (convention BUG-135),
-        # sans cumul à la resoumission.
-        row_next = self._row(NEXT_DAY)
-        self.assertEqual(row_next['reste_du_hier']['B'], 25)
 
     def test_second_manual_close_is_refused_and_does_not_alter_remaining(self):
         resp = self.api.post(f'/api/production/sessions/{self.session_id}/close/',

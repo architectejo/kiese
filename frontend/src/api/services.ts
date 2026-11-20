@@ -186,10 +186,13 @@ export interface ClientImportResult {
 }
 
 export interface InvoiceLine {
-  id?: string;
+  id?: string | number;
   bread_price: string;
   bread_price_display?: string;
+  /** Quantité servie (égale au commandé tant qu'aucune livraison partielle). */
   quantity: number;
+  /** BUG-318 : quantité commandée à l'origine ; null/absent si jamais réduite. */
+  ordered_quantity?: number | null;
   unit_price?: string;
   line_total?: string;
   /**
@@ -205,6 +208,12 @@ export interface DailySummaryRow {
   node__code?: string;
   payment_type: 'CASH' | 'CREDIT';
   total: string | number;
+}
+
+/** BUG-318 : quantité servie d'une ligne pour une livraison partielle. */
+export interface ServedLinePayload {
+  id: string | number;
+  quantity: number;
 }
 
 export interface Invoice {
@@ -224,10 +233,14 @@ export interface Invoice {
   client_current_debt?: string;
   invoice_date: string;
   delivered_at?: string | null;
-  status: 'PENDING' | 'DELIVERED' | 'CANCELLED';
+  status: 'PENDING' | 'DELIVERED' | 'CANCELLED' | 'NOT_SERVED';
   payment_type: 'CASH' | 'CREDIT';
   debt_before: string;
   order_total: string;
+  /** BUG-318 : valeur commandée avant réduction / « Non servi » ; null si jamais réduite. */
+  initial_order_total?: string | null;
+  not_served_reason?: string;
+  not_served_at?: string | null;
   payment_amount: string;
   debt_after: string;
   commission_rate: string;
@@ -377,6 +390,10 @@ export interface DailyClosureCategory {
   label: string;
   unit_price: number;
   produit: DailyClosureQuantityFc;
+  /** BUG-319 : pains vendus du jour. */
+  vendu_jour?: { quantity: number };
+  /** BUG-319 : `derived` = produit calculé (vendus + restes) ; `closed` faux = « Produit » sans sens. */
+  produit_derive?: { derived: boolean; closed: boolean };
   facture_jr: DailyClosureQuantityFc;
   commission_jr: DailyClosureFcOnly;
   // Clé = équipe ('A' | 'B'), valeur = quantité (peut être négative ou nulle, CLAUDE.md §5.2).
@@ -575,9 +592,17 @@ export interface BreadStock {
   qty_sent: number;
   qty_disposed: number;
   qty_available: number;
+  /** BUG-319 : pains vendus (jour de travail courant du nœud). */
+  sold_qty?: number;
+  /** BUG-319 : restes déclarés ; `null` avant clôture. */
+  remaining_qty?: number | null;
+  /** BUG-319 : total produit dérivé ; `null` avant clôture, peut être négatif (incohérence). */
+  produced_total?: number | null;
+  /** BUG-319 : journée clôturée (restes déclarés). */
+  closed?: boolean;
 }
 
-/** BUG-144/BUG-145 : catégorie renvoyée par `GET /api/production/bread-stocks/by-date/`
+/** BUG-144/BUG-145: catégorie renvoyée par `GET /api/production/bread-stocks/by-date/`
  *  — shape plus pauvre que `BreadStock` (pas de détail produit/reçu/sorti/disposé) car la
  *  source change radicalement selon la date (solde courant vs agrégat de snapshots de
  *  clôture) ; voir docs/qa/rapports/dev-backend-2026-11-10-bug144-stock-pains-par-jour.md. */
@@ -1363,8 +1388,18 @@ export const salesApi = {
     }),
   // BUG-083 : `deliveredAt` optionnel (`AAAA-MM-JJ`) — livraison datée rétroactivement, réservé aux
   // cas où `Config.allow_backdated_sales=True` (validation réelle côté serveur).
-  deliver: (id: string, deliveredAt?: string) =>
-    apiClient.post(`/api/sales/invoices/${id}/deliver/`, deliveredAt ? { delivered_at: deliveredAt } : undefined),
+  // BUG-318 : `lines` optionnel = livraison partielle (0 <= servi <= commandé, lignes omises =
+  // servies en totalité).
+  deliver: (id: string, lines?: ServedLinePayload[], deliveredAt?: string) =>
+    apiClient.post<Invoice>(
+      `/api/sales/invoices/${id}/deliver/`,
+      lines || deliveredAt
+        ? { ...(lines ? { lines } : {}), ...(deliveredAt ? { delivered_at: deliveredAt } : {}) }
+        : undefined,
+    ),
+  // BUG-318 : « Non servi » (motif optionnel, 200 caractères max). 409 si déjà traitée.
+  markNotServed: (id: string, reason?: string) =>
+    apiClient.post<Invoice>(`/api/sales/invoices/${id}/mark-not-served/`, reason ? { reason } : {}),
   cancel: (id: string) =>
     apiClient.post(`/api/sales/invoices/${id}/cancel/`),
   // BUG-109 : correction/annulation d'une commande déjà enregistrée via une nouvelle
@@ -1374,8 +1409,6 @@ export const salesApi = {
     apiClient.post<Invoice>(`/api/sales/invoices/${id}/adjust/`, data),
   pendingDeliveries: () =>
     getList<Invoice>('/api/sales/invoices/pending_deliveries/'),
-  cleanupExpired: () =>
-    apiClient.post('/api/sales/invoices/cleanup_expired/'),
   dailySummary: () =>
     apiClient.get<DailySummaryRow[]>('/api/sales/invoices/daily_summary/'),
   breadSummary: (params?: Record<string, string>) =>

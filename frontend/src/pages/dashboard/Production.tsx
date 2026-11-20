@@ -152,7 +152,6 @@ export const Production: React.FC = () => {
   // BUG-154 : la clôture elle-même (avec saisie du « Reste du Jour » par catégorie) se fait
   // désormais dans CloseSessionModal, qui gère son propre état de soumission/erreur.
   const [closeSessionModalOpen, setCloseSessionModalOpen] = useState(false);
-  const [selectedBreadStock, setSelectedBreadStock] = useState<BreadStock | null>(null);
   // BUG-145 (remarque.md l.397) : un seul sélecteur de date pilote « Stock Pains du Jour »
   // ET « Historique des Fournées ». `sessions` (KPI, formulaire de sortie non standard —
   // filtré à "aujourd'hui" indépendamment de ce sélecteur) reste intentionnellement
@@ -725,7 +724,6 @@ export const Production: React.FC = () => {
             liveBreadStocks={breadStocks}
             nodeFilter={viewNode || undefined}
             currentNodeLabel={currentNodeLabel}
-            onSelectBreadStock={setSelectedBreadStock}
           />
 
           {/* Session history — BUG-145 : filtrée par la même `selectedDate` que ci-dessus. */}
@@ -1242,57 +1240,6 @@ export const Production: React.FC = () => {
         </div>
       </div>
       )}
-
-      {/* ═══ MODAL DÉTAIL STOCK PAIN ═══ */}
-      {selectedBreadStock && (() => {
-        const bs = selectedBreadStock;
-        const total = bs.qty_produced + bs.qty_received;
-        const pctProd = total > 0 ? Math.round((bs.qty_produced / total) * 100) : 0;
-        const pctRecu = total > 0 ? Math.round((bs.qty_received / total) * 100) : 0;
-        const valDispo = bs.qty_available * bs.unit_price;
-        return (
-          <Modal
-            isOpen={true}
-            onClose={() => setSelectedBreadStock(null)}
-            title={`Détail Stock — ${bs.bread_price_display}`}
-            subtitle={bs.node_display || bs.node}
-            maxWidth="440px"
-          >
-              {/* Disponible */}
-              <div style={{ textAlign: 'center', padding: '14px', borderRadius: 'var(--radius-sm)', background: `hsl(${bs.qty_available > 0 ? 'var(--color-success)' : 'var(--color-danger)'} / 0.1)`, border: `1px solid hsl(${bs.qty_available > 0 ? 'var(--color-success)' : 'var(--color-danger)'} / 0.3)`, marginBottom: '16px' }}>
-                <div style={{ fontSize: '2rem', fontWeight: 800, color: `hsl(${bs.qty_available > 0 ? 'var(--color-success)' : 'var(--color-danger)'})` }}>{bs.qty_available}</div>
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))' }}>PAINS DISPONIBLES</div>
-                <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', marginTop: '2px' }}>{valDispo.toLocaleString('fr-FR')} FC</div>
-              </div>
-
-              {/* Breakdown */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                {[
-                  { label: 'Produits (propre production)', value: bs.qty_produced, pct: pctProd, color: 'var(--accent-color)', icon: '🔥' },
-                  { label: 'Reçus (transferts entrants)', value: bs.qty_received, pct: pctRecu, color: 'var(--color-info)', icon: '📦' },
-                  { label: 'Expédiés (transferts sortants)', value: bs.qty_sent, color: 'var(--color-warning)', icon: '🚚', subtract: true },
-                  { label: 'Disposés (ventes soldées / pertes)', value: bs.qty_disposed, color: 'var(--color-danger)', icon: '📉', subtract: true },
-                ].map(row => (
-                  <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '1.6fr auto', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
-                      <span style={{ marginRight: '5px' }}>{row.icon}</span>{row.label}
-                      {row.pct !== undefined && row.pct > 0 && <span style={{ marginLeft: '6px', fontSize: '0.6rem', color: 'hsl(var(--text-muted))' }}>({row.pct}%)</span>}
-                    </div>
-                    <div style={{ textAlign: 'right', fontWeight: 800, fontSize: '0.85rem', color: `hsl(${row.color})` }}>
-                      {row.subtract ? '−' : '+'}{row.value}
-                    </div>
-                  </div>
-                ))}
-                <div style={{ borderTop: '1px solid hsl(var(--border-color))', paddingTop: '6px', display: 'grid', gridTemplateColumns: '1.6fr auto', alignItems: 'center' }}>
-                  <div style={{ fontSize: '0.7rem', fontWeight: 800 }}>= Disponible</div>
-                  <div style={{ textAlign: 'right', fontWeight: 800, fontSize: '0.9rem', color: `hsl(${bs.qty_available >= 0 ? 'var(--color-success)' : 'var(--color-danger)'})` }}>{bs.qty_available}</div>
-                </div>
-              </div>
-
-              <button onClick={() => setSelectedBreadStock(null)} className="btn btn-secondary" style={{ width: '100%', padding: '8px', fontSize: '0.8rem' }}>Fermer</button>
-          </Modal>
-        );
-      })()}
 
       {/* ═══ MODAL VOIR PLUS — Toutes les fournées ═══ */}
       <Modal

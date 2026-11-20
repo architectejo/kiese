@@ -119,13 +119,31 @@ def regenerate_facturier_reports(node, target_date):
         special_code__in=[Invoice.SpecialCode.RG, Invoice.SpecialCode.NS],
     ).select_related('facturier')
 
-    if not invoices.exists():
+    # BUG-320 : une facture « Non servi » garde son versement (BP créditée,
+    # BUG-318) : l'argent a été encaissé par le facturier et doit entrer dans
+    # le cash théorique, à la date de la déclaration « non servi ». Sa valeur
+    # de commande est 0 : jamais une vente, ni crédit, ni détail de pains.
+    not_served_paid = Invoice.objects.filter(
+        node=node,
+        status=Invoice.Status.NOT_SERVED,
+        payment_amount__gt=0,
+        **delivered_on_work_date_filter(node, target_date, field='not_served_at'),
+    ).exclude(
+        special_code__in=[Invoice.SpecialCode.RG, Invoice.SpecialCode.NS],
+    ).select_related('facturier')
+
+    if not invoices.exists() and not not_served_paid.exists():
         return []
 
     groups = defaultdict(lambda: {
         'facturier': None, 'team': '',
         'total_cash': Decimal('0'), 'total_credit': Decimal('0'),
     })
+    for inv in not_served_paid:
+        key = (inv.facturier_id, inv.team)
+        groups[key]['facturier'] = inv.facturier
+        groups[key]['team'] = inv.team
+        groups[key]['total_cash'] += inv.payment_amount
     for inv in invoices:
         key = (inv.facturier_id, inv.team)
         groups[key]['facturier'] = inv.facturier

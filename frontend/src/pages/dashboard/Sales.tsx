@@ -4,13 +4,14 @@ import {
   FiTruck, FiPlusCircle, FiClock, FiCheckCircle,
   FiAlertCircle, FiSearch, FiX, FiPrinter, FiChevronRight, FiCreditCard
 } from 'react-icons/fi';
-import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdjustPayload } from '@/api/services';
+import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdjustPayload, ServedLinePayload } from '@/api/services';
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
 import { useWorkDate } from '@/store/workDateStore';
 import { ThermalReceipt, ReceiptData, ReceiptLine } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
+import { PendingDeliveryActions, type PendingDeliveryLine } from '@/components/sales/PendingDeliveryActions';
 
 // ── Delivery queue item ───────────────────────────────────────────────────────
 interface QueueItem {
@@ -22,8 +23,13 @@ interface QueueItem {
   nodeDisplay: string;
   facturierDisplay: string;
   livreurDisplay?: string;
-  lines: { label: string; qty: number }[];
+  lines: PendingDeliveryLine[];
   totalValue: number;
+  /** BUG-318 : valeur commandée avant réduction (null si jamais réduite). */
+  initialTotal: number | null;
+  /** BUG-318 : statut serveur NOT_SERVED (distinct d'« Annulé » et du code spécial NS). */
+  isNotServed: boolean;
+  notServedReason: string;
   versement: number;
   paymentType: 'CASH' | 'CREDIT';
   debtBefore: number;
@@ -36,7 +42,7 @@ interface QueueItem {
   specialCode: string;
   /** BUG-177 : facture « Non Servi » (NS) — reste PENDING indéfiniment, jamais livrable. */
   isNonServi: boolean;
-  status: 'En attente' | 'Livré';
+  status: 'En attente' | 'Livré' | 'Non servi';
   invoiceDate: string;
   timeAdded: string;
   createdAt: string;
@@ -58,10 +64,15 @@ const mapInvoice = (inv: Invoice, bpMap: Record<number, BreadPrice>): QueueItem 
   facturierDisplay: inv.facturier_display || '—',
   livreurDisplay: inv.livreur_display || undefined,
   lines: (inv.lines || []).map(l => ({
+    id: l.id,
     label: bpMap[Number(l.bread_price)]?.label || l.bread_price_display || l.bread_price,
     qty: l.quantity,
+    unitPrice: l.unit_price != null ? parseFloat(l.unit_price) || 0 : (bpMap[Number(l.bread_price)]?.unit_price || 0),
   })),
   totalValue: parseFloat(inv.order_total) || 0,
+  initialTotal: inv.initial_order_total != null ? parseFloat(inv.initial_order_total) || 0 : null,
+  isNotServed: inv.status === 'NOT_SERVED',
+  notServedReason: inv.not_served_reason || '',
   versement: parseFloat(inv.payment_amount) || 0,
   paymentType: inv.payment_type,
   debtBefore: parseFloat(inv.debt_before) || 0,
@@ -72,7 +83,7 @@ const mapInvoice = (inv: Invoice, bpMap: Record<number, BreadPrice>): QueueItem 
   isRepayment: inv.is_debt_repayment === true,
   specialCode: inv.special_code || '',
   isNonServi: inv.special_code === 'NS' && inv.is_debt_repayment !== true,
-  status: inv.status === 'DELIVERED' || inv.status === 'CANCELLED' ? 'Livré' : 'En attente',
+  status: inv.status === 'NOT_SERVED' ? 'Non servi' : inv.status === 'DELIVERED' || inv.status === 'CANCELLED' ? 'Livré' : 'En attente',
   invoiceDate: inv.invoice_date || inv.created_at?.split('T')[0] || '',
   timeAdded: new Date(inv.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
   createdAt: inv.created_at,
@@ -85,6 +96,10 @@ const mapInvoice = (inv: Invoice, bpMap: Record<number, BreadPrice>): QueueItem 
 // ── Main component ─────────────────────────────────────────────────────────────
 const TEAM_NOT_ASSIGNED_MESSAGE =
   "Désignez l'équipe de service du jour avant de facturer. La boîte de désignation vient de s'ouvrir.";
+
+/** Code HTTP d'une erreur axios (sans `any`), undefined hors réponse serveur. */
+const axiosStatus = (err: unknown): number | undefined =>
+  (err as { response?: { status?: number } } | null)?.response?.status;
 
 export const Sales: React.FC = () => {
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
@@ -160,6 +175,8 @@ export const Sales: React.FC = () => {
   // Modale de confirmation de livraison avec date rétroactive optionnelle (BUG-083)
   const [deliverModalItem, setDeliverModalItem] = useState<QueueItem | null>(null);
   const [deliverDate, setDeliverDate] = useState('');
+  // BUG-318 : quantités servies saisies sur la carte, transmises via la modale de date rétroactive.
+  const [deliverLines, setDeliverLines] = useState<ServedLinePayload[] | undefined>(undefined);
 
   // BUG-090 : remboursement de dette / dépôt « client épargne » — paiement seul, sans
   // ligne de pain. Même mécanisme que Clients.tsx (salesApi.createRepayment), rattaché
@@ -190,8 +207,8 @@ export const Sales: React.FC = () => {
       setQueueComplete(false);
       setQueueError(null);
       setQueueProgress({ loaded: 0, total: null });
-      // BUG-284 : le nettoyage est réservé au gérant et au-dessus (403 pour le facturier).
-      if (canAdjustInvoice) await salesApi.cleanupExpired().catch(() => {});
+      // BUG-318 : l'expiration (12 h -> « Non servi ») est appliquée par le serveur à la lecture ;
+      // plus aucun nettoyage côté interface, une facture n'est jamais supprimée.
       // Charge les factures du JOUR (PENDING + DELIVERED), pas seulement PENDING :
       // une commande livrée doit rester comptée dans les stats de la page tant
       // qu'elle n'est pas annulée — seul un statut CANCELLED doit l'en exclure.
@@ -266,7 +283,7 @@ export const Sales: React.FC = () => {
     } finally {
       if (seq === queueLoadSeqRef.current) setIsLoading(false);
     }
-  }, [workDate, canAdjustInvoice]);
+  }, [workDate]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -547,11 +564,11 @@ export const Sales: React.FC = () => {
     }
   };
 
-  const confirmDelivery = async (item: QueueItem, deliveredAt?: string) => {
+  const confirmDelivery = async (item: QueueItem, deliveredAt?: string, servedLines?: ServedLinePayload[]) => {
     setDeliveryError(null);
     try {
-      const res = await salesApi.deliver(item._apiId, deliveredAt);
-      const inv = res.data as Invoice;
+      const res = await salesApi.deliver(item._apiId, servedLines, deliveredAt);
+      const inv = res.data;
       // Build receipt
       // BUG-111 : utiliser le prix réellement facturé et figé par le serveur (InvoiceLine.unit_price,
       // backend/sales/models.py::InvoiceLine.save()) plutôt que le prix catalogue courant (bpMap),
@@ -572,7 +589,9 @@ export const Sales: React.FC = () => {
         clientCode: item.clientCode || '—',
         clientName: inv.client_display || item.clientName,
         lines: receiptLines,
-        orderTotal: parseFloat(inv.order_total) || item.totalValue,
+        orderTotal: parseFloat(inv.order_total) || 0,
+        // BUG-318 : « commandé initial » si la livraison a été partielle.
+        initialOrderTotal: inv.initial_order_total != null ? parseFloat(inv.initial_order_total) || 0 : undefined,
         versement: parseFloat(inv.payment_amount) || item.versement,
         commissionRate: inv.commission_rate != null ? parseFloat(inv.commission_rate) : item.commissionRate,
         debtBefore: parseFloat(inv.debt_before) || item.debtBefore,
@@ -596,34 +615,50 @@ export const Sales: React.FC = () => {
       }
       setDeliverModalItem(null);
       setDeliverDate('');
+      setDeliverLines(undefined);
     } catch (err: unknown) {
       const msg = getErrorDetail(err, 'Erreur lors de la confirmation de livraison.');
       setDeliveryError({ id: item._apiId, message: msg });
-      console.error('Delivery failed', err);
+      // 409 : la facture a changé de statut entre-temps (déjà non servie / expirée) -> file à jour.
+      if (axiosStatus(err) === 409) { setDeliverModalItem(null); await loadData(); }
+    }
+  };
+
+  // BUG-318 : « Non servi » (motif optionnel). 409 = déjà traitée -> message + rechargement.
+  const markNotServed = async (item: QueueItem, reason: string) => {
+    setDeliveryError(null);
+    try {
+      await salesApi.markNotServed(item._apiId, reason || undefined);
+      await loadData();
+    } catch (err: unknown) {
+      setDeliveryError({ id: item._apiId, message: getErrorDetail(err, 'Erreur lors de la déclaration « Non servi ».') });
+      if (axiosStatus(err) === 409) await loadData();
     }
   };
 
   // BUG-083 : clic sur « Imprimer le reçu » — si le réglage est actif, propose une petite
   // confirmation avec date de livraison rétroactive optionnelle ; sinon, comportement inchangé
   // (livraison immédiate, datée d'aujourd'hui).
-  const handleDeliverClick = (item: QueueItem) => {
+  const handleDeliverClick = (item: QueueItem, lines?: ServedLinePayload[]) => {
     if (allowBackdatedSales) {
       setDeliverDate('');
+      setDeliverLines(lines);
       setDeliverModalItem(item);
     } else {
-      confirmDelivery(item);
+      confirmDelivery(item, undefined, lines);
     }
   };
 
   const queueProgressLabel = `calcul en cours… ${queueProgress.loaded}/${queueProgress.total ?? '…'}`;
   const pendingCount = queue.filter(o => o.status === 'En attente' && !o.isNonServi).length;
-  const livrésCount = queue.filter(o => o.status === 'Livré').length;  const totalFacture = queue.reduce((a, o) => a + o.totalValue, 0);
+  const livrésCount = queue.filter(o => o.status === 'Livré').length;  const totalFacture = queue.reduce((a, o) => a + (o.isNotServed ? 0 : o.totalValue), 0);
 
   // ── Renders a single delivery-queue card (reused by main view & "Voir plus" modal) ──
   const renderQueueCard = (item: QueueItem, detailed: boolean = false) => {
     // BUG-177 : une NS n'est jamais « à livrer » ; elle est affichée comme enregistrée.
     const isNonServi = item.isNonServi;
-    const isPending = item.status === 'En attente' && !isNonServi;
+    const isNotServed = item.isNotServed;
+    const isPending = item.status === 'En attente' && !isNonServi && !isNotServed;
     const avatarColor = `hsl(${(item.clientName.charCodeAt(0) * 37 + (item.clientCode.charCodeAt(3) || 0) * 13) % 360}, 58%, 38%)`;
     return (
       <div key={item.id} style={{
@@ -673,8 +708,8 @@ export const Sales: React.FC = () => {
               {detailed ? `${item.invoiceDate ? new Date(item.invoiceDate).toLocaleDateString('fr-FR') : '—'} ${item.timeAdded}` : item.timeAdded}
             </span>
           </div>
-          <span className={`badge ${isNonServi ? 'badge-secondary' : isPending ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.58rem' }}>
-            {isNonServi ? 'NON SERVIE — ENREGISTRÉE' : item.status.toUpperCase()}
+          <span className={`badge ${isNotServed || isNonServi ? 'badge-secondary' : isPending ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.58rem' }}>
+            {isNotServed ? 'NON SERVI' : isNonServi ? 'NON SERVIE — ENREGISTRÉE' : item.status.toUpperCase()}
           </span>
         </div>
 
@@ -727,7 +762,7 @@ export const Sales: React.FC = () => {
                   <span style={{ fontWeight: 800, color: 'hsl(var(--text-primary))', minWidth: '28px' }}>{l.qty}×</span>
                   <span style={{ color: 'hsl(var(--text-secondary))' }}>{l.label}</span>
                   <span style={{ marginLeft: 'auto', fontWeight: 700, color: 'hsl(var(--accent-color))' }}>
-                    {(l.qty * (bpMap[Object.keys(bpMap).find(k => bpMap[k]?.label === l.label) ?? '']?.unit_price || 0)).toLocaleString('fr-FR')} FC
+                    {(l.qty * l.unitPrice).toLocaleString('fr-FR')} FC
                   </span>
                 </div>
               ))}
@@ -737,6 +772,9 @@ export const Sales: React.FC = () => {
             <div style={{ display: 'flex', gap: '12px', fontSize: '0.65rem', flexWrap: 'wrap' }}>
               <span style={{ color: 'hsl(var(--text-secondary))' }}>
                 Total: <strong style={{ color: 'hsl(var(--accent-color))' }}>{item.totalValue.toLocaleString('fr-FR')} FC</strong>
+                {item.initialTotal != null && item.initialTotal !== item.totalValue && (
+                  <span style={{ color: 'hsl(var(--text-muted))' }}> (commandé initial : {item.initialTotal.toLocaleString('fr-FR')} FC)</span>
+                )}
               </span>
               <span style={{ color: 'hsl(var(--text-secondary))' }}>
                 Versé: <strong style={{ color: 'hsl(var(--color-success))' }}>{item.versement.toLocaleString('fr-FR')} FC</strong>
@@ -776,50 +814,25 @@ export const Sales: React.FC = () => {
         </div>
 
         {/* Action footer */}
-        {isPending && (() => {
-          const msLeft = 12 * 3600 * 1000 - (Date.now() - new Date(item.createdAt).getTime());
-          const hLeft = Math.floor(msLeft / 3600000);
-          const mLeft = Math.floor((msLeft % 3600000) / 60000);
-          const isUrgent = msLeft < 3600000;
-          return (
-            <div style={{ padding: '8px 12px', borderTop: `1px solid hsl(var(--color-warning) / 0.2)`, backgroundColor: 'hsl(var(--color-warning) / 0.04)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.6rem', color: isUrgent ? 'hsl(var(--color-danger))' : 'hsl(var(--text-muted))', fontWeight: isUrgent ? 700 : 400 }}>
-                <FiClock style={{ fontSize: '0.68rem', flexShrink: 0 }} />
-                <span>
-                  {msLeft > 0
-                    ? `Expire dans ${hLeft}h${String(mLeft).padStart(2, '0')}`
-                    : 'Expirée — sera supprimée au prochain rechargement'}
-                </span>
-              </div>
-              {deliveryError && deliveryError.id === item._apiId && (
-                <div style={{ backgroundColor: 'hsl(var(--color-danger) / 0.1)', border: '1px solid hsl(var(--color-danger) / 0.3)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontSize: '0.68rem', color: 'hsl(var(--color-danger))', display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
-                  <FiAlertCircle style={{ flexShrink: 0, marginTop: '1px' }} />
-                  <span>{deliveryError.message}</span>
-                </div>
-              )}
-              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px' }}>
-                <button
-                  onClick={() => cancelInvoice(item)}
-                  className="btn btn-secondary"
-                  style={{ padding: '7px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '5px', color: 'hsl(var(--color-danger))', borderColor: 'hsl(var(--color-danger) / 0.4)' }}
-                  title="Annuler la commande — restitue le stock et la balance client"
-                >
-                  <FiX />
-                  <span>Annuler</span>
-                </button>
-                <button
-                  onClick={() => handleDeliverClick(item)}
-                  className="btn btn-primary"
-                  style={{ padding: '7px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-                  title="Confirmer la livraison et imprimer le reçu"
-                >
-                  <FiPrinter />
-                  <span>Imprimer le reçu</span>
-                </button>
-              </div>
-            </div>
-          );
-        })()}
+        {isPending && (
+          <PendingDeliveryActions
+            key={`${item._apiId}-${item.lines.map(l => l.qty).join('.')}`}
+            item={item}
+            errorMessage={deliveryError && deliveryError.id === item._apiId ? deliveryError.message : null}
+            onCancel={() => cancelInvoice(item)}
+            onDeliver={lines => handleDeliverClick(item, lines)}
+            onNotServed={reason => markNotServed(item, reason)}
+          />
+        )}
+        {isNotServed && (
+          <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--text-secondary))', fontSize: '0.7rem', fontWeight: 700, flexWrap: 'wrap' }}>
+            <FiCheckCircle />
+            <span>
+              Non servi — aucun pain remis{item.notServedReason ? ` (motif : ${item.notServedReason})` : ''}
+              {item.initialTotal != null && ` · commandé : ${item.initialTotal.toLocaleString('fr-FR')} FC`}
+            </span>
+          </div>
+        )}
         {isNonServi && (
           <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--text-secondary))', fontSize: '0.7rem', fontWeight: 700 }}>
@@ -1347,7 +1360,7 @@ export const Sales: React.FC = () => {
       {/* ── BUG-083 : confirmation de livraison avec date rétroactive optionnelle ──────────── */}
       <Modal
         isOpen={!!deliverModalItem}
-        onClose={() => { setDeliverModalItem(null); setDeliverDate(''); }}
+        onClose={() => { setDeliverModalItem(null); setDeliverDate(''); setDeliverLines(undefined); }}
         title="Confirmer la livraison"
         subtitle={deliverModalItem ? `Facture ${deliverModalItem.id} — ${deliverModalItem.clientName}` : undefined}
         maxWidth="420px"
@@ -1378,7 +1391,7 @@ export const Sales: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
                 type="button"
-                onClick={() => { setDeliverModalItem(null); setDeliverDate(''); }}
+                onClick={() => { setDeliverModalItem(null); setDeliverDate(''); setDeliverLines(undefined); }}
                 className="btn btn-secondary"
                 style={{ padding: '7px 14px', fontSize: '0.75rem' }}
               >
@@ -1389,7 +1402,7 @@ export const Sales: React.FC = () => {
                 onClick={() => {
                   const todayStr = workDate;
                   const d = deliverDate && deliverDate !== todayStr ? deliverDate : undefined;
-                  confirmDelivery(deliverModalItem, d);
+                  confirmDelivery(deliverModalItem, d, deliverLines);
                 }}
                 className="btn btn-primary"
                 style={{ padding: '7px 14px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}
@@ -1699,10 +1712,10 @@ export const Sales: React.FC = () => {
                           <td><span className="badge badge-info" style={{ fontSize: '0.6rem' }}>{o.id}</span></td>
                           <td style={{ fontWeight: 700 }}>{o.clientName}</td>
                           <td>
-                            <span className={`badge ${o.status === 'Livré' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.58rem' }}>{o.status.toUpperCase()}</span>
+                            <span className={`badge ${o.status === 'Livré' ? 'badge-success' : o.status === 'Non servi' ? 'badge-secondary' : 'badge-warning'}`} style={{ fontSize: '0.58rem' }}>{o.status.toUpperCase()}</span>
                           </td>
                           <td style={{ fontSize: '0.68rem', color: 'hsl(var(--text-secondary))' }}>{o.paymentType === 'CASH' ? 'CASH' : 'CRÉDIT'}</td>
-                          <td style={{ textAlign: 'right', fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{o.totalValue.toLocaleString('fr-FR')} FC</td>
+                          <td style={{ textAlign: 'right', fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{o.isNotServed ? '—' : `${o.totalValue.toLocaleString('fr-FR')} FC`}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -59,6 +59,13 @@ class ProductionSession(SyncableModel):
         default=False, verbose_name=_("Pains incrémentés automatiquement à la livraison des ventes"),
     )
 
+    # BUG-319 : valeur (FC, prix catalogue) des pains LIVRÉS suivie pour la barre
+    # de progression d'une fournée par sacs (`auto_track`). N'est PAS de la
+    # production : le « produit » par catégorie est dérivé à la clôture.
+    delivered_value_fc = models.PositiveBigIntegerField(
+        default=0, verbose_name=_("Valeur livrée suivie pour l'avancement (FC)"),
+    )
+
     is_closed = models.BooleanField(default=False, verbose_name=_("Session clôturée"))
     # BUG-093 : horodatage de la clôture (action `close`), et snapshot figé du
     # recoupement automatique (produit/vendu/soldé-déclassé-invendu-gratuit/
@@ -122,6 +129,10 @@ class ProductionSession(SyncableModel):
             .quantize(Decimal('1'), rounding=ROUND_HALF_UP)
         )
         self.yield_gap         = total_fc - self.theoretical_yield
+        if self.auto_track and not self.is_closed:
+            # BUG-319 : fournée par sacs en cours = pas d'écart avant clôture
+            # (le produit est dérivé à la clôture, `finalize_derived_production`).
+            self.yield_gap = 0
         # sync legacy per-price fields (best-effort, by unit_price) — sommées
         # sur TOUTES les lignes (DECLARED + CARRYOVER), jamais écrasées entre
         # elles si deux lignes de sources différentes partagent le même
@@ -394,6 +405,19 @@ class DailyBreadStockSnapshot(models.Model):
         bread_price_ids = set(
             session.lines.values_list('bread_price_id', flat=True)
         ) | set(remaining_by_bp.keys())
+        if session.auto_track:
+            # BUG-319 : une fournée par sacs n'a plus de ligne DECLARED par
+            # catégorie vendue ; les catégories vendues ce jour doivent quand
+            # même avoir un instantané (0 si aucun reste déclaré), sinon le
+            # chaînage « reste d'hier » reprendrait un ancien reste périmé.
+            from sales.models import Invoice, InvoiceLine
+            from core.workday import delivered_on_work_date_filter
+            bread_price_ids |= set(
+                InvoiceLine.objects.filter(
+                    invoice__node=session.node, invoice__status=Invoice.Status.DELIVERED,
+                    **delivered_on_work_date_filter(session.node, session.date, 'invoice__delivered_at'),
+                ).values_list('bread_price_id', flat=True)
+            )
 
         for bread_price_id in bread_price_ids:
             cls.objects.update_or_create(

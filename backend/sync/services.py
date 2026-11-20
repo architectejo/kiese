@@ -303,12 +303,23 @@ def _push_invoice(node, record):
         new_status = record.get('status')
         changed_fields = []
         if new_status and new_status != existing.status:
-            if existing.status == 'PENDING' and new_status in ('DELIVERED', 'CANCELLED'):
+            if existing.status == 'PENDING' and new_status in ('DELIVERED', 'CANCELLED', 'NOT_SERVED'):
                 existing.status = new_status
                 changed_fields.append('status')
                 if record.get('delivered_at'):
                     existing.delivered_at = record['delivered_at']
                     changed_fields.append('delivered_at')
+                # BUG-321 : Non servi / livraison partielle (BUG-318) — les
+                # montants réduits et le motif remontent avec la transition.
+                if new_status == 'NOT_SERVED':
+                    for fname in ('not_served_reason', 'not_served_at'):
+                        if record.get(fname) not in (None, ''):
+                            setattr(existing, fname, record[fname])
+                            changed_fields.append(fname)
+                for fname in ('order_total', 'payment_amount', 'debt_after', 'initial_order_total'):
+                    if record.get(fname) not in (None, ''):
+                        setattr(existing, fname, _to_decimal(record[fname]))
+                        changed_fields.append(fname)
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
         return _record_result(record_id, True)
@@ -354,7 +365,24 @@ def _push_invoice_line(node, record):
     from sales.models import Invoice, InvoiceLine
 
     record_id = record.get('id')
-    if InvoiceLine.objects.filter(pk=record_id).exists():
+    existing_line = InvoiceLine.objects.filter(pk=record_id).first() if record_id else None
+    if existing_line is not None:
+        # BUG-321 : quantité servie réduite (livraison partielle / non servi).
+        # Le prix figé et le commandé initial restent inchangés ; on ne
+        # propage que quantity / ordered_quantity (line_total recalculé).
+        changed = []
+        for fname in ('quantity', 'ordered_quantity'):
+            val = record.get(fname)
+            if val is not None and not isinstance(val, bool) and int(val) != getattr(existing_line, fname):
+                setattr(existing_line, fname, int(val))
+                changed.append(fname)
+        if changed:
+            # update() : `InvoiceLine.save()` re-lirait le prix du catalogue.
+            InvoiceLine.objects.filter(pk=existing_line.pk).update(
+                quantity=existing_line.quantity,
+                ordered_quantity=existing_line.ordered_quantity,
+                line_total=existing_line.quantity * existing_line.unit_price,
+            )
         return _record_result(record_id, True)
 
     invoice = Invoice.objects.filter(pk=record.get('invoice')).first()

@@ -10,6 +10,7 @@ import type {
   DailyClosureReport,
   DailyClosureRepartitionRow,
 } from '@/api/services';
+import { isProduitEnAttente } from '@/utils/clotureProduit';
 import { formatFC, formatQty, REGULARISATION_HELP, NON_SERVI_HELP } from '@/pages/dashboard/ClotureJournaliere';
 
 type RepartitionMode = 'QUANTITE' | 'VALEUR';
@@ -126,7 +127,8 @@ export function exportClotureToExcel(
   report.categories.forEach(cat => {
     decompRows.push([
       cat.label,
-      cat.produit.quantity, toNum(cat.produit.fc),
+      isProduitEnAttente(cat) ? null : cat.produit.quantity,
+      isProduitEnAttente(cat) ? null : toNum(cat.produit.fc),
       cat.facture_jr.quantity, toNum(cat.facture_jr.fc),
       toNum(cat.commission_jr.fc),
       cat.reste_du_jour_jour ?? null, cat.reste_du_hier_jour ?? null,
@@ -194,7 +196,7 @@ export function printClotureReport(
   const decompRows = report.categories.map(cat => `
     <tr>
       <td>${cat.label}</td>
-      <td style="text-align:right">${formatQty(cat.produit.quantity)}<br/><small>${formatFC(cat.produit.fc)}</small></td>
+      <td style="text-align:right">${isProduitEnAttente(cat) ? '—' : `${formatQty(cat.produit.quantity)}<br/><small>${formatFC(cat.produit.fc)}</small>`}</td>
       <td style="text-align:right">${formatQty(cat.facture_jr.quantity)}<br/><small>${formatFC(cat.facture_jr.fc)}</small></td>
       <td style="text-align:right">${formatFC(cat.commission_jr.fc)}</td>
       <td style="text-align:right">${cat.reste_du_jour_jour == null ? '—' : formatQty(cat.reste_du_jour_jour)}</td>

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Modal } from '@/components/shared/Modal';
-import { SignedIntegerField } from '@/components/production/SignedIntegerField';
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { useAuthStore } from '@/store/authStore';
@@ -68,15 +67,24 @@ interface OpeningStockConfirmationModalProps {
 
 type DraftLines = Record<number, string>;
 
-function parseDraft(raw: string | undefined): number {
-  const n = raw === undefined || raw === '' ? 0 : parseInt(raw, 10);
-  return Number.isFinite(n) ? n : 0;
+/** BUG-317 : plafond accepté par le serveur (« Le stock de départ saisi est trop grand. »). */
+const MAX_OPENING_QTY = 2_000_000_000;
+
+/** BUG-317 : ne garde que les chiffres (ni « - », ni décimales, ni espaces collés). */
+function sanitizeDigits(raw: string): string {
+  return raw.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+}
+
+/** BUG-317 : une ligne est valide si elle est un entier ≥ 0 dans la limite du serveur. */
+function isValidDraft(raw: string | undefined): boolean {
+  return raw !== undefined && /^\d+$/.test(raw) && Number(raw) <= MAX_OPENING_QTY;
 }
 
 function buildDraftFromProposed(report: OpeningConfirmationReport): DraftLines {
   const draft: DraftLines = {};
   for (const category of report.categories) {
-    draft[category.bread_price] = String(category.qty_proposed);
+    // BUG-317 : un stock physique négatif est proposé à 0 (les négatifs sont refusés).
+    draft[category.bread_price] = String(Math.max(0, Math.trunc(Number(category.qty_proposed)) || 0));
   }
   return draft;
 }
@@ -236,11 +244,13 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
 
   const handleQtyChange = (breadPriceId: number, value: string) => {
     touchedRef.current = true;
-    setDraft(prev => ({ ...prev, [breadPriceId]: value }));
+    setDraft(prev => ({ ...prev, [breadPriceId]: sanitizeDigits(value) }));
   };
 
+  const hasInvalidLine = report != null && report.categories.some(c => !isValidDraft(draft[c.bread_price]));
+
   const handleSubmit = async () => {
-    if (!report) return;
+    if (!report || hasInvalidLine) return;
     setSubmitting(true);
     setError(null);
     setAdjustmentMessages(null);
@@ -250,10 +260,8 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
     }
     try {
       const lines = report.categories.map(category => {
-        const raw = draft[category.bread_price];
-        const parsed = raw === undefined || raw === '' ? 0 : parseInt(raw, 10);
-        // BUG-162 : un stock de départ négatif est enregistré tel quel (décision client).
-        return { bread_price: category.bread_price, qty: Number.isFinite(parsed) ? parsed : 0 };
+        // BUG-317 : entiers ≥ 0 uniquement (validité contrôlée avant l'envoi).
+        return { bread_price: category.bread_price, qty: parseInt(draft[category.bread_price], 10) };
       });
       // Rotation : le serveur décide de l'équipe (désignée) et de la journée ; ni `team` ni `date`.
       const { data } = await productionApi.openingConfirmation.submit(
@@ -344,7 +352,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
               onClick={handleSubmit}
               className="btn btn-primary"
               style={{ padding: '10px 18px', fontSize: '0.85rem' }}
-              disabled={submitting || loading || !report}
+              disabled={submitting || loading || !report || hasInvalidLine}
             >
               {submitting ? 'Validation...' : isRotation && !isManualMode ? 'Valider le stock de départ' : `Valider pour l'équipe ${selectedTeam}`}
             </button>
@@ -448,12 +456,12 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
             Pains restants par catégorie
           </label>
 
-          {report.categories.some(c => parseDraft(draft[c.bread_price]) < 0) && (
+          {hasInvalidLine && (
             <div style={{
               fontSize: '0.78rem', marginBottom: '10px', color: 'hsl(var(--color-danger))',
               backgroundColor: 'hsl(var(--color-danger) / 0.08)', padding: '8px 10px', borderRadius: 'var(--radius-sm)',
             }}>
-              Stock négatif : la valeur sera enregistrée telle quelle.
+              Chaque quantité doit être un nombre entier supérieur ou égal à 0 (maximum 2 000 000 000).
             </div>
           )}
 
@@ -481,12 +489,28 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
                       {category.label}
                     </div>
                   </div>
-                  <SignedIntegerField
-                    value={parseDraft(draft[category.bread_price])}
-                    onChange={n => handleQtyChange(category.bread_price, String(n))}
-                    ariaLabel={`Stock de départ — ${category.label}`}
+                  <input
+                    type="number"
+                    min={0}
+                    max={MAX_OPENING_QTY}
+                    step={1}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="input"
+                    value={draft[category.bread_price] ?? ''}
+                    onChange={e => handleQtyChange(category.bread_price, e.target.value)}
+                    onKeyDown={e => { if (['-', '+', '.', ',', 'e', 'E'].includes(e.key)) e.preventDefault(); }}
+                    onPaste={e => {
+                      e.preventDefault();
+                      handleQtyChange(category.bread_price, e.clipboardData.getData('text'));
+                    }}
+                    aria-label={`Stock de départ — ${category.label}`}
+                    aria-invalid={!isValidDraft(draft[category.bread_price])}
                     disabled={submitting}
-                    width="150px"
+                    style={{
+                      width: '150px', minHeight: '44px', textAlign: 'right', fontSize: '1rem', fontWeight: 700,
+                      ...(isValidDraft(draft[category.bread_price]) ? {} : { borderColor: 'hsl(var(--color-danger))' }),
+                    }}
                   />
                 </div>
               ))}

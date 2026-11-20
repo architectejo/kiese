@@ -87,17 +87,19 @@ class NsRgInvoiceTests(TestCase):
             self.assertIn('Non Servi', resp.data['detail'])
         self.assertEqual(Invoice.objects.get(pk=inv_id).status, Invoice.Status.PENDING)
 
-    def test_cleanup_expired_spares_ns_but_purges_normal(self):
+    def test_cleanup_expired_spares_ns_but_marks_normal_not_served(self):
         ns_id = self._post('NS', 'CREDIT', payment='0.00').data['id']
         normal_id = self._post('', 'CASH', payment='2000.00').data['id']
         old = timezone.now() - timedelta(hours=13)
         Invoice.objects.filter(pk__in=[ns_id, normal_id]).update(created_at=old)
         resp = self.gerant_api.post('/api/sales/invoices/cleanup_expired/')
         self.assertEqual(resp.status_code, 200, resp.data)
-        self.assertEqual(resp.data['deleted'], 1)
-        self.assertTrue(Invoice.objects.filter(pk=ns_id).exists())
-        self.assertFalse(Invoice.objects.filter(pk=normal_id).exists())
-        self.assertEqual(self._debt(), Decimal('2000.00'))  # dette NS conservée
+        self.assertEqual(resp.data['expired'], 1)
+        self.assertEqual(Invoice.objects.get(pk=ns_id).status, Invoice.Status.PENDING)
+        # BUG-318 : l'expirée est conservée en « Non servi » (versement 2000 gardé).
+        self.assertEqual(Invoice.objects.get(pk=normal_id).status, Invoice.Status.NOT_SERVED)
+        # dette NS 2000 conservée ; versement 2000 de la non servie conservé (crédit) : net 0
+        self.assertEqual(self._debt(), Decimal('0.00'))
 
     def test_cancel_ns_credit_cancels_debt_and_does_not_restore_stock(self):
         inv_id = self._post('NS', 'CREDIT', payment='0.00').data['id']

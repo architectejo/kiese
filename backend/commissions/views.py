@@ -66,7 +66,11 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 total_paid=Sum('net_payable', filter=Q(is_paid=True)),
             )
             inv_agg = Invoice.objects.filter(
-                node=p.node, status=Invoice.Status.DELIVERED,
+                # BUG-320 : le versement conservé d'une facture « Non servi »
+                # est un encaissement réel (sa valeur commande, 0, n'entre
+                # ni dans les ordres ni dans la CM : generate() l'ignore).
+                node=p.node,
+                status__in=[Invoice.Status.DELIVERED, Invoice.Status.NOT_SERVED],
                 invoice_date__month=p.month, invoice_date__year=p.year,
             ).aggregate(total_payments=Sum('payment_amount'))
             result.append({

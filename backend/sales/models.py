@@ -21,6 +21,9 @@ class Invoice(SyncableModel):
         PENDING   = 'PENDING',   _('En attente de livraison')
         DELIVERED = 'DELIVERED', _('Livré')
         CANCELLED = 'CANCELLED', _('Annulé')
+        # BUG-318 : facture déclarée « Non servi » (manuellement ou à
+        # l'expiration). Statut terminal ; la ligne n'est jamais supprimée.
+        NOT_SERVED = 'NOT_SERVED', _('Non servi')
 
     class PaymentType(models.TextChoices):
         CASH   = 'CASH',   _('Comptant')
@@ -77,6 +80,11 @@ class Invoice(SyncableModel):
     commission_exempt = models.BooleanField(default=False, verbose_name=_("Exonérée de commission (CM=0)"))
 
     special_code       = models.CharField(max_length=2, choices=SpecialCode.choices, blank=True, default='', verbose_name=_("Code Spécial (NV/RG/NS)"))
+    # BUG-318 : trace du commandé initial (livraison partielle / non servi) —
+    # `order_total` et `InvoiceLine.quantity` portent le SERVI.
+    initial_order_total = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True, verbose_name=_("Valeur commandée initiale (FC)"))
+    not_served_reason   = models.CharField(max_length=200, blank=True, default='', verbose_name=_("Motif non servi"))
+    not_served_at       = models.DateTimeField(null=True, blank=True, verbose_name=_("Déclarée non servie le"))
     is_debt_repayment  = models.BooleanField(default=False, verbose_name=_("Remboursement BP"))
     # BUG-290 : motif facultatif (surtout pour un paiement négatif).
     motif = models.CharField(max_length=20, choices=Motif.choices, blank=True, default='', verbose_name=_("Motif"))
@@ -235,6 +243,9 @@ class InvoiceLine(models.Model):
     invoice    = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='lines', verbose_name=_("Facture"))
     bread_price = models.ForeignKey(BreadPrice, on_delete=models.PROTECT, verbose_name=_("Catégorie Pain"))
     quantity   = models.PositiveIntegerField(default=0, verbose_name=_("Quantité"))
+    # BUG-318 : quantité commandée initiale, renseignée seulement si la ligne a
+    # été réduite (livraison partielle ou non servi) ; `quantity` = servi.
+    ordered_quantity = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Quantité commandée initiale"))
     unit_price = models.PositiveIntegerField(default=0,  verbose_name=_("Prix Unitaire (FC)"))
     line_total = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Total Ligne (FC)"))
 

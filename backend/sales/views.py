@@ -20,6 +20,9 @@ from clients.models import Client
 from production.models import _adjust_bread_stock
 from sync.models import DebtMovement
 from .models import Invoice, InvoiceLine, SOLDEE_PRICE_RATIO
+from .services import (
+    InvoiceStateError, deliver_invoice, mark_not_served, expire_pending_invoices, expiry_cutoff,
+)
 from .serializers import InvoiceSerializer, InvoiceCreateSerializer, InvoiceAdjustSerializer
 
 
@@ -312,6 +315,16 @@ class InvoiceViewSet(
                 node_origin=invoice.node.code,
             )
         return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
+
+    def _expire_visible(self):
+        """BUG-318 : transition idempotente « expirée -> Non servi » à la lecture."""
+        user = self.request.user
+        node = user.node if (not user.can_access_all_nodes and user.node_id) else None
+        expire_pending_invoices(node=node)
+
+    def list(self, request, *args, **kwargs):
+        self._expire_visible()
+        return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         """
@@ -696,26 +709,80 @@ class InvoiceViewSet(
         )
         return Response(InvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
 
+    @staticmethod
+    def _parse_served_lines(invoice, raw):
+        """
+        BUG-318 : valide `lines` = [{"id": <id ligne>, "quantity": <servi>}].
+        Retourne (`{line_pk: servi}`, None) ou (None, message d'erreur 400).
+        0 <= servi <= commandé, entiers ; lignes omises = servies en totalité.
+        """
+        if raw is None:
+            return None, None
+        if not isinstance(raw, list):
+            return None, "« lines » doit être une liste de {id, quantity}."
+        if invoice.is_adjustment:
+            return None, "Une facture d'ajustement ne peut pas être livrée partiellement."
+        current = {l.pk: l.quantity for l in invoice.lines.all()}
+        served = {}
+        for entry in raw:
+            if not isinstance(entry, dict) or 'id' not in entry or 'quantity' not in entry:
+                return None, "Chaque ligne doit contenir « id » et « quantity »."
+            lid, qty = entry['id'], entry['quantity']
+            if isinstance(lid, bool) or isinstance(qty, bool):
+                return None, "Ligne ou quantité invalide."
+            try:
+                lid = int(lid)
+            except (TypeError, ValueError):
+                return None, "Identifiant de ligne invalide."
+            if lid not in current:
+                return None, f"La ligne {lid} n'appartient pas à cette facture."
+            if lid in served:
+                return None, f"La ligne {lid} est fournie plusieurs fois."
+            if isinstance(qty, float) and qty != int(qty):
+                return None, "La quantité servie doit être un nombre entier."
+            try:
+                qty_int = int(str(qty).strip()) if not isinstance(qty, (int, float)) else int(qty)
+            except (TypeError, ValueError):
+                return None, "La quantité servie doit être un nombre entier."
+            if qty_int < 0:
+                return None, "La quantité servie ne peut pas être négative."
+            if qty_int > current[lid]:
+                return None, (
+                    f"La quantité servie ({qty_int}) ne peut pas dépasser la quantité commandée ({current[lid]})."
+                )
+            served[lid] = qty_int
+        return served, None
+
     @action(detail=True, methods=['post'], permission_classes=[IsFacturierOrLivreur])
     @transaction.atomic
     def deliver(self, request, pk=None):
         """Facturier or livreur confirms physical delivery. Locks BP, updates client debt.
 
-        BUG-053 : `Invoice.deliver()` est désormais atomique (voir sales/models.py),
-        mais cette vue effectue aussi `log_activity`/`create_notification` après —
-        on l'enveloppe également pour que toute la séquence réussisse ou échoue
-        ensemble, comme `create()` ci-dessus."""
+        BUG-318 : corps optionnel `{"lines": [{"id": <ligne>, "quantity": <servi>}]}`
+        pour une livraison PARTIELLE (0 <= servi <= commandé). Valeur de commande,
+        BP, stock et reçu suivent le servi ; le commandé initial est conservé
+        (`initial_order_total`, `ordered_quantity`). Statut déjà NOT_SERVED -> 409.
+
+        BUG-053 : la séquence est atomique (voir `sales.services.deliver_invoice`)."""
         invoice = self.get_object()
         if invoice.special_code == Invoice.SpecialCode.NS:
             return Response(
                 {'detail': "Une facture « Non Servi » ne peut pas être livrée : aucun pain n'a été remis."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        if invoice.status == Invoice.Status.NOT_SERVED:
+            return Response(
+                {'detail': "Facture déjà non servie : elle ne peut plus être livrée."},
+                status=status.HTTP_409_CONFLICT
+            )
         if invoice.status != Invoice.Status.PENDING:
             return Response(
                 {'detail': f"Facture déjà au statut « {invoice.get_status_display()} »."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        served, err = self._parse_served_lines(invoice, request.data.get('lines'))
+        if err:
+            return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
 
         # BUG-083 (« ventes passées ») : `delivered_at` optionnel dans le
         # payload — une date (YYYY-MM-DD), pas un datetime complet, l'heure
@@ -738,7 +805,14 @@ class InvoiceViewSet(
                 return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
             delivered_at_dt = _combine_date_with_now_time(requested_delivery_date, invoice.node)
 
-        invoice.deliver(request.user, delivered_at=delivered_at_dt)
+        try:
+            invoice, _reduced = deliver_invoice(
+                invoice.pk, request.user, served_quantities=served, delivered_at=delivered_at_dt,
+            )
+        except InvoiceStateError as exc:
+            if exc.status_code == 409 and 'expiré' in exc.detail:
+                mark_not_served(invoice.pk, None, auto=True)
+            return Response({'detail': exc.detail}, status=exc.status_code)
         # BUG-306 : les pains livrés alimentent la fournée « en cours »
         # (déclarée par nombre de sacs) de l'équipe en service.
         from production.services import apply_delivered_invoice_to_open_batch
@@ -747,7 +821,7 @@ class InvoiceViewSet(
             log_activity(
                 request.user, "Avancement Fournée",
                 f"Facture {invoice.receipt_number} : fournée Éq.{batch.team} {batch.date} "
-                f"à {batch.total_fc_produced} / {batch.theoretical_yield} FC.",
+                f"à {batch.delivered_value_fc} / {batch.theoretical_yield} FC.",
                 node_origin=invoice.node.code,
             )
         log_activity(
@@ -765,6 +839,31 @@ class InvoiceViewSet(
                 severity='DANGER', node_origin=invoice.node.code
             )
         return Response(InvoiceSerializer(invoice).data)
+
+    @action(detail=True, methods=['post'], url_path='mark-not-served',
+            permission_classes=[IsFacturierOrLivreur])
+    def mark_not_served(self, request, pk=None):
+        """
+        BUG-318 : déclare une facture EN ATTENTE « Non servi » (corps optionnel
+        `{"reason": "..."}`, 200 caractères max). Aucun pain ne sort du stock
+        (la part déstockée à la création est restituée), valeur de commande
+        annulée, BP rétablie ; le versement saisi est CONSERVÉ comme
+        encaissement sur la BP (facture à commande 0). Statut terminal ; la
+        ligne n'est jamais supprimée. Facture hors statut PENDING -> 409.
+        """
+        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        reason = request.data.get('reason', '')
+        if reason is None:
+            reason = ''
+        if not isinstance(reason, str):
+            return Response({'detail': "Le motif doit être un texte."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(reason.strip()) > 200:
+            return Response({'detail': "Le motif ne peut pas dépasser 200 caractères."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            invoice = mark_not_served(invoice.pk, request.user, reason=reason)
+        except InvoiceStateError as exc:
+            return Response({'detail': exc.detail}, status=exc.status_code)
+        return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsFacturier])
     def cancel(self, request, pk=None):
@@ -1016,38 +1115,17 @@ class InvoiceViewSet(
 
     @action(detail=False, methods=['post'], permission_classes=[IsGerant])  # BUG-284
     def cleanup_expired(self, request):
-        """Delete PENDING invoices older than 12 h and reverse client debts."""
-        from datetime import timedelta
-        from django.utils import timezone
-        cutoff = timezone.now() - timedelta(hours=12)
-        expired = list(
-            self.get_queryset()
-                .filter(status=Invoice.Status.PENDING, created_at__lt=cutoff)
-                # BUG-177 : une NS reste PENDING par définition (jamais livrée)
-                # — ne jamais la purger.
-                .exclude(special_code=Invoice.SpecialCode.NS)
-                .select_related('client', 'node')
-                .prefetch_related('lines__bread_price')
-        )
-        for inv in expired:
-            if inv.client_id:
-                net_delta = inv.debt_delta
-                Client.objects.filter(pk=inv.client_id).update(
-                    current_debt=F('current_debt') - net_delta
-                )
-                if net_delta != 0:
-                    _record_debt_movement_after_commit(
-                        inv.client, -net_delta, DebtMovement.Kind.ADJUSTMENT,
-                        node_origin=inv.node.code, invoice=None,  # la facture va être supprimée
-                        note=f"Expiration auto {inv.receipt_number or inv.pk}",
-                    )
-            # BUG-029 : comme `cancel()`, une facture PENDING jamais livrée
-            # doit restituer le stock de pains déduit à la création —
-            # ces pains n'ont jamais réellement quitté la boulangerie.
-            for line in inv.lines.all():
-                _adjust_bread_stock(inv.node, line.bread_price, sent=-line.quantity)
-        Invoice.objects.filter(pk__in=[i.pk for i in expired]).delete()
-        return Response({'deleted': len(expired)})
+        """
+        BUG-318 : les factures PENDING de plus de 12 h ne sont PLUS supprimées :
+        elles passent en « Non servi » (motif « Expirée automatiquement »,
+        BP et stock rétablis, trace conservée). Idempotent. La clé `deleted`
+        est conservée (toujours 0) pour compatibilité ; `expired` = nombre
+        de factures passées en « Non servi ».
+        """
+        user = request.user
+        node = user.node if (not user.can_access_all_nodes and user.node_id) else None
+        n = expire_pending_invoices(node=node)
+        return Response({'expired': n, 'deleted': 0})
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def pending_deliveries(self, request):
@@ -1057,9 +1135,8 @@ class InvoiceViewSet(
         reste listée après minuit) ; bornée par l'expiration de 12 h de
         `cleanup_expired`.
         """
-        from datetime import timedelta
-        from django.utils import timezone
-        cutoff = timezone.now() - timedelta(hours=12)
+        self._expire_visible()
+        cutoff = expiry_cutoff()
         qs = self.get_queryset().filter(
             status=Invoice.Status.PENDING, created_at__gte=cutoff,
         ).exclude(special_code=Invoice.SpecialCode.NS)  # BUG-177 : NS jamais livrable

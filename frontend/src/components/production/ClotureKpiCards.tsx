@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { DailyClosureReport } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { isProduitEnAttente, isReportProduitEnAttente } from '@/utils/clotureProduit';
 
 // BUG-302 (remarque.md l.429) : les cartes de totaux de la Clôture Journalière ouvrent une
 // boîte modale de détails au clic. Aucun calcul métier : les détails sont lus dans le
@@ -52,8 +53,12 @@ const buildDetail = (key: KpiKey, report: DailyClosureReport): KpiDetail => {
         explanation: 'Valeur nette produite du jour, par catégorie de pain.',
         table: {
           headers: ['Catégorie', 'Pains produits', 'Valeur produite'],
-          rows: categories.map(c => [c.label, qty(c.produit.quantity), fc(c.produit.fc)]),
-          footer: ['Net produit', qty(totals.total_breads_produced), fc(totals.net_produit_fc)],
+          rows: categories.map(c => isProduitEnAttente(c)
+            ? [c.label, '—', '—']
+            : [c.label, qty(c.produit.quantity), fc(c.produit.fc)]),
+          footer: isReportProduitEnAttente(report)
+            ? ['Net produit', '—', '— (calculé à la clôture)']
+            : ['Net produit', qty(totals.total_breads_produced), fc(totals.net_produit_fc)],
         },
       };
     case 'ecartFacture':
@@ -126,8 +131,8 @@ const buildDetail = (key: KpiKey, report: DailyClosureReport): KpiDetail => {
         explanation: 'Pains produits et pains facturés du jour, par catégorie.',
         table: {
           headers: ['Catégorie', 'Produits', 'Facturés'],
-          rows: categories.map(c => [c.label, qty(c.produit.quantity), qty(c.facture_jr.quantity)]),
-          footer: ['Total', qty(totals.total_breads_produced), qty(totals.total_breads_billed)],
+          rows: categories.map(c => [c.label, isProduitEnAttente(c) ? '—' : qty(c.produit.quantity), qty(c.facture_jr.quantity)]),
+          footer: ['Total', isReportProduitEnAttente(report) ? '—' : qty(totals.total_breads_produced), qty(totals.total_breads_billed)],
         },
       };
   }
