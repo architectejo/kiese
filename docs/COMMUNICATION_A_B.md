@@ -220,3 +220,18 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **B** : BUG-506 (compte GERANT/FACTURIER/LIVREUR créé sans boulangerie, qui voit alors tous les nœuds) est à toi (core, création d'utilisateurs) ; BUG-507 (recherche de clients inter-boulangeries ouverte au livreur) est une question client. Détail dans #06-C. Merci pour BUG-331/332/333/401 (#04-B) : lu, rien à ajouter.
 
 **Statut :** OUVERT
+
+### #09 — 2026-11-21 — A → B, C — Consigne du client : passer de `[]` à `[c]` les tâches déjà faites dans `remarque.md`
+
+**Demande du client (via A)** : chaque développeur fait passer de `[]` à `[c]`, dans `remarque.md`, **les remarques déjà traitées dans ses modules**. Règles pour ne pas se marcher dessus :
+1. `git fetch` puis fusionner la branche des autres **avant** de toucher `remarque.md` ; modification **ligne par ligne** (changer seulement `[] ` en `[c] ` au début de la ligne concernée, jamais le texte), **commit isolé** (« remarque.md : [c] lignes X, Y ») et push tout de suite.
+2. On ne marque `[c]` que si la remarque est **implémentée ET vérifiée** (ticket `VÉRIFIÉ` par un testeur ≠ développeur). Si la remarque n'est qu'en partie faite, ou attend une réponse du client, on laisse `[]` et on écrit le reste dans le ticket (comme A pour la régularisation d'un « Non servi » : ligne 462 laissée à `[]`).
+3. Les numéros de ligne bougent : repérer la ligne par son texte, pas par son numéro.
+
+**Déjà marqué par A** (modules production, ventes, trésorerie) : les remarques sur la Clôture Journalière (modales, restes indépendants des équipes, liste du jour, « Non servi » du statut côté vérifié), les négatifs refusés (Clôturer la fournée, Stock de départ), « Détail Fournée », la fournée par sacs, le chat, « Non servi » / livraison partielle, « Stock Pains du Jour », et la ligne **« Augmenter les sacs »** (BUG-355, marquée aujourd'hui). **Restent à `[]` chez A** (non faites ou en attente du client) : transferts sans demande préalable, « Versement » visible de la direction et déplacement des options de clôture vers « Clôture Journalière » (page « Caisse »), modale « Stock de départ du jour » aux heures de rotation, régularisation d'un « Non servi », clôture automatique à l'heure de relève, rotation 24 h, consommables pour la direction.
+
+**À regarder par B** (clients, commissions, core) : les lignes « Configuration … Algorithme des Commissions (CM) … propres à chaque boulangerie », « Commissions CM … carte et cotisation sociale par boulangerie » et « Situation des Ristournes & Rémunérations … comme dans Gestion Clientèle ». Les tickets correspondants (BUG-289 à 293, 295) étaient vérifiés avant le plan à trois ; à toi de dire si les trois lignes sont entièrement faites.
+
+**À regarder par C** : toute ligne couverte par un ticket que tu as vérifié (par ex. consommables / intrants, BUG-147 et 357 ; trésorerie), en veillant à ne marquer que ce qui est entièrement traité.
+
+**Statut :** OUVERT

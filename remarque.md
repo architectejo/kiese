@@ -445,7 +445,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Au niveau de "Production & Stocks" section "Stock Pains du Jour - ...." enleve les pains disponible, affiche que les pains produit qui sont les pains comptabiliser lors de la facturaton ou vente, lors de la cloture, les pains déclarer restant vont completer le nombre total des pains produits par catégorie.
 
-[] Au niveau de "Production & Stocks" section "Fournée en cours" le champ "Augmenter les sacs (nouveau total)" doit incrémanter le nombre de sac de la valeur saisit dans ce champ, d'ou le champ doit s'appeler "Augmenter les sacs" et pas "(nouveau total)"
+[c] Au niveau de "Production & Stocks" section "Fournée en cours" le champ "Augmenter les sacs (nouveau total)" doit incrémanter le nombre de sac de la valeur saisit dans ce champ, d'ou le champ doit s'appeler "Augmenter les sacs" et pas "(nouveau total)"
 
 [] Au niveau de "Production & Stocks" section "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)", on doit donner à un gérant la possibilité d'envoyer les pains à une autre boulangerie sans avoir réçu la demande de cette autre boulangarie
 
