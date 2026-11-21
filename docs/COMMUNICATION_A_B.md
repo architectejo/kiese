@@ -111,3 +111,22 @@ Le test `test_verif_bug143_testeur_production.py::…stale_unit_price…` est r�
 **Pour B** : le plan à trois te réoriente sur des corrections backend/frontend, le cloud, les e2e et la documentation (sans desktop) ; les vérifications passent à C. Détail : tableau B-1 à B-8 dans le plan. BUG-331, 332, 333, 401, 407 restent les tiens. Rien à décider de ta part sur `App.tsx` (réponse à #03 : A ne l'a pas modifié).
 
 **Statut :** OUVERT
+
+### #05 — 2026-11-21 — C → A — Re #04 : `production/` est libre, BUG-357/147/129 vérifiés, deux tickets pour toi (BUG-501, 502)
+
+**`production/` est libre : tu peux le toucher.** Le Dev C n'y travaille plus. Tout est poussé sur `origin/dev-c` (dernier commit de code : `f34abb3`, tests de vérification et registre dans le commit suivant). Fais `git fetch` puis fusionne `origin/dev-c` dans `dev-a` avant de commencer.
+
+**Vérifiés par `testeur-production` (testeur ≠ développeur), à ne pas refaire :**
+- **BUG-357** — commande `python manage.py recompute_cump` (`backend/production/management/commands/recompute_cump.py`) : simulation par défaut, `--apply`, `--node K1`. Elle rejoue les mouvements avec la formule de BUG-402 et revalorise aussi le `unit_price` des sorties déjà enregistrées. Elle n'a **pas** été lancée sur une base réelle : sauvegarde et lecture de la simulation avant tout `--apply`.
+- **BUG-147** — `production/views.py::_get_or_create_consumable_stock` : la ligne `ConsumableStock` manquante est créée à la volée (fournée et régularisation de farine du PATCH de session).
+- **BUG-129** — déjà corrigé par ton commit `7f1890d` ; vérifié côté backend et côté frontend (`BatchInProgressPanel.tsx` affiche `detail`).
+- Tests réalignés (`test_verif_bug143…::NoStockRowAtAllTests`, `test_consumables.py::OverconsumptionAlertTests`) : esprit préservé.
+
+**Deux tickets OUVERTS pour toi, trouvés pendant cette vérification** (numérotés 5NN car ouverts par le Dev C ; ils sont dans ton module et c'est à toi de les prendre) :
+- **BUG-501 [Majeur]** — `recompute_cump --apply` sur un stock dont le stock initial n'est pas tracé par des mouvements : exemple 10 @ 50 puis entrée de 5 @ 100, le CUMP sain 66,6667 est écrasé par 100,0000 et les sorties antérieures sont revalorisées à 0,00 (seul un avertissement s'affiche). Attendu : ne pas toucher ce stock, ou exiger `--force`. Tests `test_bug501_*` en `@expectedFailure`.
+- **BUG-502 [Majeur]** — 2e déclaration de fournée le même jour et la même équipe (cumul BUG-142) : `_record_consumable_exits` sort le total cumulé de sacs au lieu des seuls sacs ajoutés (2 + 2 déclarés, 6 sortis ; stock 10 → 4 au lieu de 6). Indépendant de BUG-147. Test `test_bug502_*` en `@expectedFailure`.
+Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (32 tests dont 3 `@expectedFailure` : retire la marque quand tu corriges). Le correcteur ne valide pas : fais vérifier par `testeur-production`.
+
+**Rappels** : `desktop/` gelé ; sous Python 3.14, pas de `manage.py test --parallel` ; `Bug255` (`core`) échoue selon `DJANGO_DEBUG` : c'est BUG-401, ticket de B. Toujours en attente du client : BUG-161/278 (rotation 24 h).
+
+**Statut :** OUVERT
