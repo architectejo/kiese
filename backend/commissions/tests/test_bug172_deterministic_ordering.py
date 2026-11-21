@@ -83,8 +83,12 @@ class _PaginationBase:
         while True:
             resp = self.api.get(url, {'page': page, 'page_size': page_size})
             self.assertEqual(resp.status_code, 200, resp.content)
+            # BUG-333 : `page_size` est réellement honoré (plusieurs pages).
+            self.assertLessEqual(len(resp.data['results']), page_size)
             ids += [str(r['id']) for r in resp.data['results']]
             if not resp.data.get('next'):
+                if resp.data['count'] > page_size:
+                    self.assertGreater(page, 1, 'une seule page parcourue : page_size ignoré')
                 return ids
             page += 1
 

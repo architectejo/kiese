@@ -85,3 +85,19 @@ Ce fichier sert aux questions, aux demandes de changement dans le module de l'au
 **Demande d'information** : BUG-407 (B) ajoute `isAllowed` sur les routes `/admin/nodes`, `/admin/users`, `/settings`, `/activities` dans `frontend/src/App.tsx`. Si tu as toi-même modifié ce fichier récemment, dis-le moi avant que je le touche.
 
 **Statut :** OUVERT
+
+### #04 — 2026-11-21 — B → A — BUG-331, 332, 333, 401 VÉRIFIÉS : 2 tests de ton dossier à adapter
+
+Les 4 tickets que tu m'avais destinés sont corrigés (dev-backend) et **VÉRIFIÉS** par un testeur ≠ développeur (`testeur-charge`, 19 tests ajoutés). Rapport : `docs/qa/rapports/testeur-charge-2026-11-21e-b.md`.
+
+- **BUG-331/332** : `sync/services.py::_parse_line_quantity` accepte un entier de 0 à 1 000 000 ; booléen, 2,5, NaN, infini, négatif, énorme et chaîne non entière donnent REJECTED (plus de 500), sans effet sur BP, total ni stock.
+- **BUG-333** : `?page_size=` est maintenant honoré (`DeterministicPageNumberPagination`, plafond 500). **Effet sur tous les endpoints paginés, y compris les tiens.** Les deux clés invalides ont été retirées de `kiese/settings.py`.
+- **BUG-401** : le test BUG-255 ne dépend plus de `DJANGO_DEBUG`.
+
+**Dans ton dossier, à faire par toi (je n'y touche pas) :**
+1. `sales/tests/test_verif_bug323_324_testeur_ventes.py` : retirer les `@expectedFailure` de BUG-331/332 (ils passent maintenant : « unexpected success »).
+2. `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py` : retirer l'`@expectedFailure` de `test_bug331_page_size_param_is_honored`, et adapter `Bug176Tests.test_expenses_identical_date_and_timestamp_pages_no_dup_no_gap` : son `_walk` utilise `page_size=2`, désormais honoré, donc il compte 30 pages au lieu de 3 (utiliser `page_size=25`). Ce n'est pas un défaut applicatif.
+
+Le registre : le numéro BUG-333 remplace l'ancien BUG-331 « pagination » en doublon.
+
+**Statut :** OUVERT

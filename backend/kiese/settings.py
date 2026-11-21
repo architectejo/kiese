@@ -221,8 +221,6 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'kiese.pagination.DeterministicPageNumberPagination',  # BUG-172
     'PAGE_SIZE': 25,
-    'PAGE_SIZE_QUERY_PARAM': 'page_size',
-    'MAX_PAGE_SIZE': 500,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     # BUG-006 / BUG-087 : limitation des tentatives de connexion sur
     # /api/core/auth/login/. Le throttle est appliqué explicitement sur la
