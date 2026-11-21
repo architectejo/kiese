@@ -98,3 +98,12 @@ En mars, le client commande 60 000 FC (commission 15 000 FC) et a entre-temps pa
 - **B.** (Ancien fonctionnement, corrigé) Dette et report comptés ensemble : 5 000 − 10 000 − 3 000 − 8 000 = **−16 000 FC**.
 
 *Question : A est-il bien ce que vous voulez ? Si le client a payé sa dette entre-temps, voir Q-022.*
+
+### Q-025 (BUG-507) — Le livreur doit-il voir les clients des autres boulangeries ?
+
+**Situation.** Un client de K3 se présente à K1. Le **facturier** de K1 peut le chercher et lui faire sa facture (vous l'avez demandé). Aujourd'hui, l'application donne **la même chose au livreur** : s'il tape un nom ou un code, il voit aussi les clients des autres boulangeries (nom, code, solde). Il ne peut rien modifier, c'est de la lecture seule. Vous n'avez parlé que du facturier.
+
+- **A.** (**Aujourd'hui**) Le livreur voit tous les clients, comme le facturier. Avantage : s'il livre un client d'une autre boulangerie, il le retrouve tout de suite.
+- **B.** Le livreur ne voit que les clients de sa propre boulangerie. Conséquence : un client d'une autre boulangerie n'apparaît plus dans sa recherche ; il confirme toujours les livraisons des factures de sa boulangerie, mais pour un client venu d'ailleurs il faut que le facturier ou le gérant s'en occupe.
+
+*Question : voulez-vous que le livreur voie aussi les clients des autres boulangeries (A), ou seulement ceux de la sienne (B) ?*

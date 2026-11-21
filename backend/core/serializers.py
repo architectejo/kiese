@@ -36,6 +36,17 @@ class NodeSerializer(serializers.ModelSerializer):
         return value
 
 
+BAKERY_BOUND_ROLES = ('GERANT', 'FACTURIER', 'LIVREUR')
+
+
+def check_node_required(role, node):
+    """BUG-506 : GERANT/FACTURIER/LIVREUR doivent être rattachés à une boulangerie."""
+    if role in BAKERY_BOUND_ROLES and node is None:
+        raise serializers.ValidationError({
+            'node': "Une boulangerie est obligatoire pour le rôle Gérant, Facturier ou Livreur."
+        })
+
+
 class UserSerializer(serializers.ModelSerializer):
     node_display = serializers.StringRelatedField(source='node', read_only=True)
     role_display = serializers.CharField(source='get_role_display', read_only=True)

@@ -39,16 +39,18 @@ const fmtDateTime = (iso: string | null, date: string): string => {
 interface Props {
   clientId: string | null;
   clientName?: string;
+  /** BUG-412 : mois de départ « AAAA-MM » (mois filtré de l'écran appelant) ; défaut = mois courant. */
+  initialMonth?: string;
   onClose: () => void;
 }
 
-export const ClientHistoryModal: React.FC<Props> = ({ clientId, clientName, onClose }) => {
+export const ClientHistoryModal: React.FC<Props> = ({ clientId, clientName, initialMonth, onClose }) => {
   const [month, setMonth] = useState<string | undefined>(undefined);
   const [data, setData] = useState<ClientHistory | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { setMonth(undefined); setData(null); setError(null); }, [clientId]);
+  useEffect(() => { setMonth(initialMonth); setData(null); setError(null); }, [clientId, initialMonth]);
 
   useEffect(() => {
     if (!clientId) return;

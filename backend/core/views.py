@@ -2,7 +2,7 @@
 Core API views — Authentication, Config, Nodes, Users management.
 """
 
-from .mixins import NodeImmutableForNonHQMixin
+from .mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
 from rest_framework.exceptions import PermissionDenied
@@ -20,7 +20,7 @@ from .serializers import (
     NodeSerializer, UserSerializer, UserCreateSerializer,
     ConfigSerializer, PublicConfigSerializer, BreadPriceSerializer, ExpenseCategorySerializer, LoginSerializer,
     ActivityLogSerializer, SystemNotificationSerializer, ChangePasswordSerializer,
-    ColisDistributionSerializer,
+    ColisDistributionSerializer, check_node_required,
 )
 from .permissions import IsAdmin, IsDirection, IsHeadquarters, IsGerant, IsSuperuser
 from .throttling import LoginAccountRateThrottle, LoginIPRateThrottle
@@ -244,6 +244,9 @@ class UserViewSet(viewsets.ModelViewSet):
         actor = self.request.user
         if serializer.validated_data.get('role') == 'ADMIN' and not self._is_admin_level(actor):
             self._deny("Seul un administrateur peut créer un compte administrateur.")
+        # BUG-506 : rôle lié à une boulangerie => nœud obligatoire (400).
+        data = serializer.validated_data
+        check_node_required(data.get('role'), data.get('node'))
         serializer.save()
 
     def perform_update(self, serializer):
@@ -262,6 +265,11 @@ class UserViewSet(viewsets.ModelViewSet):
                 self._deny("Vous ne pouvez pas modifier votre propre boulangerie de rattachement.")
             if 'is_active' in data and not data['is_active']:
                 self._deny("Vous ne pouvez pas désactiver votre propre compte.")
+        # BUG-506 : PATCH node=null ou changement de rôle vers un rôle de boulangerie sans nœud.
+        check_node_required(
+            data.get('role', target.role),
+            data['node'] if 'node' in data else target.node,
+        )
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -407,7 +415,10 @@ class SystemNotificationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # BUG-022 : SystemNotification n'a pas de FK `node` mais un
             # `node_origin` (code de boulangerie ou 'CLOUD' pour les
             # alertes globales/siège, toujours visibles de tous).
@@ -442,7 +453,10 @@ class ColisDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
     def get_queryset(self):
         qs = ColisDistribution.objects.select_related('node').all()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # BUG-022 : aucun filtrage par nœud auparavant.
             qs = qs.filter(node=user.node)
         return qs

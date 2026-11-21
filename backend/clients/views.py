@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
-from core.mixins import NodeImmutableForNonHQMixin
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -58,7 +58,10 @@ class ClientViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # Facturiers and Livreurs see all nodes — a client from any bakery
             # may present at a different bakery and must be invoiced without issue.
             if user.role not in ('FACTURIER', 'LIVREUR'):
@@ -530,7 +533,10 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
     def get_queryset(self):
         qs = SocialContribution.objects.select_related('client', 'node').all()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # BUG-022 : aucun filtrage par nœud auparavant.
             qs = qs.filter(node=user.node)
         return qs
@@ -601,7 +607,10 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
     def get_queryset(self):
         qs = SocialDistribution.objects.select_related('node').prefetch_related('lines__client').all()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # BUG-022 : aucun filtrage par nœud auparavant.
             qs = qs.filter(node=user.node)
         return qs
@@ -721,7 +730,10 @@ class SocialDistributionLineViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = SocialDistributionLine.objects.select_related('client', 'distribution__node').all()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             # BUG-022 : aucun filtrage par nœud auparavant (via la distribution parente).
             qs = qs.filter(distribution__node=user.node)
         return qs

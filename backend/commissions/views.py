@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.db.models import F, Q, Sum
-from core.mixins import NodeImmutableForNonHQMixin
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -32,7 +32,10 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             qs = qs.filter(node=user.node)
         return qs
 
@@ -207,7 +210,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     queryset = ClientCommission.objects.select_related('period__node', 'client').all()
     serializer_class = ClientCommissionSerializer
     filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['period', 'period__node', 'client', 'is_paid', 'annual_bonus_incorporated']
+    filterset_fields = ['period', 'period__node', 'period__month', 'period__year', 'client', 'is_paid', 'annual_bonus_incorporated']
     search_fields    = ['client__first_name', 'client__last_name', 'client__code']
     # BUG-172 : `pk` en dernier critère -> ordre total (pagination déterministe).
     ordering         = ['client__last_name', 'pk']
@@ -223,7 +226,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if not user.can_access_all_nodes and user.node_id:
+        if is_node_less_non_hq(user):
+            # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
+            return qs.none()
+        if not user.can_access_all_nodes:
             qs = qs.filter(period__node=user.node)
         return qs
 
