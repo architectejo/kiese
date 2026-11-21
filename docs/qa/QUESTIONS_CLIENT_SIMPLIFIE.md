@@ -60,3 +60,41 @@ Ces questions viennent de la comparaison entre vos fichiers Excel d'août 2026 e
 | **Remise annuelle** | C'est **INDICE × TARIF + MÉRITE**, versée avec l'épargne sociale de fin d'année (TOTAL À PAYER = TOTAL SOCIAL + REMISE). L'INDICE est le nombre de mois de participation (en général épargne ÷ 2 000 FC). Le TARIF est fixé chaque année par boulangerie (en 2023 : 700 FC à K2, 600 FC à K4, 500 FC à K3, K5 et K6). La règle « 0,025 × volume livré » du cahier des charges **n'existe dans aucun de vos Excel**. Le volume n'entre donc pas dans le calcul (ni en pains, ni en FC) | Classeur B2 (dossier daja_analysé), feuille REMISE, formules `=(E4*F4)+G4` et `=D4+H4` ; feuilles « paye social 23 » (K3), « social 2023 » (K4), « SOCIAL 2023 » (K5, K6), avec la note « REMISE : la participation de la boulangerie dans le panier social de sa cliente » ; adaptes.md [4.2] |
 | **Livre de caisse boulangerie (D1-3) : écart entre la recette et les paiements** | Recette du jour + « AUTRES ENCAISSEMENTS » = **total des paiements de la facturation** (retraits négatifs compris), jour par jour, pour 118 jours sur 128. Pour 9 autres jours (1er au 3 août à K1, K2, K6 et B2), la différence vient d'une ligne **« REMB JUILLET »** de la facturation (remboursement de dettes de juillet), qui fait l'écart au franc près (5 365 100 FC au total). Il reste un seul jour de 500 FC (K5, 11/08) | Classeur D1-3, feuilles TABORA, COQ… (lignes « Recettes du jour » et « AUTRES ENCAISSEMENTS » de chaque bloc) comparées à la colonne O des FACTURATION |
 | **Livre de caisse direction (D1-4) : « rupture » de 6 000 FC** | Il n'y a **pas de rupture** : la ligne 449 « transport équipe sciage » (6 000 FC) est une vraie dépense du 09/08, saisie sans date ni numéro. Le solde est bien calculé (`=G448+E449-F449`). Aucun solde n'est saisi à la main dans ce livre | Classeur D1-4, feuille DIR, lignes 448 à 450 |
+
+---
+
+## Questions sur la paie des commissions (Q-022 à Q-024)
+
+*Préparées le 21/11/2026. Les montants ci-dessous sont des exemples inventés, calculés avec les vraies formules de l'application (commission = commande × 25 %, cotisation sociale 3 000 FC, pain à 500 FC). Une réponse courte suffit (par exemple « Q-022 : A »).*
+
+### Q-022 (BUG-266) — Quand la commission d'un client ne couvre pas ses retenues, que fait-on du manque ?
+
+**Exemple.** Un client commande 20 000 FC en février. Sa commission est de 5 000 FC. Il doit encore 6 000 FC à la boulangerie et sa cotisation sociale est de 3 000 FC.
+5 000 − 6 000 − 3 000 = **−4 000 FC** : la commission ne suffit pas, il manque 4 000 FC.
+
+**Aujourd'hui, l'application** ne paie rien à ce client (le bouton « Régler » est bloqué), affiche −4 000 FC et **reporte ces 4 000 FC sur sa paie de mars**.
+En mars, le client commande 60 000 FC (commission 15 000 FC) et a entre-temps payé toute sa dette de 6 000 FC. Son net de mars est : 15 000 − 0 − 3 000 − 4 000 (report) = **8 000 FC**.
+
+- **A.** Garder ce fonctionnement : on reporte le manque sur le mois suivant. Mars : **8 000 FC**.
+- **B.** Oublier le manque : en février le net est ramené à 0 et rien n'est reporté. Mars : 15 000 − 0 − 3 000 = **12 000 FC**.
+- **C.** Le client doit payer les 4 000 FC en espèces en février. Mars : **12 000 FC** (et la boulangerie encaisse 4 000 FC en février).
+
+*Cela complète Q-002 (report de la dette), qui n'a pas dit ce qui arrive quand le client a payé sa dette entre-temps.*
+
+### Q-023 (BUG-267) — L'épargne d'un client doit-elle s'ajouter à sa commission ?
+
+**Exemple.** Un client a 7 000 FC d'épargne chez nous (son solde est de −7 000 FC) et il achète quand même 4 000 FC de pain. Commission : 1 000 FC. Cotisation : 3 000 FC.
+
+**Aujourd'hui, l'application** fait comme vos classeurs (NET = commission − solde) : l'épargne s'ajoute et il reçoit 1 000 + 7 000 − 3 000 = **5 000 FC**. Un client qui n'a que de l'épargne et n'achète rien n'a, lui, aucune ligne de paie.
+
+- **A.** Garder ainsi : l'épargne s'ajoute à la commission. Il reçoit **5 000 FC**.
+- **B.** L'épargne n'entre jamais dans la paie (elle reste son argent déposé, rendu autrement). Net : 1 000 − 0 − 3 000 = **−2 000 FC** (manque reporté, voir Q-022).
+
+### Q-024 (BUG-268) — Une dette peut-elle être comptée deux fois ?
+
+**Exemple.** En février : commande 20 000 FC, commission 5 000 FC, dette 10 000 FC, cotisation 3 000 FC. Net : 5 000 − 10 000 − 3 000 = **−8 000 FC**, reporté en mars. En mars le client commande la même chose et sa dette est toujours de 10 000 FC.
+
+- **A.** (**Aujourd'hui**) La dette de 10 000 FC n'est comptée qu'une fois : le report de 8 000 FC en contient déjà une partie, on ne retire que les 2 000 FC restants. Net de mars : 5 000 − 2 000 − 3 000 − 8 000 = **−8 000 FC**.
+- **B.** (Ancien fonctionnement, corrigé) Dette et report comptés ensemble : 5 000 − 10 000 − 3 000 − 8 000 = **−16 000 FC**.
+
+*Question : A est-il bien ce que vous voulez ? Si le client a payé sa dette entre-temps, voir Q-022.*
