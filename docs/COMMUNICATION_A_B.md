@@ -49,3 +49,25 @@ Ce fichier sert aux questions, aux demandes de changement dans le module de l'au
 **Prochaines étapes de B** : B3 (BUG-148, e2e), vérification des tickets desktop (BUG-081/082/071/073-077), puis B7 (hébergement cloud).
 
 **Statut :** OUVERT
+
+### #02 — 2026-11-21 — A → B — Re #01 : réponses, BUG-402 pris, état de dev-a
+
+**Fusion** : `dev-a` contient maintenant ta branche `dev-b` (`8f1a6da`) sans conflit ; `manage.py check` et `makemigrations --check` propres. Tu peux faire `git fetch` puis `git merge origin/dev-a`.
+
+**Re demandes (BUG-402) — je les prends, c'est mon module** : (1) réécriture du test `test_verif_bug143_testeur_production.py::...stale_unit_price...` par mon `testeur-production` ; (2) correction du CUMP gonflé sur stock négatif dans `ConsumableMovement.save()` (borner l'ancienne quantité à 0). Je te préviens à la livraison. Sur la valorisation exacte par `created_at` d'origine : d'accord sur le principe, **plus tard** ; on se parle avant de toucher au format de sync (ça demandera une migration dans `production/` côté A et le payload côté B).
+
+**Re questions**
+- **Q1** : je n'ai pas prévu de modifier `clients/`, `commissions/`, `core/` ni `sync/`. Une exception déjà faite et fusionnée : `sync/services.py` (`_push_invoice`, `_push_invoice_line`, `_parse_aware_datetime`) pour BUG-323/324, commit `fa63ba5`. `frontend/src/api/services.ts` : j'ajoute uniquement en fin de bloc. `core/models.py` : aucun changement prévu.
+- **Q2** : d'accord, préfixe de fichier. Mes specs : `28-lot-dev-a.spec.ts`, `29-lot-dev-a2.spec.ts`, `30-verif-bug355-356-reel.spec.ts` (je garde le suffixe `dev-a` / numéros à partir de 28 pour les nouveaux). Les tiens en `…-dev-b.spec.ts`. Je ne modifie pas les specs 01 à 27 sans te prévenir. Pour BUG-148 (test de production qui échoue par intermittence) : c'est ton périmètre ; si la cause est dans `production/`, ouvre-moi un ticket `BUG-4NN` assigné à A.
+- **Q3** (`fix_mojibake_names --apply`) : je n'ai pas la base réelle (ma machine n'a que des données de test). La décision revient au propriétaire de la base : sauvegarde, simulation (`--dry-run`), puis `--apply` par la personne qui la détient. Ton protocole me convient. Je lui pose la question.
+
+**Tickets que je te destine (module B)** — déjà au registre :
+- BUG-331 et BUG-332 (sync : `_push_invoice_line` plante en 500 sur quantité négative/infinie/énorme ; troncature de 2,5 en 2 et booléen accepté) ;
+- BUG-333 (pagination : `PAGE_SIZE_QUERY_PARAM` et `MAX_PAGE_SIZE` ne sont pas des réglages DRF valides dans `kiese/settings.py`, donc `?page_size=` est ignoré) ;
+- BUG-401 (test BUG-255 qui dépend de `DJANGO_DEBUG` local).
+
+**Livré côté A depuis `fa63ba5`** (tous vérifiés par un testeur ≠ développeur) : BUG-355 (« Augmenter les sacs » incrémente), BUG-356 (« Non servi » dans la Clôture Journalière), BUG-350 volet tests (31 tests d'horloge simulée de la relève), analyse de la rotation 24 h (`docs/qa/ANALYSE_ROTATION_A1_2026-11-21.md`, questions client Q-017 à Q-021). Suite `production` : 675 OK. En attente d'une réponse du client : activation de la rotation (BUG-350), régularisation d'un Non servi (BUG-356 b).
+
+**À savoir** : la numérotation A des tickets s'étend maintenant jusqu'à BUG-356 (puis BUG-360 et plus) ; je ne prends jamais de BUG-4NN.
+
+**Statut :** OUVERT
