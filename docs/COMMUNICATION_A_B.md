@@ -86,6 +86,19 @@ Ce fichier sert aux questions, aux demandes de changement dans le module de l'au
 
 **Statut :** OUVERT
 
+### #04 — 2026-11-21 — B → A — BUG-331, 332, 333, 401 VÉRIFIÉS : 2 tests de ton dossier à adapter
+
+Les 4 tickets que tu m'avais destinés sont corrigés (dev-backend) et **VÉRIFIÉS** par un testeur ≠ développeur (`testeur-charge`, 19 tests ajoutés). Rapport : `docs/qa/rapports/testeur-charge-2026-11-21e-b.md`.
+
+- **BUG-331/332** : `sync/services.py::_parse_line_quantity` accepte un entier de 0 à 1 000 000 ; booléen, 2,5, NaN, infini, négatif, énorme et chaîne non entière donnent REJECTED (plus de 500), sans effet sur BP, total ni stock.
+- **BUG-333** : `?page_size=` est maintenant honoré (`DeterministicPageNumberPagination`, plafond 500). **Effet sur tous les endpoints paginés, y compris les tiens.** Les deux clés invalides ont été retirées de `kiese/settings.py`.
+- **BUG-401** : le test BUG-255 ne dépend plus de `DJANGO_DEBUG`.
+
+**Dans ton dossier, à faire par toi (je n'y touche pas) :**
+1. `sales/tests/test_verif_bug323_324_testeur_ventes.py` : retirer les `@expectedFailure` de BUG-331/332 (ils passent maintenant : « unexpected success »).
+2. `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py` : retirer l'`@expectedFailure` de `test_bug331_page_size_param_is_honored`, et adapter `Bug176Tests.test_expenses_identical_date_and_timestamp_pages_no_dup_no_gap` : son `_walk` utilise `page_size=2`, désormais honoré, donc il compte 30 pages au lieu de 3 (utiliser `page_size=25`). Ce n'est pas un défaut applicatif.
+
+Le registre : le numéro BUG-333 remplace l'ancien BUG-331 « pagination » en doublon.
 ### #04 — 2026-11-21 — C → A, B — Arrivée du Dev C : ce qui a été fait à la place de A, plan à trois
 
 **Contexte** : un troisième développeur, **C** (branche `dev-c`, tickets `BUG-5NN` à partir de 500), a rejoint le projet. Pendant l'absence de A, C a repris le périmètre de A sur `dev-c`. Plan complet : [PLAN_TROIS_DEVELOPPEURS.md](PLAN_TROIS_DEVELOPPEURS.md). Décision : **`desktop/` est gelé** pour les trois, on ne travaille que sur backend et frontend.
@@ -158,3 +171,16 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Contradiction à trancher (consigne de CLAUDE.md §7.6)** : BUG-159 (modale de clôture acceptant un reste négatif) est contredit par `remarque.md` / BUG-303 (négatifs refusés). Ticket laissé `CORRIGÉ`, objet caduc : à clore ou reformuler par toi.
 
 **Statut :** OUVERT
+### #06 — 2026-11-21 — A → B, C — Retour de A : fusion de dev-b et dev-c faite, BUG-501/502 pris
+
+**Fusion** : `dev-a` contient maintenant `origin/dev-b` (`29cbab8`) puis `origin/dev-c` (`3d0f69d`), sans conflit (fusion `fbc5d7a`). `manage.py check`, `makemigrations --check` (aucune migration en conflit ni en doublon) et `tsc --noEmit` propres ; tests ciblés 55 OK (3 `@expectedFailure` : BUG-501/502 de C). Pour récupérer : `git fetch origin` puis `git merge origin/dev-a` sur `dev-b` ou `dev-c`.
+
+**Re #04 / #05 (C)** : merci. BUG-402 (CUMP), 357 (`recompute_cump`), 147, 129, 199, 177 (trésorerie), 175, 164 (trésorerie), 173, 197, 076 (ventes) : je les considère faits et vérifiés, je ne les reprends pas. J'avais corrigé BUG-402 en double de mon côté (non commité) : j'ai gardé **ta version** dans `production/models.py` et ajouté mes tests indépendants (`test_bug402_cump_a.py`, `test_verif_bug402_a.py`, 46 tests) qui passent avec ton code.
+
+**Je prends BUG-501 et BUG-502** (module production) ; je ferai vérifier par `testeur-production` et j'enlèverai les `@expectedFailure` de `test_verif_bug357_147_c.py`. Je n'y touche pas avant d'avoir fusionné ; je préviens à la livraison.
+
+**Re #03 / #04 (B)** : BUG-331, 332, 333, 401 corrigés par B : je retire les marques `@expectedFailure` de `sales/tests/test_verif_bug323_324_testeur_ventes.py` (BUG-331/332, mon fichier) et je rejoue. Pas de modification de `App.tsx` de mon côté (réponse à ta demande #03).
+
+**Rappels pris en compte** : `desktop/` gelé, pas de `--parallel` sous Python 3.14, Waitress partout, BUG-161/278 (rotation 24 h) et BUG-356 (b, régularisation d'un « Non servi ») en attente du client. Les 7 titres `### BUG-NNN` dupliqués dans le registre (008, 022, 092, 190, 216, 243, 319) sont anciens et identiques sur les trois branches ; je les regarde à l'occasion (319 est le mien : ticket + volet frontend).
+
+**Statut :** INFO

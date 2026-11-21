@@ -395,6 +395,37 @@ def _push_invoice(node, record):
     return _record_result(record_id, True)
 
 
+# BUG-331/332 : borne haute d'une quantité de ligne (line_total est un
+# Decimal(14, 2) : 1 000 000 x prix unitaire reste largement dans la plage).
+MAX_LINE_QUANTITY = 1_000_000
+
+
+def _parse_line_quantity(value):
+    """Retourne un entier 0..MAX_LINE_QUANTITY ou None si la valeur est invalide.
+
+    Refuse : booléens, flottants non entiers/NaN/infinis, chaînes non
+    entières (« 2.5 », « 1e3 »), négatifs et valeurs hors borne.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if value != value or value in (float('inf'), float('-inf')) or value != int(value):
+            return None
+        number = int(value)
+    elif isinstance(value, str):
+        try:
+            number = int(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if number < 0 or number > MAX_LINE_QUANTITY:
+        return None
+    return number
+
+
 def _push_invoice_line(node, record):
     from core.models import BreadPrice
     from sales.models import Invoice, InvoiceLine
@@ -416,11 +447,12 @@ def _push_invoice_line(node, record):
         changed = []
         for fname in ('quantity', 'ordered_quantity'):
             val = record.get(fname)
-            if val is None or isinstance(val, bool):
+            if val is None:
                 continue
-            try:
-                val = int(val)
-            except (TypeError, ValueError):
+            # BUG-331/332 : entier borné strict ; booléen, non-entier,
+            # négatif, infini ou énorme -> REJECTED (jamais de 500).
+            val = _parse_line_quantity(val)
+            if val is None:
                 return _record_result(record_id, False, f"{fname} invalide")
             current = getattr(existing_line, fname)
             if val == current:
@@ -456,7 +488,10 @@ def _push_invoice_line(node, record):
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
-    kwargs = dict(invoice=invoice, bread_price=bread_price, quantity=record.get('quantity', 0))
+    quantity = _parse_line_quantity(record.get('quantity', 0))
+    if quantity is None:
+        return _record_result(record_id, False, "quantity invalide")
+    kwargs = dict(invoice=invoice, bread_price=bread_price, quantity=quantity)
     if record_id:
         kwargs['id'] = record_id
     InvoiceLine.objects.create(**kwargs)

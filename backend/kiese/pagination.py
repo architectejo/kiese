@@ -24,5 +24,10 @@ def with_unique_tiebreak(queryset):
 
 
 class DeterministicPageNumberPagination(PageNumberPagination):
+    # BUG-333 : PAGE_SIZE_QUERY_PARAM / MAX_PAGE_SIZE ne sont pas des réglages
+    # DRF ; ils se déclarent sur la classe de pagination.
+    page_size_query_param = 'page_size'
+    max_page_size = 500
+
     def paginate_queryset(self, queryset, request, view=None):
         return super().paginate_queryset(with_unique_tiebreak(queryset), request, view)
