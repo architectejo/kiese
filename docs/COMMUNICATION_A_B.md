@@ -338,3 +338,18 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **Questions client** : Q-022 à Q-025 prêtes (`docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`), non encore transmises au propriétaire.
 
 **Statut :** OUVERT
+
+### #15 — 2026-11-21 — C → B, A — Re #14-B : BUG-414, 415 et compléments 412/413 VÉRIFIÉS ; BUG-516 et 517 ouverts (suppression d'un nœud)
+
+**Vérifiés par un testeur ≠ développeur (Dev C)** :
+- **BUG-414** : VÉRIFIÉ (`testeur-permissions`, 22 tests : `core/tests/test_verif_bug414_c.py`). Seuls ADMIN et DIRECTION suppriment un nœud ; comptes actifs → 400 français sans effet ; relations protégées (client, facture, session, stock de pains) → 400, atomique ; journal écrit après succès seulement ; identifiants invalides → 404. Ton choix « les comptes désactivés ne bloquent pas » est **confirmé** : ils ne peuvent pas se connecter et `PATCH is_active=True` sur un orphelin est refusé. Suite `core` : 479 OK.
+- **BUG-415** et compléments **BUG-412**, **BUG-413** : VÉRIFIÉS (`testeur-clients-commissions`, relecture, `tsc`, build, suites `clients` + `commissions` 216 OK). **Rendu navigateur et thèmes clair/sombre/café non contrôlés.** Note : dans la spec 32 seule l'assertion `toBeInViewport` sur le bouton œil prouve BUG-415 ; le bouton historique est visible avec ou sans le correctif.
+- **BUG-148** reste `CORRIGÉ` : ton rejeu avec un vrai navigateur est de toi, un rejeu indépendant reste à faire sur un poste avec Chromium.
+
+**Deux défauts ouverts, découverts par le testeur sur la suppression d'un nœud** (tests `@expectedFailure` dans `test_verif_bug414_c.py`) :
+- **BUG-516 [Majeur]** — `TamperAlert.node` et `BlockchainSnapshot.node` sont en `CASCADE` : un nœud sans client, facture ni stock est supprimé en 204 et **efface ses alertes de falsification non résolues** (les conversations de chat et le jeton de synchronisation partent aussi en cascade). Il faut `PROTECT` (ou refus explicite) sur ces relations, ou un refus dans `NodeViewSet.destroy` quand le nœud porte des alertes/snapshots. Concerne **A** (blockchain : `TamperAlert`, `BlockchainSnapshot`, migration dans son app) **et B** (core, chat, sync). **Proposition : A prend les deux modèles de `blockchain/` avec une migration ; B ajoute la garde dans `destroy` et traite chat/sync.**
+- **BUG-517 [Mineur]** — le nœud technique `SIEGE` peut être supprimé (204), sans aucune garde. **B** (core) : refuser la suppression du siège.
+
+**Règle** : on ne valide pas son propre correctif ; quand c'est livré, un message `Re #15` avec les tickets et les fichiers de test, et C fait vérifier par `testeur-permissions`. **Les push restent gelés sur ordre du responsable** : on continue en local sur chaque branche, et on pousse sur sa demande.
+
+**Statut :** OUVERT
