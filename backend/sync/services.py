@@ -12,7 +12,7 @@ from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import Sum
 
 from core.models import Node
-from .models import DebtMovement
+from .models import DebtMovement, SyncConflictLog
 
 # Même logique que `treasury.views._APPEND_MAX_RETRIES` : sous SQLite (dev/
 # desktop), une écriture concurrente peut heurter "database is locked" —
@@ -742,7 +742,87 @@ def _push_consumable_movement(node, record):
         # sur l'enregistrement local d'une fournée.
         reason = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
         return _record_result(record_id, False, f"dépendance manquante : {reason}")
+    # BUG-146 : voir `_track_orphan_exit` / `_restamp_orphan_exits`.
+    if movement.movement_type == ConsumableMovement.MovementType.EXIT:
+        _track_orphan_exit(movement)
+    elif movement.movement_type == ConsumableMovement.MovementType.ENTRY:
+        _restamp_orphan_exits(stock.pk)
     return _record_result(record_id, True)
+
+
+ORPHAN_EXIT_CONFLICT = 'CONSUMABLE_EXIT_ORPHAN'
+
+
+def _track_orphan_exit(movement):
+    """
+    BUG-146 : une sortie reçue alors que le CUMP Cloud du stock est nul
+    (aucune entrée valorisée vue encore) a été figée à 0 par
+    `ConsumableMovement.save()`. On l'enregistre dans le journal des
+    conflits (consultable au siège, SYNC.md §5.2) comme « en attente de
+    valorisation » ; `_restamp_orphan_exits` la ré-estampille à l'arrivée
+    d'une entrée valorisée. Idempotent (un seul marqueur par sortie).
+    """
+    if movement.unit_price and Decimal(str(movement.unit_price)) > 0:
+        return
+    obj_id = str(movement.pk)
+    if SyncConflictLog.objects.filter(
+        model_label='production.ConsumableMovement', object_id=obj_id,
+        conflict_type=ORPHAN_EXIT_CONFLICT,
+    ).exists():
+        return
+    SyncConflictLog.objects.create(
+        node=movement.node, model_label='production.ConsumableMovement',
+        object_id=obj_id, conflict_type=ORPHAN_EXIT_CONFLICT,
+        detail=("Sortie reçue avant toute entrée valorisée : valorisée provisoirement "
+                "à 0 FC, sera ré-estampillée au CUMP à l'arrivée de l'entrée."),
+    )
+
+
+def _restamp_orphan_exits(stock_id):
+    """
+    BUG-146 : ré-estampille `unit_price` des sorties orphelines d'un stock
+    au prix moyen pondéré des entrées reçues, une fois une entrée valorisée arrivée.
+    Écrit par `update()` (pas `save()`, qui retoucherait la quantité du
+    stock). Atomique (verrou sur la ligne de stock), idempotent (marqueur
+    résolu, jamais retraité), Decimal uniquement. Retourne le nombre de
+    sorties corrigées. Ne réutilise pas `backfill_average_unit_cost`
+    (production, migration 0018) : elle rejoue tout l'historique dans
+    l'ordre de `created_at`, qui côté Cloud est l'ordre d'ARRIVÉE (la
+    charge utile de push ne porte pas l'horodatage d'origine) et
+    redonnerait donc 0.
+    """
+    from django.utils import timezone as _tz
+    from production.models import ConsumableMovement, ConsumableStock
+
+    with transaction.atomic():
+        stock = ConsumableStock.objects.select_for_update().get(pk=stock_id)
+        # Moyenne pondérée des ENTRÉES uniquement (indépendante de l'ordre
+        # d'arrivée). On n'utilise PAS `stock.average_unit_cost` : tant que le
+        # stock est négatif (sortie arrivée avant l'entrée), le CUMP du modèle
+        # est gonflé (voir BUG-402).
+        total_qty = Decimal('0')
+        total_val = Decimal('0')
+        for qty, price in ConsumableMovement.objects.filter(
+                stock_id=stock_id, movement_type='ENTRY').values_list('quantity', 'unit_price'):
+            qty, price = Decimal(str(qty)), Decimal(str(price or '0'))
+            total_qty += qty
+            total_val += qty * price
+        if total_qty <= 0 or total_val <= 0:
+            return 0
+        cump = (total_val / total_qty).quantize(Decimal('0.01'))
+        exit_ids = [str(i) for i in ConsumableMovement.objects.filter(
+            stock_id=stock_id, movement_type='EXIT').values_list('pk', flat=True)]
+        pending = list(SyncConflictLog.objects.select_for_update().filter(
+            model_label='production.ConsumableMovement',
+            conflict_type=ORPHAN_EXIT_CONFLICT, resolved_at__isnull=True,
+            object_id__in=exit_ids,
+        ))
+        for marker in pending:
+            ConsumableMovement.objects.filter(pk=marker.object_id).update(unit_price=cump)
+            marker.resolved_at = _tz.now()
+            marker.resolution_note = f"Ré-estampillée automatiquement au CUMP {cump} FC (BUG-146)."
+            marker.save(update_fields=['resolved_at', 'resolution_note'])
+        return len(pending)
 
 
 def _push_bread_transfer(node, record):
