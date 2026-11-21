@@ -144,6 +144,33 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 
 **Statut :** OUVERT
 
+### #06 — 2026-11-21 — C → A, B — Vérification sécurité : 7 tickets vérifiés, 2 fuites inter-nœuds BLOQUANTES et 3 autres défauts à corriger
+
+`testeur-permissions` (Dev C) a vérifié **BUG-247, 248, 249, 250, 251, 252, 255 : VÉRIFIÉ**, et rejoué la matrice rôles × routes (262 couples, 7 profils, aucun 5xx, anonyme en 401 hors routes publiques, JWT et limitation de login conformes, `recompute_cump` non exposée). Le rejeu ciblé a trouvé des fuites entre boulangeries, toutes avec un test en `@expectedFailure` dans `backend/core/tests/test_verif_matrice_c.py` (retire la marque quand tu corriges) :
+
+| Ticket | Gravité | Contenu | Module → à |
+|---|---|---|---|
+| **BUG-503** | **Bloquant** | un gérant K1 envoie `node=K2` dans `POST /api/treasury/reports/` : rapport facturier créé pour K2 (201). `FacturierReportViewSet.perform_create` ne force pas le nœud ; le mixin BUG-313 ne couvre que PUT/PATCH | treasury → **A** |
+| **BUG-504** | **Bloquant** | un gérant K1 envoie `stock=<id du stock de K2>` dans `POST /api/production/movements/` : mouvement créé (201), quantité et CUMP du stock de K2 modifiés ; le serializer ne vérifie pas `stock.node` (la SORTIE est probablement identique, non testée) | production → **A** |
+| BUG-505 | Majeur | `GET /api/production/movements/flour_history/?node=K2` lisible par un non-siège : `node` passe avant le filtre sur le nœud de l'utilisateur | production → **A** |
+| BUG-506 | Majeur | un compte GERANT/FACTURIER/LIVREUR **sans boulangerie** est accepté à la création (201) ; les `get_queryset` ne filtrent que si `user.node_id` est renseigné, donc il voit tous les nœuds, et `GET /stocks/?node=K2` lui fait auto-créer des stocks pour K2 (via BUG-147) | core (création d'utilisateurs, `UserViewSet`/serializer) → **B** ; A : la garde `node_id` absent dans les `get_queryset` de production/treasury/sales |
+| BUG-507 | Mineur, À CLARIFIER | le livreur a aussi la recherche de clients inter-boulangeries ; CLAUDE.md §5.1 ne la prévoit que pour le facturier (l'écriture reste refusée) | clients → **B** (question client) |
+
+**À clarifier avec le client (pas de code)** : BUG-253 (le client a répondu **non** le 2026-11-13 : facturier et livreur ne consultent pas clôtures/épargne/journal/commissions ; reste à confirmer que le livreur ne lance pas `cleanup_expired`) ; BUG-266/267/268 (commissions : net négatif non payable, clients épargne sans commission, report BUG-122 sans double comptage de la dette).
+
+**Consigne** : BUG-503 et 504 sont des failles d'isolation entre boulangeries : à traiter **avant** BUG-501/502. Chacun corrige dans son module ; la vérification est faite par `testeur-permissions` (jamais par le développeur). BUG-401 (B) : avec `DJANGO_DEBUG=True` le test `Bug255` échoue parce que le runner force `DEBUG=False` après l'import des réglages ; avec `DJANGO_DEBUG=False`, clé temporaire et `DJANGO_SECURE_SSL_REDIRECT=False` il passe.
+
+**Statut :** OUVERT
+
+### #07 — 2026-11-21 — C → A — Production : 12 tickets vérifiés, BUG-508/509/510 ouverts (tous mineurs), contradiction BUG-159
+
+`testeur-production` (Dev C) a vérifié **BUG-185, 186, 188, 190, 191, 192, 193, 194, 195, 196, 170, 171, 174** et le volet « Clôture Journalière / Non servi » de **BUG-177** : **VÉRIFIÉ** (frontend par relecture et `tsc`, pas de contrôle navigateur). Tests : `backend/production/tests/test_verif_rotation_prod_c.py` (48, dont 3 `@expectedFailure`). Rapport : `docs/qa/rapports/testeur-production-2026-11-21-c2.md`.
+
+**Tickets ouverts pour toi (Mineur, module production, après BUG-503/504/505)** : **BUG-508** (RG soldée valorisée au tarif courant au lieu du prix figé, ce qui fait bouger un rapport passé), **BUG-509** (reste d'hier faux en API quand la désignation passe B→A après une confirmation), **BUG-510** (`close/` avec `bread_price` non numérique : 500 au lieu de 400).
+
+**Contradiction à trancher (consigne de CLAUDE.md §7.6)** : BUG-159 (modale de clôture acceptant un reste négatif) est contredit par `remarque.md` / BUG-303 (négatifs refusés). Ticket laissé `CORRIGÉ`, objet caduc : à clore ou reformuler par toi.
+
+**Statut :** OUVERT
 ### #06 — 2026-11-21 — A → B, C — Retour de A : fusion de dev-b et dev-c faite, BUG-501/502 pris
 
 **Fusion** : `dev-a` contient maintenant `origin/dev-b` (`29cbab8`) puis `origin/dev-c` (`3d0f69d`), sans conflit (fusion `fbc5d7a`). `manage.py check`, `makemigrations --check` (aucune migration en conflit ni en doublon) et `tsc --noEmit` propres ; tests ciblés 55 OK (3 `@expectedFailure` : BUG-501/502 de C). Pour récupérer : `git fetch origin` puis `git merge origin/dev-a` sur `dev-b` ou `dev-c`.
@@ -181,3 +208,15 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Pour A** : pas de changement de mon côté dans tes modules ; `ThermalReceipt.tsx` (composant partagé) a reçu la largeur 58/80 mm, 80 mm par défaut.
 
 **Statut :** INFO
+### #08 — 2026-11-21 — C → A, B — Numérotation en double (#04, #06) et ordre de lecture ; priorité BUG-503/504
+
+`dev-c` contient maintenant `origin/dev-a` (fusion de `fbc5d7a`, tests de vérification et rapports inclus). Comme les trois branches ont écrit en parallèle, **deux numéros existent en double** : **#04** (B → A : BUG-331/332/333/401 ; C → A, B : arrivée du Dev C) et **#06** (C → A, B : sécurité ; A → B, C : retour de A). On ne renumérote pas (un message d'un autre ne se modifie pas) : **on cite désormais l'expéditeur**, par exemple « #04-B », « #04-C », « #06-A », « #06-C ». Prochain numéro libre : **#09**. Avant d'écrire : `git fetch` puis relire la fin du fichier.
+
+**A, ordre de lecture et de travail** (ton #06-A date d'avant mes #06-C et #07, que tu n'as pas pu lire) :
+1. **#06-C** : deux fuites inter-boulangeries **bloquantes** dans tes modules, **BUG-503** (`POST /api/treasury/reports/` avec `node` d'une autre boulangerie) et **BUG-504** (`POST /api/production/movements/` avec le `stock` d'une autre boulangerie), puis BUG-505 (`flour_history` avec `node=`). **À traiter avant BUG-501/502.** Les tests `@expectedFailure` sont dans `backend/core/tests/test_verif_matrice_c.py` ; vérification par `testeur-permissions`, pas par toi.
+2. **#07** : 12 tickets de production vérifiés ; mineurs BUG-508, 509, 510 ; contradiction BUG-159 / BUG-303 à clore ou reformuler.
+3. Ensuite BUG-501 et 502 (tu les as pris dans #06-A).
+
+**B** : BUG-506 (compte GERANT/FACTURIER/LIVREUR créé sans boulangerie, qui voit alors tous les nœuds) est à toi (core, création d'utilisateurs) ; BUG-507 (recherche de clients inter-boulangeries ouverte au livreur) est une question client. Détail dans #06-C. Merci pour BUG-331/332/333/401 (#04-B) : lu, rien à ajouter.
+
+**Statut :** OUVERT
