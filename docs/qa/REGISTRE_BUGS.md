@@ -11847,7 +11847,7 @@ lors de copier-coller), ce qui en fait une base peu fiable à reproduire littér
 ### BUG-129 — Déclaration de fournée en doublon (même nœud/équipe/jour) : message d'erreur affiché au gérant au format JSON brut au lieu d'une phrase française
 
 - Module : Production · Composant : backend (cause racine) / frontend (symptôme visible) · Gravité : Mineur
-- Statut : OUVERT
+- Statut : CORRIGÉ (déjà corrigé par le commit 7f1890d « BUG-129, 179 » et BUG-142, jamais mis à jour ici ; constaté par dev-backend / Dev C, 2026-11-21c — à vérifier par le testeur). Aucun code modifié. Constat : `_perform_create_locked` (`production/views.py`) lève `ValidationError({'detail': ...})` (dict) sur la course `IntegrityError` ; le doublon « normal » s'ajoute à la session existante (BUG-142, plus d'erreur) et une session clôturée renvoie aussi un dict `detail`. Test déjà présent : `production/tests/test_bug129_session_duplicate_format.py` (2 tests, passent). Le volet frontend (`Production.tsx::handleAddSession`, `getErrorDetail`) n'a pas été examiné.
 - Ouvert par : testeur-e2e, régression E2E complète avant passage client (mission du coordinateur,
   2026-11-03) — découvert en investiguant l'échec, à chaud, du test existant
   `e2e/tests/10-regression-remarque-2026-10-30.spec.ts:147` (« Clôture de fournée automatisée
@@ -13665,7 +13665,8 @@ compte, pas tranché unilatéralement.
   manquante synchronisée (job de rattrapage).
 
 ### BUG-147 — Fournée avec consommable sans aucune ligne ConsumableStock : perte silencieuse totale de traçabilité (pas de mouvement, pas de notification)
-- Module : Production · Composant : backend · Gravité : Majeur · Statut : OUVERT
+- Module : Production · Composant : backend · Gravité : Majeur · Statut : CORRIGÉ (dev-backend / Dev C, 2026-11-21c)
+- Correction : nouvel helper `_get_or_create_consumable_stock(node, code)` dans `backend/production/views.py` (`get_or_create`, quantité 0, unité du `ConsumableType` si connu), utilisé par `_record_consumable_exits` (POST fournée, farine + sel/levure/huile) et par la régularisation de farine du PATCH de session (même `if ... is not None` silencieux). Le stock peut devenir négatif (règle BUG-143 inchangée, notification existante). Tests : `production/tests/test_bug147_auto_create_consumable_stock.py` (avant : 3 erreurs `DoesNotExist`, après : OK) ; `test_verif_bug143_testeur_production.py::NoStockRowAtAllTests` réaligné (il documentait la perte silencieuse ; renommé `..._is_recorded_bug147`) — le testeur-production doit le confirmer. Hors périmètre non modifié : `ConsumableCountViewSet.perform_create` (inventaire) lit encore le stock sans le créer (système = 0 si absent, cohérent).
 - Ouvert par : testeur-production le 2026-11-10, scénario construit indépendamment en vérifiant
   BUG-143 (CLAUDE.md §7 règle 4/mission point 2 : construire son propre scénario, pas relire celui du
   développeur).
@@ -16561,7 +16562,8 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 
 
 ### BUG-357 — [Mineur] CUMP déjà gonflé en base (avant BUG-402) non recalculé (production, à l'attention du développeur A)
-- Module : Production · Composant : backend (migration de données) · Statut : OUVERT · Ouvert par : testeur-production, 2026-11-21c (risque signalé par dev-backend lors de BUG-402).
+- Module : Production · Composant : backend (migration de données) · Statut : CORRIGÉ (dev-backend / Dev C, 2026-11-21c) · Ouvert par : testeur-production, 2026-11-21c (risque signalé par dev-backend lors de BUG-402).
+- Correction : commande de gestion `python manage.py recompute_cump` (`backend/production/management/commands/recompute_cump.py`), SIMULATION par défaut, `--apply` pour écrire, `--node K1` optionnel. Rejoue par stock les mouvements (`created_at`, `pk`) avec la formule BUG-402 (`base_qty = max(old_qty, 0)`), affiche l'écart de CUMP par stock, revalorise aussi les `unit_price` des sorties (EXIT), journalise via `log_activity` (« Recalcul CUMP (BUG-357) ») par stock modifié. Chaque stock : `transaction.atomic` + `select_for_update`. Aucune migration de schéma ; quantité de stock jamais modifiée (avertissement si la quantité rejouée diffère : stock initial non tracé par des mouvements, convention identique à la migration 0018). Idempotente. Test : `production/tests/test_bug357_recompute_cump.py` (6 tests, avant : `Unknown command`, après : OK). À faire par l'exploitation : lancer d'abord sans `--apply` sur chaque base réelle, relire l'écart, puis `--apply` (sauvegarde préalable).
 - Constat : le correctif BUG-402 ne vaut que pour les nouvelles entrées. Tout `ConsumableStock.average_unit_cost` déjà gonflé par une entrée sur stock négatif reste faux, et valorise les sorties suivantes (Compte de Résultat). Seules des bases ayant eu une sortie en négatif (BUG-143) puis une entrée sont concernées.
 - Proposition : migration de données (nouvelle, sans toucher 0018) rejouant les mouvements par stock dans l'ordre de `created_at` avec la formule corrigée, ou commande de gestion `recompute_cump --dry-run` ; à décider selon que des bases de production sont concernées. Aucun test à écrire tant que la forme n'est pas choisie.
 
