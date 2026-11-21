@@ -44,7 +44,7 @@ Le poste desktop **est le « nœud local »** prévu par la section 6.3 du cahie
                        ▼
         ┌────────────────────────────────────────┐
         │ Serveur cloud (Linux)                  │
-        │ Nginx → Gunicorn → Django → PostgreSQL │
+        │ Nginx → Waitress → Django → PostgreSQL │
         │ Siège, consolidation, états financiers │
         └────────────────────────────────────────┘
 ```
@@ -53,9 +53,9 @@ Le poste desktop **est le « nœud local »** prévu par la section 6.3 du cahie
 
 ## 3. Choix techniques et justification
 
-### 3.1 Waitress au lieu de Gunicorn sur le poste
-**Gunicorn ne fonctionne pas sous Windows** (il dépend de `fork`, absent de Windows). Les postes des boulangeries sont sous Windows (l'environnement virtuel du projet est déjà un venv Windows). On utilise donc **Waitress**, serveur WSGI pur Python, stable et multiplateforme.
-Gunicorn reste utilisé **sur le serveur cloud Linux**.
+### 3.1 Waitress partout (poste et cloud), pas de Gunicorn
+**Gunicorn ne fonctionne pas sous Windows** (il dépend de `fork`, absent de Windows). Les postes des boulangeries sont sous Windows. **Décision du 2026-11-21** : on utilise **Waitress**, serveur WSGI pur Python, stable et multiplateforme, **à la fois sur les postes et sur le serveur cloud Linux** (une seule configuration à maintenir). Gunicorn est retiré des dépendances. **Electron est conservé** comme enveloppe desktop (impression silencieuse, mises à jour automatiques, assistant de première installation).
+Sur le cloud, Waitress tourne derrière Nginx.
 
 ### 3.2 Pas de Nginx sur le poste
 Sur un PC avec un seul utilisateur local, Nginx n'apporte rien et ajoute un service Windows à installer et maintenir :
@@ -63,7 +63,7 @@ Sur un PC avec un seul utilisateur local, Nginx n'apporte rien et ajoute un serv
 - les fichiers statiques Django (admin, DRF) sont servis par **WhiteNoise**, déjà présent ;
 - les photos clients (`media/`) sont servies par Django en local.
 
-Nginx reste utilisé **sur le serveur cloud** (HTTPS, compression, fichiers statiques, reverse proxy vers Gunicorn).
+Nginx reste utilisé **sur le serveur cloud** (HTTPS, compression, fichiers statiques, reverse proxy vers Waitress).
 
 ### 3.3 SQLite sur le poste, PostgreSQL au cloud
 - Poste : **SQLite en mode WAL** (`PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`). Un seul fichier, aucun service, suffisant pour une boulangerie (2 facturiers + 1 gérant).

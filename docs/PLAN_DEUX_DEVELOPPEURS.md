@@ -40,7 +40,7 @@ Découpage **vertical par module** (backend + frontend d'un même module chez le
 | B4 | Desktop : build installeur, premier lancement, sauvegardes, mises à jour | `DESKTOP.md` D1–D8 | `packaging-desktop`, `testeur-installation`, `testeur-materiel` |
 | B5 | Permissions et isolation : rejouer la matrice après les changements de A | `MATRICE_PERMISSIONS.md` | `testeur-permissions` |
 | B6 | Dette technique : découper Clients.tsx et Settings.tsx, supprimer les `any` | BUG-011 | `relecteur-code`, `dev-frontend` |
-| B7 | Cloud : VPS Linux, PostgreSQL, Gunicorn + Nginx, HTTPS ; tests de charge 8 nœuds | — | `nettoyeur-securite`, `testeur-charge` |
+| B7 | Cloud : VPS Linux, PostgreSQL, Waitress + Nginx, HTTPS (décision du 2026-11-21 : Waitress partout, pas de Gunicorn) ; tests de charge 8 nœuds | — | `nettoyeur-securite`, `testeur-charge` |
 | B8 | Documentation, manuels par rôle, procès-verbal de recette | — | `redacteur-documentation` |
 | B9 | Vérifier les tickets `CORRIGÉ` des modules B | — | testeurs d'origine |
 

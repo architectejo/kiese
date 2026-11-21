@@ -213,7 +213,7 @@ Les sous-agents sont dans `.claude/agents/`. Le **coordinateur** pilote ; les au
 ## 8. Cible desktop (phase 5)
 
 Application Electron installable dans chaque boulangerie, servant de **nœud local** :
-- Electron lance le backend Django empaqueté (PyInstaller) servi par **Waitress** sous Windows (Gunicorn ne fonctionne pas sous Windows ; Gunicorn + Nginx restent pour le serveur cloud Linux).
+- Electron lance le backend Django empaqueté (PyInstaller) servi par **Waitress**. **Décision du 2026-11-21 : Waitress est le seul serveur WSGI du projet**, poste Windows comme serveur cloud Linux (Waitress est du Python pur, multiplateforme) ; Gunicorn n'est plus utilisé. Sur le cloud, Nginx reste en frontal (HTTPS, statiques) devant Waitress. Electron est conservé comme enveloppe desktop.
 - Pas de Nginx sur le poste : Electron charge le build React et parle à `http://127.0.0.1:<port>`.
 - SQLite en mode WAL, sauvegarde quotidienne automatique, migrations au démarrage.
 - `SECRET_KEY` générée à l'installation, unique par poste.

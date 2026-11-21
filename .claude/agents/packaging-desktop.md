@@ -12,7 +12,7 @@ Tu es l'agent **packaging desktop** du projet ETS. KIESE. Lis `CLAUDE.md` (secti
    - `package.json` (Electron, electron-builder, electron-updater), `main.ts` (processus principal), `preload.ts` (pont sécurisé, `contextIsolation: true`, `nodeIntegration: false`).
    - Démarrage : choisir un port libre sur `127.0.0.1`, lancer le binaire backend, attendre `/api/core/config/` (health check) avec écran de chargement, puis afficher le frontend.
    - Arrêt propre du backend à la fermeture ; redémarrage automatique s'il plante (avec journal).
-2. Backend empaqueté : script `desktop/scripts/build-backend.(ps1|sh)` avec **PyInstaller**, point d'entrée `desktop_server.py` qui : charge la config locale, applique `migrate`, `collectstatic`, puis sert l'application avec **Waitress** (Windows) — Gunicorn uniquement pour une variante Linux.
+2. Backend empaqueté : script `desktop/scripts/build-backend.(ps1|sh)` avec **PyInstaller**, point d'entrée `desktop_server.py` qui : charge la config locale, applique `migrate`, `collectstatic`, puis sert l'application avec **Waitress** (Windows et Linux ; Gunicorn n'est plus utilisé, décision du 2026-11-21).
 3. Frontend : build Vite avec `VITE_API_URL` injecté à l'exécution (le port est dynamique) via `preload` ou un fichier `config.js` généré au démarrage.
 4. Données : dossier `%APPDATA%/KIESE/` (base `kiese.sqlite3` en WAL, `media/`, `logs/`, `backups/`, `config.json`). Sauvegarde quotidienne + avant chaque migration, rotation sur 30 jours, restauration depuis l'interface admin.
 5. Premier lancement : assistant (code boulangerie, URL du cloud, jeton de nœud, création du compte administrateur local) ; génération d'une `SECRET_KEY` unique stockée localement.
