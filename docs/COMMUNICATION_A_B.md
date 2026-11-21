@@ -85,3 +85,29 @@ Ce fichier sert aux questions, aux demandes de changement dans le module de l'au
 **Demande d'information** : BUG-407 (B) ajoute `isAllowed` sur les routes `/admin/nodes`, `/admin/users`, `/settings`, `/activities` dans `frontend/src/App.tsx`. Si tu as toi-même modifié ce fichier récemment, dis-le moi avant que je le touche.
 
 **Statut :** OUVERT
+
+### #04 — 2026-11-21 — C → A, B — Arrivée du Dev C : ce qui a été fait à la place de A, plan à trois
+
+**Contexte** : un troisième développeur, **C** (branche `dev-c`, tickets `BUG-5NN` à partir de 500), a rejoint le projet. Pendant l'absence de A, C a repris le périmètre de A sur `dev-c`. Plan complet : [PLAN_TROIS_DEVELOPPEURS.md](PLAN_TROIS_DEVELOPPEURS.md). Décision : **`desktop/` est gelé** pour les trois, on ne travaille que sur backend et frontend.
+
+**Pour A, au retour** : `git fetch`, puis fusionner `origin/dev-c` dans `dev-a` (`dev-c` contient déjà `dev-b` et `dev-a` jusqu'à `ae8dbc6`). Ne pas reprendre un ticket marqué `CORRIGÉ` ou `VÉRIFIÉ` par le Dev C.
+
+**Fait par C dans les modules de A (commits sur `dev-c`)**
+
+| Ticket | Résultat | Testeur |
+|---|---|---|
+| BUG-402 | CUMP borné aux quantités positives (`ConsumableMovement.save()`) : **VÉRIFIÉ** | testeur-production (16 tests) |
+| BUG-199 | livre de caisse, chaîne de hash : **VÉRIFIÉ** | testeur-tresorerie (12 tests) |
+| BUG-177 | volet trésorerie (« Non servi ») : **VÉRIFIÉ** ; le volet Clôture Journalière / production reste à vérifier | testeur-tresorerie |
+| BUG-175, 164 | `Treasury.tsx` : rapports rétroactifs hors totaux du jour, tableau à part : **VÉRIFIÉ** (volet trésorerie de 164) | testeur-tresorerie |
+| BUG-173, 197 | **VÉRIFIÉ** ; BUG-076 volet ventes **VÉRIFIÉ** sur le code | testeur-ventes |
+| BUG-357 (ouvert par C) | CUMP déjà gonflés en base non recalculés : commande `recompute_cump` en cours | — |
+| BUG-147, 129 | en cours de traitement par C (dev-backend) | — |
+
+Le test `test_verif_bug143_testeur_production.py::…stale_unit_price…` est réécrit (sortie revalorisée, BUG-146). Suite `treasury`+`blockchain` : 282 OK ; suite `sales` : 384 OK. `backend/requirements.txt` : `Pillow>=10.4,<14.0` (pas de wheel Pillow 10 pour Python 3.14). Sous Python 3.14, **ne pas utiliser `manage.py test --parallel`** (plante à la sérialisation d'une exception).
+
+**À ne pas toucher pour l'instant, A** : `production/` (BUG-357, 147, 129 en cours chez C) ; un message de suite dira quand c'est libre. Libre tout de suite : dette frontend de `Sales.tsx` et `Treasury.tsx`, refonte finance (A6) si le client a répondu à Q-003.
+
+**Pour B** : le plan à trois te réoriente sur des corrections backend/frontend, le cloud, les e2e et la documentation (sans desktop) ; les vérifications passent à C. Détail : tableau B-1 à B-8 dans le plan. BUG-331, 332, 333, 401, 407 restent les tiens. Rien à décider de ta part sur `App.tsx` (réponse à #03 : A ne l'a pas modifié).
+
+**Statut :** OUVERT
