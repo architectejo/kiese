@@ -2473,6 +2473,23 @@ def _build_daily_closure_report(node, report_date=None):
         .values('bread_price_id').annotate(qty=Sum('quantity'), fc=Sum('line_total'))
     }
 
+    # BUG-356 (remarque.md « Non Servi » non comptabilisé) : factures au STATUT
+    # `NOT_SERVED` (BUG-318) déclarées ce jour de travail (`not_served_at`).
+    # Quantité = commandé initial (`ordered_quantity`, repli `quantity`), valeur
+    # = quantité × prix FIGÉ de la ligne. Information additive : jamais dans les
+    # ventes/produit/facturé (commande = 0, stock restitué) ni dans
+    # `facture_mvm_interne`/`total_du_jour` (aucun pain n'est sorti).
+    ns_status_by_bp = {}
+    for ln in InvoiceLine.objects.filter(
+        invoice__node=node, invoice__status=Invoice.Status.NOT_SERVED,
+        invoice__is_debt_repayment=False, invoice__is_adjustment=False,
+        **delivered_on_work_date_filter(node, report_date, 'invoice__not_served_at'),
+    ).exclude(invoice__special_code=Invoice.SpecialCode.NS):
+        q = ln.ordered_quantity if ln.ordered_quantity is not None else ln.quantity
+        e = ns_status_by_bp.setdefault(ln.bread_price_id, {'qty': 0, 'fc': Decimal('0.00')})
+        e['qty'] += q or 0
+        e['fc'] += Decimal(q or 0) * Decimal(ln.unit_price)
+
     # NON VENDU(NV)/DECLASSES/EXCEDENT GRATUIT : dispositions du jour, hors
     # REMAINING (qui alimente déjà `DailyBreadStockSnapshot`, Chantier B).
     disposals_qs = BreadDisposal.objects.filter(
@@ -2571,7 +2588,7 @@ def _build_daily_closure_report(node, report_date=None):
     category_ids = (
         set(BreadPrice.objects.filter(is_active=True).values_list('id', flat=True))
         | set(produced_by_bp) | set(normal_by_bp) | set(soldee_by_bp)
-        | set(regularisation_by_bp) | set(ns_by_bp) | set(sold_day_by_bp)
+        | set(regularisation_by_bp) | set(ns_by_bp) | set(ns_status_by_bp) | set(sold_day_by_bp)
         | set(disposals_by_bp_type) | set(appro_effectue_by_bp) | set(appro_recu_by_bp)
     )
     categories_by_id = {bp.id: bp for bp in BreadPrice.objects.filter(id__in=category_ids)}
@@ -2584,6 +2601,9 @@ def _build_daily_closure_report(node, report_date=None):
     total_reste_hier_jour_fc = Decimal('0.00')
     total_reste_jour_jour_fc = Decimal('0.00')
     total_breads_billed = 0
+    total_ns_status_fc = Decimal('0.00')
+    total_ns_status_qty = 0
+    total_ns_code_fc = Decimal('0.00')
 
     for bp_id in sorted(category_ids, key=lambda i: categories_by_id[i].unit_price if i in categories_by_id else 0):
         bp = categories_by_id.get(bp_id)
@@ -2600,6 +2620,8 @@ def _build_daily_closure_report(node, report_date=None):
         soldee_fc = _m(soldee.get('fc'))
         reg_fc = _m(reg['fc'])
         non_servi_fc = _m(ns.get('fc'))
+        ns_status = ns_status_by_bp.get(bp_id, {'qty': 0, 'fc': Decimal('0.00')})
+        ns_status_fc = _m(ns_status['fc'])
 
         catalog_price = Decimal(bp.unit_price)
         reste_du_jour_by_team = {
@@ -2761,6 +2783,9 @@ def _build_daily_closure_report(node, report_date=None):
                 'quantity': ns.get('qty') or 0, 'fc': str(non_servi_fc),
                 'fc_signe': str(-non_servi_fc) if non_servi_fc else '0.00',
             },
+            # BUG-356 : factures au statut NOT_SERVED du jour (commandé initial),
+            # clé sœur de `non_servi` (code NS) ; additive, hors totaux de vente.
+            'non_servi_jour': {'quantity': ns_status['qty'], 'fc': str(ns_status_fc)},
             'regularisation': {'quantity': reg['qty'], 'fc': str(reg_fc)},
             'vente_cash_soldee': {
                 'quantity': soldee.get('qty') or 0, 'fc': str(soldee_fc),
@@ -2772,6 +2797,9 @@ def _build_daily_closure_report(node, report_date=None):
             'sorties_gratuites':  {'quantity': sorties_gratuites_entry['quantity'], 'fc': sorties_gratuites_entry['fc']},
         })
 
+        total_ns_status_fc += ns_status_fc
+        total_ns_status_qty += ns_status['qty']
+        total_ns_code_fc += non_servi_fc
         total_facture_fc += facture_fc
         total_commission_fc += commission_fc
         total_mvm_interne_fc += mvm_interne_fc
@@ -2860,6 +2888,11 @@ def _build_daily_closure_report(node, report_date=None):
             'reste_du_jour_jour_fc': str(_m(total_reste_jour_jour_fc)),
             'total_breads_produced': total_breads_produced,
             'total_breads_billed': total_breads_billed,
+            # BUG-356 : Non servi par STATUT (clés sœurs, additives) ; `_total` =
+            # statut + code spécial NS (valeur affichable de la ligne NON SERVI).
+            'non_servi_fc': str(_m(total_ns_status_fc)),
+            'non_servi_quantity': total_ns_status_qty,
+            'non_servi_total_fc': str(_m(total_ns_status_fc + total_ns_code_fc)),
             'repartition_pct_par_quantite': repartition_pct_par_quantite,
             'repartition_pct_par_valeur': repartition_pct_par_valeur,
         },
@@ -3053,7 +3086,7 @@ class DailyClosureClientsView(APIView):
 
         ns_rows = list(
             base.filter(is_debt_repayment=False).filter(
-                Q(status=Invoice.Status.NOT_SERVED, not_served_at__date=report_date)
+                Q(status=Invoice.Status.NOT_SERVED, **delivered_on_work_date_filter(node, report_date, 'not_served_at'))
                 | (Q(special_code=Invoice.SpecialCode.NS, invoice_date=report_date)
                    & ~Q(status=Invoice.Status.CANCELLED))
             ).values('client_id', 'client__code', 'client__first_name', 'client__last_name')

@@ -4,6 +4,9 @@ import { productionApi, ProductionSession, ServiceTeam } from '@/api/services';
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useTeamAssignmentStore, TEAM_NOT_ASSIGNED_MESSAGE } from '@/store/teamAssignmentStore';
 import { mergeSessionLines } from '@/components/production/mergeSessionLines';
+import {
+  parseSacksAddition, sacksToCents, centsToApi, centsToLabel, sacksWord,
+} from '@/components/production/sacksIncrement';
 
 // BUG-306 : déclaration d'une fournée par NOMBRE DE SACS seul, fournée « en cours » pour l'équipe
 // en service, objectif = sacs x valeur du sac, barre de progression, pains par catégorie mis à jour
@@ -166,13 +169,13 @@ export const BatchInProgressPanel: React.FC<Props> = ({
     e.preventDefault();
     if (saving || !current) return;
     setError(null);
-    const n = parseFloat(newTotal.replace(',', '.'));
-    const currentSacs = parseFloat(current.flour_sacks_used);
-    if (!(n > 0)) { setError('Indiquez le nouveau nombre total de sacs.'); return; }
-    if (n <= currentSacs) { setError(`Le nouveau total doit dépasser ${currentSacs.toLocaleString('fr-FR')} sacs déjà déclarés.`); return; }
+    const added = parseSacksAddition(newTotal);
+    if (!added.ok) { setError(added.message); return; }
+    // L'API attend le total ABSOLU : sacs actuels + ajout, en centièmes entiers (BUG-355).
+    const total = sacksToCents(current.flour_sacks_used) + added.cents;
     setSaving(true);
     try {
-      await productionApi.sessions.update(current.id, { flour_sacks_used: n.toString() });
+      await productionApi.sessions.update(current.id, { flour_sacks_used: centsToApi(total) });
       setNewTotal('');
       await load();
       onChanged();
@@ -186,7 +189,18 @@ export const BatchInProgressPanel: React.FC<Props> = ({
   const inputStyle: React.CSSProperties = { fontSize: '1rem', height: '44px', padding: '0 10px' };
   const bigBtn: React.CSSProperties = { minHeight: '48px', fontSize: '0.95rem', fontWeight: 800, width: '100%' };
 
-  const objective = current ? (current.objective_fc ?? current.theoretical_yield ?? 0) : 0;
+  const currentCents = current ? sacksToCents(current.flour_sacks_used) : 0;
+  const parsedAdd = parseSacksAddition(newTotal);
+  const preview = current && parsedAdd.ok
+    ? {
+      cents: parsedAdd.cents,
+      total: currentCents + parsedAdd.cents,
+      objective: sacValueFc !== null ? ((currentCents + parsedAdd.cents) * sacValueFc) / 100 : null,
+    }
+    : null;
+  const addHint = newTotal.trim() !== '' && !parsedAdd.ok ? parsedAdd.message : null;
+
+  const objective = current ?(current.objective_fc ?? current.theoretical_yield ?? 0) : 0;
   const progressValue = current?.progress_value_fc ?? 0;
   const pct = current ? parseFloat(current.progress_pct ?? '0') || 0 : 0;
 
@@ -245,9 +259,18 @@ export const BatchInProgressPanel: React.FC<Props> = ({
 
           {canDeclare && (
             <form onSubmit={handleIncrease} style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid hsl(var(--border-color))', paddingTop: '10px' }}>
-              <label htmlFor="batch-new-total" style={labelStyle}>Augmenter les sacs (nouveau total)</label>
-              <input id="batch-new-total" type="number" inputMode="decimal" step="0.01" min={0.01} value={newTotal} onChange={e => setNewTotal(e.target.value)} placeholder={`Plus de ${parseFloat(current.flour_sacks_used)}`} className="form-input" style={inputStyle} />
-              <button type="submit" className="btn btn-primary" disabled={saving} style={bigBtn}>{saving ? 'Enregistrement…' : 'Mettre à jour les sacs'}</button>
+              <label htmlFor="batch-new-total" style={labelStyle}>Augmenter les sacs</label>
+              <input id="batch-new-total" type="text" inputMode="decimal" autoComplete="off" value={newTotal} onChange={e => { setNewTotal(e.target.value); setError(null); }} placeholder="Sacs à ajouter (ex. 1,5)" aria-describedby="batch-add-preview" className="form-input" style={inputStyle} />
+              <div id="batch-add-preview" data-testid="batch-add-preview" aria-live="polite" style={{ fontSize: '0.85rem', minHeight: '1.2em', wordBreak: 'break-word' }}>
+                {addHint && <span style={{ color: 'hsl(var(--color-danger))' }}>{addHint}</span>}
+                {preview && (
+                  <>
+                    <strong>{centsToLabel(currentCents)} {sacksWord(currentCents)} + {centsToLabel(preview.cents)} = {centsToLabel(preview.total)} {sacksWord(preview.total)}</strong>
+                    {preview.objective !== null && <> · Montant à atteindre : <strong>{fc(preview.objective)}</strong></>}
+                  </>
+                )}
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={saving} style={bigBtn}>{saving ? 'Enregistrement…' : 'Ajouter les sacs'}</button>
             </form>
           )}
         </div>

@@ -394,9 +394,10 @@ test('(306) fournee en cours (K1, rotation, equipe B) : objectif, progression ro
     await sansDebordement(page, info, 'fournee en cours');
     await page.screenshot({ path: `${CAP}/e307-${info.project.name}-306-0pct.png`, fullPage: true });
     // augmentation invalide (<= sacs declares)
-    await panneau.getByLabel(/Augmenter les sacs/).fill('2');
-    await panneau.getByRole('button', { name: 'Mettre à jour les sacs' }).click();
-    await expect(panneau.getByRole('alert')).toContainText(/dépasser/);
+    await panneau.getByLabel(/Augmenter les sacs/).fill('0'); // BUG-355 : le champ AJOUTE des sacs
+    await panneau.getByRole('button', { name: 'Ajouter les sacs' }).click();
+    await expect(panneau.getByRole('alert')).toContainText(/supérieur à 0/);
+    await panneau.getByLabel(/Augmenter les sacs/).fill('');
 
     const obj = 2 * valeurSac;
     const q1 = Math.floor(obj * 0.24 / unite);
@@ -430,9 +431,11 @@ test('(306) fournee en cours (K1, rotation, equipe B) : objectif, progression ro
   if (i === 1) { // 768 px : l'augmentation des sacs recalcule objectif et teinte (vert -> jaune -> orange -> rouge)
     await expect(panneau.getByTestId('batch-objective')).toHaveText(rx(sacsAvant * valeurSac));
     expect(teinte((await lireBarre(page)).rgb)).toBe('vert');
+    let totalSacs = sacsAvant;
     const augmenter = async (n: number, teinteAttendue: string, pct: RegExp) => {
-      await panneau.getByLabel(/Augmenter les sacs/).fill(String(n));
-      await panneau.getByRole('button', { name: 'Mettre à jour les sacs' }).click();
+      await panneau.getByLabel(/Augmenter les sacs/).fill(String(n - totalSacs)); // BUG-355 : on saisit l'AJOUT
+      totalSacs = n;
+      await panneau.getByRole('button', { name: 'Ajouter les sacs' }).click();
       await expect(panneau.getByTestId('batch-objective')).toHaveText(rx(n * valeurSac), { timeout: 20_000 });
       await expect.poll(async () => teinte((await lireBarre(page)).rgb), { timeout: 15_000 }).toBe(teinteAttendue);
       expect((await lireBarre(page)).texte).toMatch(pct);
