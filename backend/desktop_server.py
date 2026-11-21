@@ -96,6 +96,7 @@ def backup_database(
     logger: logging.Logger,
     label: str = '',
     with_seconds: bool = False,
+    unique: bool = False,
 ) -> Optional[Path]:
     """Sauvegarde cohérente via l'API de sauvegarde SQLite (DESKTOP.md §8),
     compressée, utilisable même pendant que la base est en cours d'usage
@@ -118,6 +119,12 @@ def backup_database(
     backups_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S' if with_seconds else '%Y%m%d-%H%M')
     stem = f'kiese-{label}-{stamp}' if label else f'kiese-{stamp}'
+    if unique:
+        # BUG-410 : ne jamais écraser une copie existante (même seconde) -> suffixe -2, -3...
+        base_stem, n = stem, 1
+        while (backups_dir / f'{stem}.sqlite3.gz').exists():
+            n += 1
+            stem = f'{base_stem}-{n}'
     dest_plain = backups_dir / f'{stem}.sqlite3.tmp'
     dest_gz = backups_dir / f'{stem}.sqlite3.gz'
     dest_gz_part = backups_dir / f'{stem}.sqlite3.gz.part'
@@ -226,7 +233,7 @@ def restore_database(db_path: Path, backups_dir: Path, file_name: str, logger: l
 
         if db_path.exists():
             try:
-                safety = backup_database(db_path, backups_dir, logger, label='avant-restauration', with_seconds=True)
+                safety = backup_database(db_path, backups_dir, logger, label='avant-restauration', with_seconds=True, unique=True)
             except Exception as exc:  # noqa: BLE001
                 raise RestoreError(
                     "Impossible de créer la copie de sécurité de la base actuelle ; restauration annulée, "

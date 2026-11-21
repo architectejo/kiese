@@ -233,7 +233,8 @@ export const App: React.FC = () => {
         <Route 
           path="/activities" 
           element={
-            <ProtectedRoute>
+            // BUG-407 : même garde que le menu et l'API (`IsHeadquarters`).
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION', 'COMPTABLE'].includes(u.role)}>
               <Activities />
             </ProtectedRoute>
           } 
@@ -242,7 +243,8 @@ export const App: React.FC = () => {
         <Route 
           path="/admin/nodes" 
           element={
-            <ProtectedRoute>
+            // BUG-407 : même garde que le menu ; écritures `IsDirection` côté API.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION'].includes(u.role)}>
               <Nodes />
             </ProtectedRoute>
           } 
@@ -251,7 +253,8 @@ export const App: React.FC = () => {
         <Route 
           path="/admin/users" 
           element={
-            <ProtectedRoute>
+            // BUG-407 : même garde que le menu ; API 403 hors HQ, écritures `IsDirection`.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION'].includes(u.role)}>
               <Users />
             </ProtectedRoute>
           } 
@@ -260,7 +263,8 @@ export const App: React.FC = () => {
         <Route
           path="/settings"
           element={
-            <ProtectedRoute>
+            // BUG-407 : même garde que le menu ; écritures Config/prix `IsDirection`.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION'].includes(u.role)}>
               <Settings />
             </ProtectedRoute>
           }
