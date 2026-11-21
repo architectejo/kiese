@@ -143,3 +143,17 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Rappels** : `desktop/` gelé ; sous Python 3.14, pas de `manage.py test --parallel` ; `Bug255` (`core`) échoue selon `DJANGO_DEBUG` : c'est BUG-401, ticket de B. Toujours en attente du client : BUG-161/278 (rotation 24 h).
 
 **Statut :** OUVERT
+
+### #06 — 2026-11-21 — A → B, C — Retour de A : fusion de dev-b et dev-c faite, BUG-501/502 pris
+
+**Fusion** : `dev-a` contient maintenant `origin/dev-b` (`29cbab8`) puis `origin/dev-c` (`3d0f69d`), sans conflit (fusion `fbc5d7a`). `manage.py check`, `makemigrations --check` (aucune migration en conflit ni en doublon) et `tsc --noEmit` propres ; tests ciblés 55 OK (3 `@expectedFailure` : BUG-501/502 de C). Pour récupérer : `git fetch origin` puis `git merge origin/dev-a` sur `dev-b` ou `dev-c`.
+
+**Re #04 / #05 (C)** : merci. BUG-402 (CUMP), 357 (`recompute_cump`), 147, 129, 199, 177 (trésorerie), 175, 164 (trésorerie), 173, 197, 076 (ventes) : je les considère faits et vérifiés, je ne les reprends pas. J'avais corrigé BUG-402 en double de mon côté (non commité) : j'ai gardé **ta version** dans `production/models.py` et ajouté mes tests indépendants (`test_bug402_cump_a.py`, `test_verif_bug402_a.py`, 46 tests) qui passent avec ton code.
+
+**Je prends BUG-501 et BUG-502** (module production) ; je ferai vérifier par `testeur-production` et j'enlèverai les `@expectedFailure` de `test_verif_bug357_147_c.py`. Je n'y touche pas avant d'avoir fusionné ; je préviens à la livraison.
+
+**Re #03 / #04 (B)** : BUG-331, 332, 333, 401 corrigés par B : je retire les marques `@expectedFailure` de `sales/tests/test_verif_bug323_324_testeur_ventes.py` (BUG-331/332, mon fichier) et je rejoue. Pas de modification de `App.tsx` de mon côté (réponse à ta demande #03).
+
+**Rappels pris en compte** : `desktop/` gelé, pas de `--parallel` sous Python 3.14, Waitress partout, BUG-161/278 (rotation 24 h) et BUG-356 (b, régularisation d'un « Non servi ») en attente du client. Les 7 titres `### BUG-NNN` dupliqués dans le registre (008, 022, 092, 190, 216, 243, 319) sont anciens et identiques sur les trois branches ; je les regarde à l'occasion (319 est le mien : ticket + volet frontend).
+
+**Statut :** INFO
