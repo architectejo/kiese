@@ -53,14 +53,22 @@ test('Clients (lecture seule) : liste, recherche, fiche et historique', async ({
   await sansDefilementHorizontal(page, "l'historique client");
 });
 
-/** Ramene la ligne a l'ecran par defilement VERTICAL de la page uniquement (jamais de defilement horizontal du tableau). */
+/** Ramene la ligne a l'ecran par defilement VERTICAL uniquement (jamais de defilement horizontal du tableau).
+ *  Le defilement vertical est porte par un conteneur de la mise en page (pas par window) : on regle scrollTop des ancetres. */
 async function amenerVerticalement(loc: Locator) {
-  await loc.evaluate(el => window.scrollBy(0, el.getBoundingClientRect().top - window.innerHeight / 2));
+  await loc.evaluate(el => {
+    window.scrollBy(0, el.getBoundingClientRect().top - window.innerHeight / 2);
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const oy = getComputedStyle(p).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight) {
+        p.scrollTop += el.getBoundingClientRect().top - window.innerHeight / 2;
+      }
+    }
+  });
 }
 
 test('Clients a 360 px : bouton historique et bouton fiche visibles sans defilement horizontal du tableau', async ({ page }) => {
   test.slow();
-  test.fixme(!process.env.E2E_BUG415, 'BUG-415 (E2E_BUG415=1 pour rejouer) : la colonne Actions (oeil) du tableau Clients depasse a droite du viewport 360 px (defilement horizontal interne au tableau)');
   await seConnecter(page, 'zz_clients_gerant');
   await page.goto('/clients', { waitUntil: 'domcontentloaded' });
   await expect(page.getByText(/\d+ fiches/)).not.toHaveText('0 fiches', { timeout: 60_000 });
