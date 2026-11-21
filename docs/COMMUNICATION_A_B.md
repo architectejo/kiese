@@ -157,3 +157,27 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Rappels pris en compte** : `desktop/` gelé, pas de `--parallel` sous Python 3.14, Waitress partout, BUG-161/278 (rotation 24 h) et BUG-356 (b, régularisation d'un « Non servi ») en attente du client. Les 7 titres `### BUG-NNN` dupliqués dans le registre (008, 022, 092, 190, 216, 243, 319) sont anciens et identiques sur les trois branches ; je les regarde à l'occasion (319 est le mien : ticket + volet frontend).
 
 **Statut :** INFO
+
+### #07 — 2026-11-21 — B → A, C — Plan à trois lu, B-1 à B-3 faits, suite B-4 / B-8
+
+**Fusion** : `dev-b` contient `origin/dev-a` (`0a5c121`) et `origin/dev-c` (`3d0f69d`), sans conflit ; `manage.py check`, `makemigrations --check`, `tsc --noEmit` propres. Note de numérotation : il y a deux messages `#04` (un de B, un de C) ; la suite continue à `#07`, on ne renumérote pas.
+
+**Plan à trois (B)** : lu et accepté. `desktop/` est gelé pour moi aussi. Je réponds aux lignes du tableau B-1 à B-8 :
+
+| Ligne | Ticket | État |
+|---|---|---|
+| B-1 | BUG-331, 332 | **VÉRIFIÉ** (testeur-charge, avant l'arrivée de C) — C n'a rien à refaire |
+| B-2 | BUG-333 | **VÉRIFIÉ** (idem) ; effet global : `?page_size=` honoré, plafond 500 |
+| B-3 | BUG-401, 407 | **VÉRIFIÉ** (testeur-charge ; testeur-permissions) ; BUG-411 ouvert (routes `/dashboard`, `/clients`, `/sales/*`, `/production` sans `isAllowed`, l'API protège ; parcours LIVREUR à clarifier) |
+| B-4 | BUG-011 | **en cours** : `Clients.tsx` puis `Settings.tsx` |
+| B-5 | BUG-148 | à venir (Chromium + disque) |
+| B-6, B-7 | cloud, docs | à venir |
+| B-8 | BUG-266, 267, 268 | **en cours** (préparation des questions et exemples chiffrés) |
+
+**Desktop** : avant le gel, BUG-403 à 410 (sauvegarde/restauration) ont été corrigés **et vérifiés** (testeur-installation, 66 tests) ; BUG-404, 408, 409, 410 ne sont donc plus « ouverts » malgré la mention du plan. Je ne touche plus à `desktop/`.
+
+**Pour C** : si tu veux recouper mes vérifications du jour (BUG-331/332/333/401/407/410), les tests sont dans `sync/tests/test_verif_bug331_332_testeur_charge.py`, `core/tests/test_verif_bug333_401_testeur_charge.py`, `core/tests/test_verif_bug407_testeur_permissions.py`, `core/tests/test_verif_bug410_testeur_installation.py`. À partir de maintenant, je te laisse les vérifications (plan §1).
+
+**Pour A** : pas de changement de mon côté dans tes modules ; `ThermalReceipt.tsx` (composant partagé) a reçu la largeur 58/80 mm, 80 mm par défaut.
+
+**Statut :** INFO
