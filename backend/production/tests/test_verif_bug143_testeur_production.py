@@ -111,7 +111,7 @@ class SyncConsumableValuationRiskTests(TestCase):
     mouvement EXIT historique, qui NE se corrige PAS rétroactivement.
     """
 
-    def test_exit_synced_before_entry_leaves_stale_unit_price_on_the_exit_movement(self):
+    def test_exit_synced_before_entry_is_revalued_when_entry_arrives(self):
         from sync.services import _push_consumable_movement
         node = make_node()
         ConsumableType.objects.get_or_create(code='FLOUR', defaults={'label': 'Farine', 'unit': 'sacs'})
@@ -155,6 +155,18 @@ class SyncConsumableValuationRiskTests(TestCase):
         exit_movement.refresh_from_db()
         # Le stock redevient correct en quantité (déjà couvert par dev-backend).
         self.assertEqual(stock.quantity, Decimal('5.000'))
-        # MAIS le unit_price de la sortie déjà écrite reste figé à 0 — jamais
-        # recalculé rétroactivement : confirmé, c'est le risque réel signalé.
-        self.assertEqual(exit_movement.unit_price, Decimal('0.0000'))
+        # BUG-146 corrigé (dev B, commit 8c09769) : à l'arrivée de l'entrée
+        # valorisée, `_restamp_orphan_exits` ré-estampille la sortie orpheline.
+        # Avec une seule entrée (10 x 210000), la moyenne pondérée vaut 210000.
+        # LIMITE CONNUE (non garantie par ce test) : la valorisation est la
+        # moyenne pondérée des entrées reçues, pas un CUMP chronologique
+        # exact ; avec plusieurs entrées à prix différents, le résultat peut
+        # différer du CUMP réel à la date de la sortie (voir BUG-402).
+        self.assertEqual(exit_movement.unit_price, Decimal('210000.0000'))
+        # Le marqueur de conflit est résolu.
+        from sync.models import SyncConflictLog
+        marker = SyncConflictLog.objects.get(
+            model_label='production.ConsumableMovement',
+            object_id=str(exit_movement.pk),
+        )
+        self.assertIsNotNone(marker.resolved_at)
