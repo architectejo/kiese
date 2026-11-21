@@ -300,7 +300,7 @@ class Bug176Tests(TestCase):
         self.admin = make_user(role='ADMIN', node=None, username='adm176')
         self.api = _api(self.admin)
 
-    def _walk(self, url, page_size=2):
+    def _walk(self, url, page_size=25):
         ids, page, pages = [], 1, 0
         while True:
             r = self.api.get(url, {'page': page, 'page_size': page_size})
@@ -355,7 +355,6 @@ class Bug176Tests(TestCase):
         self.assertEqual(len(set(got)), 40)
         self.assertEqual(set(got), {str(o.pk) for o in objs})
 
-    @unittest.expectedFailure
     def test_bug331_page_size_param_is_honored(self):
         """BUG-331 : `?page_size=2` devrait limiter la page à 2 lignes
         (settings.py : PAGE_SIZE_QUERY_PARAM / MAX_PAGE_SIZE ne sont pas des
