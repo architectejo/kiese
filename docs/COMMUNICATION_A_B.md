@@ -276,3 +276,26 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **Ce que C fera dès qu'il reçoit vos signaux** : vérification indépendante (testeur-permissions pour 503, 504, 505, 506 ; testeur-production pour 501, 502, 508 à 510 ; testeur-e2e / testeur-charge pour B-5 et B-6), passage à `VÉRIFIÉ`, puis mise à jour de `remarque.md` et PR `dev-*` → `main` quand les trois branches sont stables.
 
 **Statut :** OUVERT
+
+### #12 — 2026-11-21 — B → C, A — Re #11-C : BUG-506, 511, 412, 413 livrés (CORRIGÉ) ; questions client prêtes ; lignes 452/454 non faites
+
+**Livraison** (commit `e347918` sur `dev-b`, suite `core` + `clients` + `commissions` + `sync` : 733 tests, aucun échec ; `makemigrations --check` : aucun changement) :
+
+| Ticket | Contenu | Fichiers de test (pour C) |
+|---|---|---|
+| **BUG-506** (Majeur) | un GERANT/FACTURIER/LIVREUR sans boulangerie est refusé en 400 (création, PATCH `node=null`, changement de rôle) ; `is_node_less_non_hq` (`core/mixins.py`) renvoie `none()` dans 8 `get_queryset` de core/clients/commissions ; commande de contrôle `check_users_sans_noeud` (lecture seule, à lancer sur la base réelle) | `core/tests/test_bug506_user_sans_noeud.py` (9 tests) |
+| **BUG-511** | `period__month` / `period__year` sur `ClientCommissionViewSet` | `commissions/tests/test_bug511_filtre_periode.py` |
+| **BUG-412** | filtre mois/année dans l'écran Commissions (frontend, sans test navigateur : `tsc` et build OK) | marche manuelle dans la fiche |
+| **BUG-413** | `Users.tsx` affiche maintenant l'erreur réelle (au lieu de « nom d'utilisateur unique ») | marche manuelle dans la fiche |
+
+**Pour C** : dans `core/tests/test_verif_matrice_c.py`, `IsolationExtra::test_non_hq_user_cannot_be_created_without_node` passe en « unexpected success » → retire la marque. Les deux autres (`test_node_less_non_hq_sees_nothing_cross_node`, `IsolationProduction::test_bug147_node_less_non_hq_account_cannot_reach_other_nodes`) restent attendues en échec jusqu'à la garde `node_id` absent chez A.
+
+**Pour A** (suite de BUG-506) : dans les `get_queryset` de production, treasury et sales, un utilisateur non-siège dont `node_id` est vide doit voir `none()`. Le helper `core.mixins.is_node_less_non_hq` est réutilisable.
+
+**Questions client prêtes** dans `docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md` : Q-022 à Q-024 (BUG-266/267/268, commissions) et Q-025 (BUG-507 : le livreur voit-il les clients des autres boulangeries ?). Elles sont à transmettre au propriétaire par le responsable du projet ; sans réponse, les tickets restent À CLARIFIER. Pas encore de réponse à ce jour.
+
+**`remarque.md` lignes 452 et 454** (valeurs §2.3, carte et cotisation par boulangerie, filtre mois) : **non faites en totalité** → elles restent `[]`. Fait : cotisation sociale par boulangerie (BUG-289/295), filtre mois/année (BUG-412). Reste : taux CM par défaut et frais d'imprimés encore globaux (`Config`), et le frais de carte, mis à 0 par décision du client du 14/11 (BUG-291), ce qui contredit la remarque : **contradiction à faire trancher par le client** avant tout développement.
+
+**En cours côté B** : BUG-148 (e2e production instable) + parcours Clients 360 px (spec 32, demandé en #11). BUG-411 (routes sans garde) attend la réponse sur le parcours du livreur. B-6 (cloud) : différé sur décision du responsable ; B-7 (docs) après la fin des fonctionnalités.
+
+**Statut :** OUVERT
