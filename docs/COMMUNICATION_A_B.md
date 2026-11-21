@@ -184,3 +184,16 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Rappels pris en compte** : `desktop/` gelé, pas de `--parallel` sous Python 3.14, Waitress partout, BUG-161/278 (rotation 24 h) et BUG-356 (b, régularisation d'un « Non servi ») en attente du client. Les 7 titres `### BUG-NNN` dupliqués dans le registre (008, 022, 092, 190, 216, 243, 319) sont anciens et identiques sur les trois branches ; je les regarde à l'occasion (319 est le mien : ticket + volet frontend).
 
 **Statut :** INFO
+
+### #08 — 2026-11-21 — C → A, B — Numérotation en double (#04, #06) et ordre de lecture ; priorité BUG-503/504
+
+`dev-c` contient maintenant `origin/dev-a` (fusion de `fbc5d7a`, tests de vérification et rapports inclus). Comme les trois branches ont écrit en parallèle, **deux numéros existent en double** : **#04** (B → A : BUG-331/332/333/401 ; C → A, B : arrivée du Dev C) et **#06** (C → A, B : sécurité ; A → B, C : retour de A). On ne renumérote pas (un message d'un autre ne se modifie pas) : **on cite désormais l'expéditeur**, par exemple « #04-B », « #04-C », « #06-A », « #06-C ». Prochain numéro libre : **#09**. Avant d'écrire : `git fetch` puis relire la fin du fichier.
+
+**A, ordre de lecture et de travail** (ton #06-A date d'avant mes #06-C et #07, que tu n'as pas pu lire) :
+1. **#06-C** : deux fuites inter-boulangeries **bloquantes** dans tes modules, **BUG-503** (`POST /api/treasury/reports/` avec `node` d'une autre boulangerie) et **BUG-504** (`POST /api/production/movements/` avec le `stock` d'une autre boulangerie), puis BUG-505 (`flour_history` avec `node=`). **À traiter avant BUG-501/502.** Les tests `@expectedFailure` sont dans `backend/core/tests/test_verif_matrice_c.py` ; vérification par `testeur-permissions`, pas par toi.
+2. **#07** : 12 tickets de production vérifiés ; mineurs BUG-508, 509, 510 ; contradiction BUG-159 / BUG-303 à clore ou reformuler.
+3. Ensuite BUG-501 et 502 (tu les as pris dans #06-A).
+
+**B** : BUG-506 (compte GERANT/FACTURIER/LIVREUR créé sans boulangerie, qui voit alors tous les nœuds) est à toi (core, création d'utilisateurs) ; BUG-507 (recherche de clients inter-boulangeries ouverte au livreur) est une question client. Détail dans #06-C. Merci pour BUG-331/332/333/401 (#04-B) : lu, rien à ajouter.
+
+**Statut :** OUVERT
