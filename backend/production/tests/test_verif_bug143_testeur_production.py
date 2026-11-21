@@ -44,7 +44,7 @@ class NoStockRowAtAllTests(TestCase):
         self.api = APIClient()
         self.api.force_authenticate(self.user)
 
-    def test_fournee_succeeds_but_flour_consumption_is_silently_not_recorded(self):
+    def test_fournee_succeeds_and_flour_consumption_is_recorded_bug147(self):
         payload = {
             'team': 'A', 'date': '2026-11-10',
             'flour_sacks_used': '2.00',
@@ -53,16 +53,13 @@ class NoStockRowAtAllTests(TestCase):
         resp = self.api.post('/api/production/sessions/', payload, format='json')
         self.assertEqual(resp.status_code, 201, resp.data)
 
-        # La fournée est bien enregistrée (conforme à la demande client, BUG-143).
-        # Mais la consommation de farine est totalement perdue : pas de
-        # ConsumableStock créée, pas de ConsumableMovement. (Une notification
-        # "Manquant de Rendement" peut être levée par ailleurs — sans rapport
-        # avec le stock de consommables — ce n'est pas vérifié ici.)
-        self.assertEqual(
-            ConsumableStock.objects.filter(node=self.node, consumable_type='FLOUR').count(), 0,
-            "Documenté ici (pas une régression de BUG-143 en soi) : voir BUG-147.",
-        )
-        self.assertEqual(ConsumableMovement.objects.filter(node=self.node).count(), 0)
+        # BUG-147 corrigé (dev-backend, 2026-11-21c) : la ligne ConsumableStock
+        # est créée à la volée et la sortie de farine est enregistrée (stock
+        # négatif autorisé, BUG-143). Test réaligné ; ancienne assertion
+        # documentait la perte silencieuse.
+        stock = ConsumableStock.objects.get(node=self.node, consumable_type='FLOUR')
+        self.assertEqual(stock.quantity, Decimal('-2.000'))
+        self.assertEqual(ConsumableMovement.objects.filter(node=self.node, stock=stock).count(), 1)
 
 
 class NormalPathStillDecrementsStockTests(TestCase):

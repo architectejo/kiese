@@ -186,6 +186,23 @@ def _parse_consumables_used(raw, node):
     return out
 
 
+def _get_or_create_consumable_stock(node, code):
+    """
+    BUG-147 : retourne la ligne ConsumableStock (node, code), la créant à la
+    volée (quantité 0, unité du ConsumableType si connu) si elle n'existe pas
+    encore — même logique que `ConsumableStockViewSet._ensure_stock_accounts`.
+    Sans cela, une fournée déclarée avant toute visite de « Stocks
+    Consommables » perdait silencieusement la consommation. Le stock peut
+    ensuite devenir négatif (BUG-143, règle actuelle inchangée).
+    """
+    unit = ConsumableType.objects.filter(code=code).values_list('unit', flat=True).first() or ''
+    stock, _ = ConsumableStock.objects.get_or_create(
+        node=node, consumable_type=code,
+        defaults={'unit': unit, 'node_origin': node.code},
+    )
+    return stock
+
+
 def _record_consumable_exits(session, user, extra_consumables=None):
     """
     Create ConsumableMovement EXIT records for all consumables used in a session.
@@ -215,15 +232,14 @@ def _record_consumable_exits(session, user, extra_consumables=None):
         for ct, qty in entries:
             if not qty or Decimal(str(qty)) <= 0:
                 continue
-            stock = ConsumableStock.objects.filter(node=node, consumable_type=ct).first()
-            if stock:
-                ConsumableMovement.objects.create(
-                    node=node, stock=stock, session=session,
-                    movement_type=ConsumableMovement.MovementType.EXIT,
-                    quantity=qty, description=desc,
-                    recorded_by=user, node_origin=node.code,
-                )
-                processed.append((ct, qty))
+            stock = _get_or_create_consumable_stock(node, ct)
+            ConsumableMovement.objects.create(
+                node=node, stock=stock, session=session,
+                movement_type=ConsumableMovement.MovementType.EXIT,
+                quantity=qty, description=desc,
+                recorded_by=user, node_origin=node.code,
+            )
+            processed.append((ct, qty))
     return processed
 
 
@@ -941,7 +957,7 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
         new_flour = Decimal(str(session.flour_sacks_used or 0))
         delta_flour = new_flour - old_flour
         if delta_flour != 0:
-            flour_stock = ConsumableStock.objects.filter(node=session.node, consumable_type='FLOUR').first()
+            flour_stock = _get_or_create_consumable_stock(session.node, 'FLOUR')
             if flour_stock is not None:
                 ConsumableMovement.objects.create(
                     # `session` volontairement non renseigné : ces mouvements
