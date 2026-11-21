@@ -752,8 +752,13 @@ class ConsumableMovement(SyncableModel):
                 # jour à chaque approvisionnement, pour pouvoir valoriser la
                 # consommation réelle (sorties) au Compte de Résultat plutôt
                 # que les achats du mois.
+                # BUG-402 : un stock négatif (sortie autorisée par BUG-143)
+                # n'a pas de valeur : seule la part positive pèse dans la
+                # moyenne, au numérateur comme au dénominateur (sinon le
+                # CUMP est gonflé). `new_qty` reste la quantité réelle.
+                base_qty = max(old_qty, Decimal('0'))
                 if new_qty > 0:
-                    new_avg = ((old_qty * old_avg) + (self.quantity * self.unit_price)) / new_qty
+                    new_avg = ((base_qty * old_avg) + (self.quantity * self.unit_price)) / (base_qty + self.quantity)
                 else:
                     new_avg = self.unit_price
                 super().save(*args, **kwargs)
