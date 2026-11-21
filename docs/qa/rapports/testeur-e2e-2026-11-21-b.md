@@ -46,3 +46,30 @@ d'exemple manquants (seed API non rejoué), non vérifiables sans la base de tes
 - Modifiés : `e2e/tests/05-production.spec.ts`, `e2e/fixtures/helpers.ts`, `docs/qa/REGISTRE_BUGS.md` (fiche + ligne BUG-148).
 - Créé : `e2e/tests/32-clients-pos-dev-b.spec.ts` (demande de C, message #11).
 - Nettoyés : `e2e/test-results`, `docs/qa/captures/e2e-results`, `e2e/pw.local.config.ts`, captures b301 restaurées (le spec 25 les réécrit).
+
+## Rejeu pour C (message #13, 2026-11-21 soir)
+Même méthode : base jetable seedée, config temporaire locale (chrome.exe de ms-playwright, supprimée ensuite), serveurs arrêtés à la fin.
+
+### Spec 32 renforcé (`e2e/tests/32-clients-pos-dev-b.spec.ts`)
+- `test.use({ viewport: 360x740 })` (valable quel que soit le projet) + assertion `viewportSize().width === 360`.
+- `document.body.scrollWidth <= clientWidth` sur la liste, la fiche détaillée et l'historique.
+- `if (await histo.count())` remplacé par `toHaveCount(1)` : le test échoue si l'historique est absent.
+- `toBeInViewport({ ratio: 1 })` sur historique et œil : **un `scrollIntoViewIfNeeded` ou un `click()` fait défiler le conteneur du tableau horizontalement et masque le défaut**.
+  Un test dédié ramène la ligne par défilement vertical de la page seulement : il **échoue** (bouton œil hors viewport à 360 px).
+  Défaut réel du code applicatif, non corrigé : **BUG-415** (Clients, frontend, Mineur, OUVERT, capture `docs/qa/captures/b148-clients-360-actions-hors-ecran.png`).
+  Ce test est `test.fixme` (rejeu : `E2E_BUG415=1`). Le parcours principal (liste, recherche, fiche, historique, pas de défilement de la page) passe.
+
+### 05-production : deux défauts de mon correctif précédent, corrigés
+1. Sélecteur ambigu : `getByText('Fournée en cours')` matchait aussi « Aucune fournée en cours. » (strict mode violation dès que le formulaire est affiché) → `getByRole('heading', ...)`.
+2. État partagé entre specs : le spec 10 (clôture de fournée) clôture les sessions A et B de K2 du jour ; le message « Session de production clôturée » n'apparaît qu'après l'envoi. Le test tente l'équipe A puis B et fait un `test.skip` explicite si les deux sont closes (au lieu d'un échec trompeur).
+   Pour le rejeu, j'ai supprimé les 2 sessions K2 du jour dans la base jetable.
+
+### Sorties
+| Commande | Résultat | Durée |
+|---|---|---|
+| `05-production --project=pos --repeat-each=5` (après remise à zéro K2) | 5 passés, 0 échec, 5 fixme ignorés | 1 min 39 |
+| `05-production --project=pos --repeat-each=5` (avant correctif du sélecteur) | 5 échecs (strict mode / session clôturée) | 3 min 26 |
+| `32 --project=pos --project=bureau` | 2 passés (parcours), 2 fixme (BUG-415) | 46 s |
+| `32 -g "360 px :"` avec `E2E_BUG415=1` (pos) | 1 échec attendu (bouton œil hors viewport) | 24 s |
+| `03-clients --project=pos --project=bureau` | 6 passés, 0 échec | 1 min 18 |
+Rappel : 20/20 sur 05 (pos+bureau, `--repeat-each=10`) obtenus avant ces deux corrections, sur base neuve.

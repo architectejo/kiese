@@ -25,17 +25,27 @@ test('déclaration de fournée avec consommables décimaux, écart manquant/exc�
   // BUG-148 : une seule fournee par equipe et par jour. Le test doit etre idempotent : selon l'etat de la base
   // (premiere execution du jour ou rejeu), le panneau affiche soit le formulaire de declaration, soit la
   // fournee deja en cours. On attend explicitement l'un OU l'autre (aucune attente fixe).
-  const formulaire = panneau.getByText('Déclaration de Fournée');
-  const enCours = panneau.getByText('Fournée en cours');
+  const formulaire = panneau.getByRole('heading', { name: 'Déclaration de Fournée' });
+  const enCours = panneau.getByRole('heading', { name: 'Fournée en cours' });
   await expect(formulaire.or(enCours)).toBeVisible({ timeout: 30_000 });
   if (!(await enCours.isVisible()) && (await formulaire.isVisible())) {
-    await panneau.getByLabel(/Nombre de sacs de farine/).fill('2');
-    // Consommables décimaux : sel (grammes, entier), levure (paquets, décimal), huile (litres, décimal).
-    await panneau.getByLabel('Sel en grammes').fill('450');
-    await panneau.getByLabel('Levure en paquets').fill('0.25');
-    await panneau.getByLabel('Huile en litres').fill('0.5');
-    await expect(panneau.getByText(/Montant à atteindre :/)).toBeVisible();
-    await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+    // Etat partage : un autre parcours (ex. 10, cloture de fournee) peut avoir cloture la session de l'equipe A du jour
+    // (message « Session de production clôturée » apres l'envoi). On bascule alors sur l'equipe B ; si elle est aussi
+    // cloturee, la base du jour est epuisee : skip explicite plutot qu'un echec trompeur.
+    const cloturee = panneau.getByRole('alert').filter({ hasText: /Session de production clôturée/ });
+    for (const equipe of ['Équipe A', 'Équipe B']) {
+      await panneau.getByLabel('Équipe', { exact: true }).selectOption({ label: equipe });
+      await panneau.getByLabel(/Nombre de sacs de farine/).fill('2');
+      // Consommables décimaux : sel (grammes, entier), levure (paquets, décimal), huile (litres, décimal).
+      await panneau.getByLabel('Sel en grammes').fill('450');
+      await panneau.getByLabel('Levure en paquets').fill('0.25');
+      await panneau.getByLabel('Huile en litres').fill('0.5');
+      await expect(panneau.getByText(/Montant à atteindre :/)).toBeVisible();
+      await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+      await expect(enCours.or(cloturee)).toBeVisible({ timeout: 20_000 });
+      if (await enCours.isVisible()) break;
+      if (equipe === 'Équipe B') test.skip(true, 'Sessions A et B du jour deja cloturees : relancer sur une base du jour neuve (BUG-148)');
+    }
   }
   await expect(enCours).toBeVisible({ timeout: 20_000 });
   await expect(panneau.getByTestId('batch-objective')).toBeVisible();

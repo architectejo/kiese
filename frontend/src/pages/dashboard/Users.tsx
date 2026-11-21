@@ -116,7 +116,7 @@ export const Users: React.FC = () => {
       fetchData();
     } catch (error: unknown) {
       console.error('Error saving user', error);
-      alert(getErrorDetail(error, 'Erreur lors de l\'enregistrement. Veuillez vérifier les données (le nom d\'utilisateur doit être unique).'));
+      alert(getErrorDetail(error, "Impossible d'enregistrer l'utilisateur. Vérifiez les champs saisis (nom d'utilisateur déjà pris, boulangerie obligatoire pour un gérant, facturier ou livreur)."));
     } finally {
       setIsSavingUser(false);
     }

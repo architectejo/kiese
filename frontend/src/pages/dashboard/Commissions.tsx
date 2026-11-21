@@ -4,7 +4,7 @@ import {
   FiPocket, FiAward, FiSearch, FiRefreshCw, FiEdit2,
   FiPrinter, FiDownload
 } from 'react-icons/fi';
-import { commissionsApi, coreApi, ClientCommission, CommissionPeriod, BakeryNode } from '@/api/services';
+import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { localIsoDate } from '@/store/workDateStore';
@@ -38,9 +38,6 @@ export const Commissions: React.FC = () => {
   // BUG-412 : filtre mois/année (défaut = mois courant ; '' = tous). Indépendant de la fenêtre « Générer ».
   const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
-  const [periods, setPeriods] = useState<CommissionPeriod[] | null>(null);
-  const [periodsError, setPeriodsError] = useState<string | null>(null);
-  const [periodsTick, setPeriodsTick] = useState(0);
 
   // Generate period modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -56,40 +53,20 @@ export const Commissions: React.FC = () => {
   // BUG-164 : liste lue page par page (page 1 affichée tout de suite, suite en arrière-plan).
   // KPI, totaux d'impression/export, recherche et filtre de statut (côté client) ne sont
   // fiables qu'une fois la liste COMPLÈTE : voir `isReady` ci-dessous.
-  // BUG-412 : l'API des commissions n'a pas de filtre mois/année : on résout d'abord les périodes
-  // (filtrables par month/year/node), puis on charge les commissions (`period` si une seule période,
-  // sinon filtre par identifiants de période côté client).
-  const periodFilterActive = filterMonth !== '' || filterYear !== '';
-  useEffect(() => {
-    let cancelled = false;
-    setPeriods(null);
-    setPeriodsError(null);
-    commissionsApi.periods.list({
-      ...(filterMonth ? { month: filterMonth } : {}),
-      ...(filterYear ? { year: filterYear } : {}),
-      ...(nodeFilter ? { node: nodeFilter } : {}),
-    })
-      .then(res => { if (!cancelled) setPeriods(res.data); })
-      .catch(err => { if (!cancelled) setPeriodsError(getErrorDetail(err, 'Impossible de charger les périodes de commissions.')); });
-    return () => { cancelled = true; };
-  }, [filterMonth, filterYear, nodeFilter, periodsTick]);
-  const periodIds = periods ? periods.map(p => p.id) : [];
-  const noPeriod = periodFilterActive && periods !== null && periods.length === 0;
-  const singlePeriod = periodFilterActive && periods !== null && periods.length === 1 ? periods[0].id : '';
+  // BUG-412/511 : l'API filtre directement par mois/année de période (`period__month`, `period__year`)
+  // et par boulangerie (`period__node`).
   const commissionsQ = useProgressiveList<ClientCommission>({
     fetchPage: p => commissionsApi.commissions.page({
       ...(nodeFilter ? { period__node: nodeFilter } : {}),
-      ...(singlePeriod ? { period: singlePeriod } : {}),
+      ...(filterMonth ? { period__month: filterMonth } : {}),
+      ...(filterYear ? { period__year: filterYear } : {}),
       page: String(p), page_size: '100',
     }),
-    resetKey: `cm|${nodeFilter}|${filterMonth}|${filterYear}|${singlePeriod}|${periods === null ? 'wait' : 'ok'}`,
-    enabled: periods !== null && !noPeriod,
+    resetKey: `cm|${nodeFilter}|${filterMonth}|${filterYear}`,
   });
-  const commissions = noPeriod || periods === null
-    ? []
-    : (periodFilterActive && !singlePeriod ? commissionsQ.items.filter(c => periodIds.includes(c.period)) : commissionsQ.items);
-  const isLoading = (periods === null && !periodsError) || (!noPeriod && commissionsQ.isLoading);
-  const isReady = noPeriod || (periods !== null && commissionsQ.isComplete);
+  const commissions = commissionsQ.items;
+  const isLoading = commissionsQ.isLoading;
+  const isReady = commissionsQ.isComplete;
   const reloadCommissions = commissionsQ.reload;
   const loadData = useCallback(async () => { reloadCommissions(); }, [reloadCommissions]);
   const progress = `${commissionsQ.loaded} / ${commissionsQ.total ?? '…'}`;
@@ -334,13 +311,6 @@ export const Commissions: React.FC = () => {
         </div>
       </div>
 
-      {periodsError && (
-        <div role="alert" className="glass-card" style={{ padding: '10px 14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {periodsError}
-          <button onClick={() => setPeriodsTick(t => t + 1)} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '0.7rem' }}>Réessayer</button>
-        </div>
-      )}
-
       {commissionsQ.error && (
         <div role="alert" className="glass-card" style={{ padding: '10px 14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {commissionsQ.error}
@@ -349,7 +319,7 @@ export const Commissions: React.FC = () => {
       )}
 
       {/* Bandeau : aucune commission générée pour le mois courant */}
-      {isReady && !periodsError && commissions.length === 0 && (
+      {isReady && !commissionsQ.error && commissions.length === 0 && (
         <div className="glass-card animate-fade-in" style={{
           padding: '14px 18px',
           borderLeft: '4px solid hsl(var(--color-warning))',
