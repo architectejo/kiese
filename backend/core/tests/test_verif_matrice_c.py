@@ -243,7 +243,7 @@ class V251(Base):
         self.assertEqual(g.delete(u2).status_code, 404)
         self.assertTrue(ConsumableStock.objects.filter(pk=self.st2.pk).exists())
 
-    @expectedFailure  # BUG-504 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-5XX corrige (marqueur retire par Dev A)
     def test_movement_on_foreign_stock_forged(self):
         """Gerant K1 : mouvement sur le stock de K2 (stock= et node= forges)."""
         g = cl(self.u['GERANT'])
@@ -456,7 +456,7 @@ class IsolationProduction(Base):
             self.assertEqual(self.n(self.k2), 0, role)
         self.assertGreater(self.n(self.k1), 0)
 
-    @expectedFailure  # BUG-506 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-506 corrige (marqueur retire par Dev A)
     def test_bug147_node_less_non_hq_account_cannot_reach_other_nodes(self):
         """Compte GERANT sans noeud (mal configure) : ne doit ni creer ni lire les stocks d'un noeud."""
         orphan = mk('pr_orphan', 'GERANT', None)
@@ -572,7 +572,7 @@ class IsolationTreasury(Base):
         g.post('/api/treasury/reports/generate/', {'date': '2026-11-10', 'node': self.k2.pk}, format='json')
         self.assertEqual(FacturierReport.objects.filter(node=self.k2).count(), n0)
 
-    @expectedFailure  # BUG-503 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-5XX corrige (marqueur retire par Dev A)
     def test_report_create_forged_node_by_gerant(self):
         """POST /reports/ avec node=K2 par un gerant K1 : ne doit rien creer pour K2."""
         n0 = FacturierReport.objects.filter(node=self.k2).count()
@@ -612,7 +612,7 @@ class IsolationExtra(Base):
     def setUp(self):
         cache.clear()
 
-    @expectedFailure  # BUG-505 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-5XX corrige (marqueur retire par Dev A)
     def test_flour_history_node_param_not_honoured_for_non_hq(self):
         for code in ('FLOUR', 'FAR'):
             for node in (self.k1, self.k2):
@@ -635,7 +635,7 @@ class IsolationExtra(Base):
                 'username': 'zz_orph_' + role, 'password': 'abcdef12xyz', 'role': role}, format='json')
             self.assertGreaterEqual(r.status_code, 400, f'{role} cree sans boulangerie : {r.status_code}')
 
-    @expectedFailure  # BUG-506 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-506 corrige (marqueur retire par Dev A)
     def test_node_less_non_hq_sees_nothing_cross_node(self):
         orphan = mk('zz_orph', 'GERANT', None)
         for url in ('/api/production/sessions/', '/api/clients/contributions/', '/api/clients/distributions/',

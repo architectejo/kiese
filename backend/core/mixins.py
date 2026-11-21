@@ -1,6 +1,12 @@
 """Mixins DRF communs."""
 
 
+def is_node_less_non_hq(user):
+    """BUG-506 : vrai pour un compte lié à une boulangerie (GERANT/FACTURIER/LIVREUR)
+    sans nœud : il ne doit voir aucune donnée (et non toutes)."""
+    return not user.can_access_all_nodes and not user.node_id
+
+
 class NodeImmutableForNonHQMixin:
     """BUG-313 : un utilisateur rattaché à une boulangerie (non siège) ne peut
     jamais déplacer une ligne existante vers une autre boulangerie.

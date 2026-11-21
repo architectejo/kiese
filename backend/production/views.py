@@ -5,10 +5,11 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from core.mixins import NodeImmutableForNonHQMixin
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from kiese.node_guard import NoNodeGuardMixin
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -316,6 +317,9 @@ def _build_reconciliation_querysets(user, node_id=None, date=None, date_from=Non
         sessions_qs  = sessions_qs.filter(node=user.node)
         disposals_qs = disposals_qs.filter(node=user.node)
         invoices_qs  = invoices_qs.filter(node=user.node)
+    elif is_node_less_non_hq(user):
+        sessions_qs, disposals_qs, invoices_qs = (
+            sessions_qs.none(), disposals_qs.none(), invoices_qs.none())
     elif node_id:
         sessions_qs  = sessions_qs.filter(node_id=node_id)
         disposals_qs = disposals_qs.filter(node_id=node_id)
@@ -640,7 +644,7 @@ def _close_production_session(session, remaining_entries, request_user, record_s
     return {'result': result, 'nv_breads': nv_breads, 'is_anomaly': is_anomaly}
 
 
-class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ProductionSession.objects.select_related('node', 'declared_by').all()
     serializer_class = ProductionSessionSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -667,6 +671,8 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         params = self.request.query_params
         if params.get('date_from'):
             qs = qs.filter(date__gte=params['date_from'])
@@ -1394,7 +1400,7 @@ class ConsumableTypeViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableStockViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableStock.objects.select_related('node').all()
     serializer_class = ConsumableStockSerializer
     filter_backends  = [DjangoFilterBackend]
@@ -1433,6 +1439,8 @@ class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         les boulangeries d'un coup).
         """
         user = self.request.user
+        if is_node_less_non_hq(user):
+            return  # BUG-506/362 : compte sans boulangerie, aucun compte à créer
         if not user.can_access_all_nodes and user.node_id:
             target_nodes = [user.node]
         else:
@@ -1467,10 +1475,12 @@ class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
 
-class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableMovement.objects.select_related('node', 'stock', 'session', 'recorded_by').all()
     serializer_class = ConsumableMovementSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -1484,24 +1494,25 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         if not user.can_access_all_nodes and user.node_id:
             # BUG-022 : aucun filtrage par nœud auparavant.
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
         from django.core.exceptions import ValidationError as DjangoValidationError
         user = self.request.user
+        stock = serializer.validated_data.get('stock')
         if not user.can_access_all_nodes:
-            # BUG-022 (écriture) : `serializer.validated_data.get('node')`
-            # donnait la priorité au payload — un GERANT non-HQ pouvait
-            # modifier un stock d'une autre boulangerie en forgeant `node`.
-            # On ignore toute valeur envoyée et on impose le nœud de
-            # l'utilisateur, comme pour ClientViewSet (BUG-025).
+            # BUG-022 (écriture) : on impose le nœud de l'utilisateur.
             node = user.node
+            # BUG-504 : le stock doit appartenir à ce nœud ; 404 sans fuite
+            # d'existence (même réponse qu'un stock inexistant).
+            if stock is not None and stock.node_id != node.pk:
+                raise NotFound('Stock introuvable.')
         else:
-            node = serializer.validated_data.get('node') or user.node
-            if node is None:
-                stock = serializer.validated_data.get('stock')
-                if stock:
-                    node = stock.node
+            node = serializer.validated_data.get('node') or (stock.node if stock else None) or user.node
+            if stock is not None and stock.node_id != node.pk:
+                raise ValidationError({'detail': 'Le stock ne correspond pas à la boulangerie indiquée.'})
         try:
             serializer.save(
                 recorded_by=user,
@@ -1530,10 +1541,13 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             stock__consumable_type='FLOUR',
         ).select_related('node', 'stock', 'recorded_by').order_by('-created_at')
 
-        if node_id:
-            qs = qs.filter(node_id=node_id)
-        elif not request.user.can_access_all_nodes and request.user.node_id:
+        # BUG-505 : `?node=` n'est honoré que pour le siège.
+        if not request.user.can_access_all_nodes and request.user.node_id:
             qs = qs.filter(node=request.user.node)
+        elif is_node_less_non_hq(request.user):
+            qs = qs.none()
+        elif node_id:
+            qs = qs.filter(node_id=node_id)
         if month:
             qs = qs.filter(created_at__month=month)
         if year:
@@ -1555,7 +1569,7 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         ])
 
 
-class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """Physical inventory counts per bakery per consumable."""
     queryset = ConsumableCount.objects.select_related('node', 'counted_by').all()
     serializer_class = ConsumableCountSerializer
@@ -1569,6 +1583,8 @@ class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
@@ -1598,7 +1614,7 @@ class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         )
 
 
-class BreadTransferViewSet(viewsets.ModelViewSet):
+class BreadTransferViewSet(NoNodeGuardMixin, viewsets.ModelViewSet):
     queryset = BreadTransfer.objects.select_related(
         'from_node', 'to_node', 'bread_price', 'initiated_by', 'confirmed_by'
     ).all()
@@ -1621,6 +1637,8 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
             # où la sienne est impliquée, pas ceux entre deux autres nœuds.
             from django.db.models import Q
             qs = qs.filter(Q(from_node=user.node) | Q(to_node=user.node))
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def _check_node_involved(self, request, *allowed_nodes):
@@ -2016,6 +2034,8 @@ class BreadStockViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
 
@@ -2208,7 +2228,7 @@ class BreadStockByDateView(APIView):
         })
 
 
-class BreadDisposalViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class BreadDisposalViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = BreadDisposal.objects.select_related('node', 'session', 'bread_price').all()
     serializer_class = BreadDisposalSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -2221,6 +2241,8 @@ class BreadDisposalViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
