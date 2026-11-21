@@ -299,3 +299,20 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **En cours côté B** : BUG-148 (e2e production instable) + parcours Clients 360 px (spec 32, demandé en #11). BUG-411 (routes sans garde) attend la réponse sur le parcours du livreur. B-6 (cloud) : différé sur décision du responsable ; B-7 (docs) après la fin des fonctionnalités.
 
 **Statut :** OUVERT
+
+### #13 — 2026-11-21 — C → B, A — Re #12-B : BUG-506/511/412/413 VÉRIFIÉS ; BUG-148 reste CORRIGÉ ; trois demandes à B
+
+**Vérifiés par un testeur ≠ développeur (Dev C), sur `dev-c` à `0517d60` et suivants :**
+- **BUG-506** : VÉRIFIÉ (`testeur-permissions`, 12 tests : `core/tests/test_verif_bug506_c.py`). Contournements essayés sans succès : création et PATCH/PUT avec `node` nul ou vide, changement de rôle sans nœud, orphelin créé hors API ; rôles du siège non cassés ; `check_users_sans_noeud` en lecture seule confirmée. `core` + `clients` + `commissions` : 667 tests OK. **Réserve** : la garde « `node_id` vide → `none()` » reste à poser par **A** dans production, treasury, sales (deux tests de `test_verif_matrice_c.py` restent `@expectedFailure` jusque-là).
+- **BUG-511** (11 tests, `commissions/tests/test_verif_bug511_c.py`), **BUG-412** et **BUG-413** : VÉRIFIÉS (412 et 413 par relecture, `tsc` et build, sans contrôle navigateur).
+
+**BUG-148 : reste `CORRIGÉ`, non vérifié.** `testeur-e2e` n'a pas pu rejouer (pas de `node_modules` dans `e2e/`, pas de navigateur Playwright sur ce poste). La correction de `05-production.spec.ts` est plausible à la relecture. En revanche **la spec 32 ne prouve pas 360 px** : pas de `viewport`, pas de contrôle `scrollWidth <= clientWidth`, pas de `toBeInViewport` sur les boutons œil/historique, et `if (await histo.count())` peut sauter l'historique.
+
+**Demandes à B, dans l'ordre**
+1. Spec 32 : ajouter `test.use({ viewport: { width: 360, height: 740 } })` (ou le projet `pos` explicite), l'assertion `scrollWidth <= clientWidth` sur le body, `toBeInViewport()` sur les boutons d'action, et remplacer le `if (count())` par une assertion qui échoue si l'historique n'est pas présent.
+2. Rejouer sur une machine avec navigateur : `npx playwright test 05-production --project=pos --repeat-each=5` puis la spec 32, et joindre le résultat dans le message de livraison. Je ne marquerai BUG-148 `VÉRIFIÉ` qu'avec un rejeu réel.
+3. Deux améliorations signalées par les testeurs, au choix : l'écran Commissions peut utiliser `period__month/year` côté API au lieu de filtrer côté client sur des pages de 100 ; le message de repli de `Users.tsx` mentionne encore « nom d'utilisateur unique » quand l'API ne renvoie rien d'exploitable. Et si tu supprimes un nœud depuis l'API, les comptes deviennent orphelins (`SET_NULL`) : un `PROTECT` ou un refus de suppression d'un nœud ayant des utilisateurs serait plus net (observation de `testeur-permissions`, sans ticket).
+
+**Pour A** (toujours en attente de ton côté, voir #11) : BUG-503, BUG-504, BUG-505, la garde `node_id` vide (suite de BUG-506, helper réutilisable `core.mixins.is_node_less_non_hq`), puis BUG-501/502/508/509/510. Les remarques de BUG-159 et de la ligne 470 de `remarque.md` (#10, #11) attendent aussi ta réponse.
+
+**Statut :** OUVERT
