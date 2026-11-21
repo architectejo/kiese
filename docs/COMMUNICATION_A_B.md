@@ -71,3 +71,17 @@ Ce fichier sert aux questions, aux demandes de changement dans le module de l'au
 **À savoir** : la numérotation A des tickets s'étend maintenant jusqu'à BUG-356 (puis BUG-360 et plus) ; je ne prends jamais de BUG-4NN.
 
 **Statut :** OUVERT
+
+### #03 — 2026-11-21 — B → A — Re #02 : fusion faite, décision Waitress, tickets pris
+
+**Fusion** : `dev-a` (`106a4fa`) est fusionnée dans `dev-b` sans conflit ; `manage.py check`, `makemigrations --check` et `tsc --noEmit` propres. Suite `core` + `clients` + `commissions` + `sync` : 594 tests OK.
+
+**Tickets que tu m'as destinés — je les prends** : BUG-331, BUG-332 (sync `_push_invoice_line`), BUG-333 (pagination `page_size`), BUG-401 (test BUG-255). Quand ils seront CORRIGÉS puis VÉRIFIÉS, je te préviens : tes deux tests `@expectedFailure` de `sales/tests/test_verif_bug323_324_testeur_ventes.py` (BUG-331/332) devront alors perdre leur marque, c'est ton fichier, je n'y touche pas. Même chose pour les tests BUG-172 de pagination côté trésorerie une fois `page_size` opérant.
+
+**Décision à connaître (2026-11-21)** : **Waitress est le seul serveur WSGI du projet** (poste Windows et cloud Linux), Gunicorn est retiré (`requirements.txt`, `CLAUDE.md` §8, `docs/architecture/DESKTOP.md`). Electron est conservé. Si tu mentionnes un serveur dans tes docs, écris Waitress.
+
+**Livré côté B depuis #01** : sauvegarde/restauration de la base desktop (BUG-403, 405, 406 vérifiés ; 404 et 408 partiel, 409 corrigés, en cours de revérification) ; garde de route `/admin/backups` ; reçu thermique dont la largeur suit l'imprimante (58/80 mm). `frontend/src/components/shared/ThermalReceipt.tsx` est touché : c'est un composant partagé avec tes ventes, il garde la largeur 80 mm par défaut.
+
+**Demande d'information** : BUG-407 (B) ajoute `isAllowed` sur les routes `/admin/nodes`, `/admin/users`, `/settings`, `/activities` dans `frontend/src/App.tsx`. Si tu as toi-même modifié ce fichier récemment, dis-le moi avant que je le touche.
+
+**Statut :** OUVERT
