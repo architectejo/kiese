@@ -1275,7 +1275,38 @@ export const coreApi = {
 
 // ── Client API ───────────────────────────────────────────────────────────────
 
+// BUG-400 : historique mensuel des opérations d'un client (montants = chaînes décimales).
+export interface ClientHistoryOperation {
+  id: number | string;
+  date: string;
+  datetime: string | null;
+  type: 'ACHAT' | 'DEPOT' | 'RETRAIT' | 'REMBOURSEMENT' | 'AJUSTEMENT';
+  label: string;
+  receipt_number: string | null;
+  status: 'DELIVERED' | 'PENDING' | 'CANCELLED' | 'NOT_SERVED';
+  team: string | null;
+  node_code: string | null;
+  order_value: string;
+  payment: string;
+  bp_before: string | null;
+  bp_after: string | null;
+}
+export interface ClientHistory {
+  client: { id: string; code: string; full_name: string; node_code: string | null; current_debt: string };
+  month: string;
+  current_month: string;
+  available_months: string[];
+  operations: ClientHistoryOperation[];
+  totals: {
+    operations_count: number; delivered_count: number;
+    total_orders: string; total_payments: string; total_withdrawals: string;
+    net_balance_change: string; bp_start: string | null; bp_end: string | null;
+  };
+}
+
 export const clientsApi = {
+  history: (id: string, month?: string) =>
+    apiClient.get<ClientHistory>(`/api/clients/clients/${id}/history/`, month ? { params: { month } } : undefined),
   list: (params?: Record<string, string>) =>
     getList<Client>('/api/clients/clients/', params),
   // BUG-132 : page brute (page/page_size), pour affichage progressif côté

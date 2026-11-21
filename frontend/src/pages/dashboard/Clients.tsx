@@ -19,6 +19,7 @@ import { useWorkDate } from '@/store/workDateStore';
 import { TEAM_NOT_ASSIGNED_MESSAGE, useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
+import { ClientHistoryModal } from '@/components/clients/ClientHistoryModal';
 
 interface ClientItem {
   id: string;
@@ -285,6 +286,8 @@ export const Clients: React.FC = () => {
   const [bulkMsg, setBulkMsg]                   = useState<string | null>(null);
 
   // BUG-300 : la caisse sociale est réservée au gérant et aux rôles supérieurs (403 sinon).
+  // BUG-400 : historique mensuel (même droit que la caisse sociale : gérant et supérieurs).
+  const [historyClient, setHistoryClient] = useState<{ id: string; name: string } | null>(null);
   const canReadSocial = !!user && user.role !== 'FACTURIER' && user.role !== 'LIVREUR';
 
   const loadContributions = useCallback(async () => {
@@ -1297,7 +1300,15 @@ export const Clients: React.FC = () => {
                           {client.name.substring(0, 2).toUpperCase()}
                         </div>
                         <div>
-                          <div style={{ fontWeight: 800, fontSize: '0.76rem' }}>{client.name}</div>
+                          <div style={{ fontWeight: 800, fontSize: '0.76rem' }}>
+                            {canReadSocial && client._apiId ? (
+                              <button type="button" title="Voir l'historique des achats et dépôts"
+                                onClick={() => setHistoryClient({ id: client._apiId as string, name: client.name })}
+                                style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'hsl(var(--accent-color))', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left' }}>
+                                {client.name}
+                              </button>
+                            ) : client.name}
+                          </div>
                           <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))' }}>{client.businessName}</div>
                         </div>
                       </div>
@@ -3092,6 +3103,7 @@ export const Clients: React.FC = () => {
         )}
       </div>
 
+      <ClientHistoryModal clientId={historyClient?.id ?? null} clientName={historyClient?.name} onClose={() => setHistoryClient(null)} />
     </div>
   );
 };

@@ -185,6 +185,106 @@ class ClientViewSet(viewsets.ModelViewSet):
             )
         return Response(ClientSerializer(client).data)
 
+    @action(detail=True, methods=['get'], permission_classes=[IsGerant])
+    def history(self, request, pk=None):
+        """BUG-400 : historique des opérations (achats, dépôts, retraits,
+        remboursements) d'un client pour un mois (`?month=AAAA-MM`, défaut =
+        mois courant), avec totaux et liste des mois navigables.
+        Public = celui de la page Commissions (GERANT+) ; filtrage par nœud
+        via get_queryset()."""
+        import re
+        from django.db.models.functions import TruncMonth
+        from sales.models import Invoice
+
+        client = self.get_object()
+        today = timezone.localdate()
+        raw = request.query_params.get('month')
+        if raw in (None, ''):
+            year, month = today.year, today.month
+        else:
+            m = re.fullmatch(r'(\d{4})-(\d{2})', raw.strip())
+            if not m or not (1 <= int(m.group(2)) <= 12) or int(m.group(1)) < 2000:
+                return Response(
+                    {'detail': "Paramètre « month » invalide : format attendu AAAA-MM (ex. 2026-11)."},
+                    status=400)
+            year, month = int(m.group(1)), int(m.group(2))
+
+        invoices = Invoice.objects.filter(client=client)
+        qs = (invoices.filter(invoice_date__year=year, invoice_date__month=month)
+              .select_related('node')
+              .order_by('invoice_date', 'delivered_at', 'created_at', 'id'))
+
+        zero = Decimal('0.00')
+        q = Decimal('0.01')
+        operations = []
+        total_orders = total_payments = total_withdrawals = zero
+        counted = 0
+        bp_start = bp_end = None
+        for inv in qs:
+            order, pay = inv.order_total or zero, inv.payment_amount or zero
+            if inv.is_debt_repayment:
+                op_type, label = 'REMBOURSEMENT', 'Remboursement de BP'
+            elif inv.is_adjustment:
+                op_type, label = 'AJUSTEMENT', 'Ajustement de facture'
+            elif pay < 0:
+                op_type = 'RETRAIT'
+                label = inv.get_motif_display() if inv.motif else 'Retrait'
+            elif order == 0 and pay > 0:
+                op_type, label = 'DEPOT', 'Dépôt / versement'
+            else:
+                op_type, label = 'ACHAT', 'Achat'
+            when = inv.delivered_at or inv.created_at
+            operations.append({
+                'id': str(inv.id),
+                'date': inv.invoice_date.isoformat(),
+                'datetime': when.isoformat() if when else None,
+                'type': op_type,
+                'label': label,
+                'receipt_number': inv.receipt_number,
+                'status': inv.status,
+                'team': inv.team,
+                'node_code': inv.node.code if inv.node_id else '',
+                'order_value': str(order.quantize(q)),
+                'payment': str(pay.quantize(q)),
+                'bp_before': str((inv.debt_before or zero).quantize(q)),
+                'bp_after': str((inv.debt_after or zero).quantize(q)),
+            })
+            if inv.status == Invoice.Status.DELIVERED:
+                counted += 1
+                if not inv.is_debt_repayment:
+                    total_orders += order
+                if pay > 0:
+                    total_payments += pay
+                elif pay < 0:
+                    total_withdrawals += -pay
+                if bp_start is None:
+                    bp_start = inv.debt_before or zero
+                bp_end = inv.debt_after or zero
+
+        months = {d.strftime('%Y-%m') for d in
+                  invoices.annotate(_m=TruncMonth('invoice_date')).values_list('_m', flat=True).distinct() if d}
+        months.add(today.strftime('%Y-%m'))
+        return Response({
+            'client': {
+                'id': str(client.id), 'code': client.code, 'full_name': client.full_name,
+                'node_code': client.node.code, 'current_debt': str(client.current_debt),
+            },
+            'month': f'{year:04d}-{month:02d}',
+            'current_month': today.strftime('%Y-%m'),
+            'available_months': sorted(months, reverse=True),
+            'operations': operations,
+            'totals': {
+                'operations_count': len(operations),
+                'delivered_count': counted,
+                'total_orders': str(total_orders.quantize(q)),
+                'total_payments': str(total_payments.quantize(q)),
+                'total_withdrawals': str(total_withdrawals.quantize(q)),
+                'net_balance_change': str((total_orders - total_payments + total_withdrawals).quantize(q)),
+                'bp_start': str(bp_start.quantize(q)) if bp_start is not None else None,
+                'bp_end': str(bp_end.quantize(q)) if bp_end is not None else None,
+            },
+        })
+
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def active_last_month(self, request):
         """Clients who placed at least one order in the last 30 days."""
