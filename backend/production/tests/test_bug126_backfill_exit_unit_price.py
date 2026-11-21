@@ -36,12 +36,25 @@ class Bug126BackfillExitUnitPriceTests(TestCase):
             node=self.node, consumable_type='FLOUR', quantity=Decimal('0.000'), unit='sac',
         )
 
+    def _mk(self, **kw):
+        # BUG-416 : l horloge Windows est grossiere (created_at identique pour des
+        # creations rapprochees) ; la migration rejoue par created_at, on impose
+        # donc un instant strictement croissant.
+        from datetime import timedelta
+        from django.utils import timezone
+        mv = ConsumableMovement.objects.create(**kw)
+        self._n = getattr(self, "_n", 0) + 1
+        stamp = timezone.now().replace(microsecond=0) - timedelta(hours=1) + timedelta(seconds=self._n)
+        ConsumableMovement.objects.filter(pk=mv.pk).update(created_at=stamp)
+        mv.refresh_from_db()
+        return mv
+
     def test_historical_exit_is_restamped_with_its_chronological_cump_not_the_final_one(self):
-        entry_a = ConsumableMovement.objects.create(
+        entry_a = self._mk(
             node=self.node, stock=self.stock, movement_type='ENTRY',
             quantity=Decimal('10.000'), unit_price=Decimal('100000.00'),
         )
-        exit_1 = ConsumableMovement.objects.create(
+        exit_1 = self._mk(
             node=self.node, stock=self.stock, movement_type='EXIT',
             quantity=Decimal('4.000'),
         )
@@ -51,11 +64,11 @@ class Bug126BackfillExitUnitPriceTests(TestCase):
         # pré-correctif, sans passer par la logique de calcul déjà corrigée.
         ConsumableMovement.objects.filter(pk=exit_1.pk).update(unit_price=Decimal('0.00'))
 
-        entry_b = ConsumableMovement.objects.create(
+        entry_b = self._mk(
             node=self.node, stock=self.stock, movement_type='ENTRY',
             quantity=Decimal('10.000'), unit_price=Decimal('200000.00'),
         )
-        exit_2 = ConsumableMovement.objects.create(
+        exit_2 = self._mk(
             node=self.node, stock=self.stock, movement_type='EXIT',
             quantity=Decimal('5.000'),
         )
