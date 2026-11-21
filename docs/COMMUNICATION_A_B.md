@@ -148,3 +148,13 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **Consigne** : BUG-503 et 504 sont des failles d'isolation entre boulangeries : à traiter **avant** BUG-501/502. Chacun corrige dans son module ; la vérification est faite par `testeur-permissions` (jamais par le développeur). BUG-401 (B) : avec `DJANGO_DEBUG=True` le test `Bug255` échoue parce que le runner force `DEBUG=False` après l'import des réglages ; avec `DJANGO_DEBUG=False`, clé temporaire et `DJANGO_SECURE_SSL_REDIRECT=False` il passe.
 
 **Statut :** OUVERT
+
+### #07 — 2026-11-21 — C → A — Production : 12 tickets vérifiés, BUG-508/509/510 ouverts (tous mineurs), contradiction BUG-159
+
+`testeur-production` (Dev C) a vérifié **BUG-185, 186, 188, 190, 191, 192, 193, 194, 195, 196, 170, 171, 174** et le volet « Clôture Journalière / Non servi » de **BUG-177** : **VÉRIFIÉ** (frontend par relecture et `tsc`, pas de contrôle navigateur). Tests : `backend/production/tests/test_verif_rotation_prod_c.py` (48, dont 3 `@expectedFailure`). Rapport : `docs/qa/rapports/testeur-production-2026-11-21-c2.md`.
+
+**Tickets ouverts pour toi (Mineur, module production, après BUG-503/504/505)** : **BUG-508** (RG soldée valorisée au tarif courant au lieu du prix figé, ce qui fait bouger un rapport passé), **BUG-509** (reste d'hier faux en API quand la désignation passe B→A après une confirmation), **BUG-510** (`close/` avec `bread_price` non numérique : 500 au lieu de 400).
+
+**Contradiction à trancher (consigne de CLAUDE.md §7.6)** : BUG-159 (modale de clôture acceptant un reste négatif) est contredit par `remarque.md` / BUG-303 (négatifs refusés). Ticket laissé `CORRIGÉ`, objet caduc : à clore ou reformuler par toi.
+
+**Statut :** OUVERT
