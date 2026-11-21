@@ -458,6 +458,8 @@ export interface DailyClosureCategory {
   // BUG-177 : `fc` = montant positif affiché ; `fc_signe` = contribution négative
   // aux totaux (ex. "-3000.00"), retranchée de Facture Mvm Interne / Total du Jour.
   non_servi: DailyClosureQuantityFc & { fc_signe: string };
+  /** BUG-356 : factures au statut NOT_SERVED du jour (commandé initial) ; informatif, hors total du jour. */
+  non_servi_jour?: DailyClosureQuantityFc;
   // BUG-177 : factures RG (+) et ajustements de commande BUG-097 (±), prix pleins.
   regularisation: DailyClosureQuantityFc;
   vente_cash_soldee: DailyClosureQuantityFc & { perte_fc: string };
@@ -483,6 +485,10 @@ export interface DailyClosureTotals {
   ecart_production_fc: string;
   total_breads_produced: number;
   total_breads_billed: number;
+  /** BUG-356 : Non servi par statut / en quantité / total (statut + code NS) — informatifs. */
+  non_servi_fc?: string;
+  non_servi_quantity?: number;
+  non_servi_total_fc?: string;
   /** BUG-304 : valeur FC du reste d'hier / du jour (journée) ; `reste_du_jour_jour_fc` null = non déclaré. */
   reste_du_hier_jour_fc?: string | null;
   reste_du_jour_jour_fc?: string | null;

@@ -8,6 +8,7 @@ import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
 import { ClotureClientsModal } from '@/components/production/ClotureClientsModal';
 import { isProduitEnAttente, PRODUIT_EN_ATTENTE_HELP } from '@/utils/clotureProduit';
+import { nonServiCumul, nonServiTotalFc, NON_SERVI_INCLUT_HELP } from '@/utils/clotureNonServi';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
 
 // BUG-120 (volet frontend) : écran dédié « Clôture Journalière », réunissant en un seul
@@ -34,7 +35,7 @@ export const formatQty = (n: number | null | undefined): string => {
 export const REGULARISATION_HELP =
   'Régularisation : pains ajoutés ou retirés par les factures de régularisation (code RG) et par les corrections de commande (ajustements), à leur prix plein.';
 export const NON_SERVI_HELP =
-  'Non Servi : montant des commandes non servies du jour (code NS) ; retranché du total du jour, aucun pain n\'a été remis.';
+  'Non Servi : montant des commandes non servies du jour (code NS), cumulé avec les factures déclarées Non servi (commandé initial) ; elles ne comptent pas dans les ventes. Le code NS est retranché du total du jour, aucun pain n\'a été remis.';
 
 type RepartitionMode = 'QUANTITE' | 'VALEUR';
 
@@ -331,9 +332,14 @@ export const ClotureJournaliere: React.FC = () => {
                         {formatQty(cat.appro_recu.quantity)}
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_recu.fc)}</div>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
-                        {formatFC(cat.non_servi.fc)}
-                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatQty(cat.non_servi.quantity)} pain(s)</div>
+                      <td style={{ textAlign: 'right' }} title={NON_SERVI_INCLUT_HELP}>
+                        {formatFC(nonServiCumul(cat).fc)}
+                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatQty(nonServiCumul(cat).quantity)} pain(s)</div>
+                        {nonServiCumul(cat).jourQuantity > 0 && (
+                          <div style={{ fontSize: '0.56rem', color: 'hsl(var(--text-muted))' }}>
+                            dont statut : {formatFC(nonServiCumul(cat).jourFc)} ({formatQty(nonServiCumul(cat).jourQuantity)})
+                          </div>
+                        )}
                         {parseFloat(cat.non_servi.fc_signe) !== 0 && (
                           <div style={{ fontSize: '0.58rem', color: 'hsl(var(--color-danger))' }} title="Retranché du total du jour">
                             retranché : {formatFC(cat.non_servi.fc_signe)}
@@ -373,6 +379,10 @@ export const ClotureJournaliere: React.FC = () => {
               <li><strong>Régularisation</strong> : {REGULARISATION_HELP.replace(/^Régularisation : /, '')}</li>
               <li><strong>Non Servi</strong> : {NON_SERVI_HELP.replace(/^Non Servi : /, '')}</li>
             </ul>
+            <p style={{ fontSize: '0.7rem', fontWeight: 700, marginTop: '8px' }} title={NON_SERVI_INCLUT_HELP}>
+              Total Non servi (code NS + factures déclarées Non servi) : {formatFC(nonServiTotalFc(report))}
+              <span style={{ fontWeight: 400, color: 'hsl(var(--text-secondary))' }}> — {NON_SERVI_INCLUT_HELP}</span>
+            </p>
             <p style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginTop: '8px' }}>
               Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel
               (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir

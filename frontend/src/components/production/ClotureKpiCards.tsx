@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { DailyClosureReport } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { nonServiTotalFc, NON_SERVI_INCLUT_HELP } from '@/utils/clotureNonServi';
 import { isProduitEnAttente, isReportProduitEnAttente } from '@/utils/clotureProduit';
 
 // BUG-302 (remarque.md l.429) : les cartes de totaux de la Clôture Journalière ouvrent une
@@ -40,7 +41,7 @@ const buildDetail = (key: KpiKey, report: DailyClosureReport): KpiDetail => {
     case 'total':
       return {
         title: 'Total du Jour',
-        explanation: "Montant facturé du jour toutes catégories (facture mouvements internes, non servi retranché).",
+        explanation: "Montant facturé du jour toutes catégories (facture mouvements internes, non servi retranché). " + `Non servi total (code NS + statut) : ${fc(nonServiTotalFc(report))} — ${NON_SERVI_INCLUT_HELP}`,
         table: {
           headers: ['Catégorie', 'Facture Mvm Interne', 'Non servi retranché'],
           rows: categories.map(c => [c.label, fc(c.facture_mvm_interne.fc), fc(c.non_servi.fc_signe)]),
