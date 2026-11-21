@@ -309,6 +309,7 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-415 | Clients à 360 px (`ClientsTable.tsx`) : le tableau déborde de sa carte ; la colonne Actions (bouton œil « Voir la fiche détaillée ») et une partie de « Statut » sont hors écran, atteignables seulement par défilement horizontal interne au tableau (la page elle-même ne défile pas) | Clients | frontend | Mineur | CORRIGÉ | testeur-e2e (dev B), 2026-11-21, relecture de C (#13) | dev-frontend (B) | — |
 | BUG-414 | Suppression d'une boulangerie (`DELETE /api/core/nodes/<id>/`) : les comptes rattachés passaient à `node=NULL` (SET_NULL) ; depuis BUG-506 un compte lié à une boulangerie sans nœud ne voit plus rien | Core | backend | Mineur | CORRIGÉ (dev-backend B, 2026-11-21h) | testeur-permissions C, message #13 | dev-backend | B |
 | BUG-511 | `GET /api/commissions/commissions/` n'accepte pas `period__month` / `period__year` (filterset : `period`, `period__node`, ...) : l'écran Commissions doit lire les périodes puis filtrer côté client | Commissions | backend | Mineur | VÉRIFIÉ (testeur-clients-commissions, Dev C, 2026-11-21 : 11 tests `test_verif_bug511_c.py`) | dev-frontend (BUG-412) | dev-backend | C |
+| BUG-416 | Tests CUMP instables sous Windows : horloge grossière, des `ConsumableMovement` créés coup sur coup ont le même `created_at` ; l'ordre dépend alors du pk UUID aléatoire (5 tests échouaient ~1 fois sur 4) | Production | tests | Mineur | CORRIGÉ (dev-backend B, 2026-11-21i) | dev B (suite instable) | dev-backend | B |
 
 ## Fiches détaillées
 
@@ -16753,3 +16754,11 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
   Test : `e2e/tests/32-clients-pos-dev-b.spec.ts`, `test.fixme` retiré. Le helper `amenerVerticalement` utilisait `window.scrollBy` alors que le défilement vertical est porté par un conteneur
   de la mise en page (le test ne pouvait donc jamais passer) : il règle maintenant `scrollTop` des ancêtres, sans jamais défiler horizontalement.
   Rejeu à 360 px (Chrome ms-playwright, base jetable) : échoue sans le correctif, 2/2 verts avec. À vérifier par le testeur-e2e (dev B) / C, y compris le rendu clair/sombre du fond de la colonne.
+
+### BUG-416 — [Mineur] Tests CUMP instables sous Windows (égalité de created_at)
+- Module : Production · Composant : tests (`production/tests/`) · Gravité : Mineur · Statut : CORRIGÉ (dev-backend B, 2026-11-21i)
+- Observé : sur ce poste, `time.time()` ne change presque pas entre deux lectures ; les mouvements créés consécutivement ont le même `created_at`. `recompute_cump` et plusieurs tests relisent par `('created_at','pk')` : l'ordre retombe sur le pk UUID, aléatoire. 5 tests échouaient ~1 fois sur 4 : `test_bug357_recompute_cump::test_apply_fixes_cump_exits_and_logs`, `test_verif_bug357_147_c::{test_apply_corrects_cump_and_exit_prices_and_quantity_untouched, test_decimal_consumables_levure_huile, test_replay_matches_save_on_mixed_sequence_incl_rounding}`, `test_verif_bug402_a::test_exit_valued_at_cump_after_recovery`.
+- Cause : tests non déterministes (pas de code applicatif modifié).
+- Correction : les helpers de création de mouvements (`_mv` des deux fichiers 357, `Base.move` de 402_a) imposent un `created_at` strictement croissant (`update(created_at=base + n s)`, compteur de module) ; assertions inchangées. Autres tests de production relus : les autres helpers n'utilisent que des références directes (pk), non sensibles à l'ordre.
+- Preuve : chacun des 3 fichiers, 6 exécutions consécutives, 6/6 OK.
+- Remarque pour A : `recompute_cump` rejoue par (`created_at`, pk UUID). Pour des données réelles où deux mouvements ont le même instant (clock grossière Windows, import), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : ordre de rejeu stable (ex. séquence/horodatage à résolution fine). Non corrigé ici.

@@ -2,8 +2,12 @@
 BUG-357 : la commande `recompute_cump` recalcule les CUMP gonflés avant
 BUG-402 (simulation par défaut, --apply pour écrire). Données fictives.
 """
+import itertools
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+
+from django.utils import timezone
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -12,6 +16,17 @@ from django.test import TestCase
 from core.models import ActivityLog
 from core.testing import make_node
 from production.models import ConsumableStock, ConsumableMovement
+
+
+_BASE = timezone.now()
+_SEQ = itertools.count(1)
+
+
+def _stamp(mv):
+    ts = _BASE + timedelta(seconds=next(_SEQ))
+    ConsumableMovement.objects.filter(pk=mv.pk).update(created_at=ts)
+    mv.refresh_from_db()
+    return mv
 
 
 def _run(*args):
@@ -28,10 +43,13 @@ class RecomputeCumpTests(TestCase):
         )
 
     def _mv(self, kind, qty, price='0.00'):
-        return ConsumableMovement.objects.create(
+        mv = ConsumableMovement.objects.create(
             node=self.node, stock=self.stock, movement_type=kind,
             quantity=Decimal(qty), unit_price=Decimal(price),
         )
+        # BUG-416 : horloge grossière sous Windows -> created_at identiques ;
+        # on impose un ordre strictement croissant (rejeu déterministe).
+        return _stamp(mv)
 
     def _inflate(self):
         """Scénario pré-BUG-402 : sortie en négatif (-5), entrée de 10 à 100000,
