@@ -627,7 +627,7 @@ class IsolationExtra(Base):
             self.assertEqual(r.status_code, 200)
             self.assertEqual([x for x in r.data if x['node'] == 'P2'], [], f'{role} lit les entrees de farine de K2')
 
-    @expectedFailure  # BUG-506 (ouvert, Dev C 2026-11-21c) : retirer le marqueur a la correction
+    # BUG-506 corrige (Dev B, e347918) : marque retiree, verifie par Dev C 2026-11-21c2
     def test_non_hq_user_cannot_be_created_without_node(self):
         """Sinon `if not can_access_all_nodes and user.node_id` ne filtre rien (voir BUG ouvert)."""
         for role in ('GERANT', 'FACTURIER', 'LIVREUR'):

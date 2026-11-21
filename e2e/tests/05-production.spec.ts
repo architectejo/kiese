@@ -14,19 +14,30 @@ const GERANT_PAR_LARGEUR = ['zz_demo_gerant_k2', 'zz_demo_gerant_k5', 'zz_demo_g
 test('déclaration de fournée avec consommables décimaux, écart manquant/excédent affiché', async ({ page }, info) => {
   const idx = Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name));
   await seConnecter(page, GERANT_PAR_LARGEUR[idx], PASSWORD);
+  // BUG-148 : le panneau affiche « Déclaration de Fournée » tant que la fournée du jour n'est pas chargée
+  // (puis bascule sur « Fournée en cours »). On attend donc la réponse de l'API avant de lire l'état.
+  const sessionsChargees = page.waitForResponse(r => /\/api\/production\/sessions\/\?.*date=/.test(r.url()) && r.ok(), { timeout: 30_000 });
   await page.goto('/production', { waitUntil: 'domcontentloaded' });
+  await sessionsChargees;
+  await page.waitForLoadState('networkidle');
 
   const panneau = page.getByTestId('batch-in-progress-panel');
-  await expect(panneau.getByText('Déclaration de Fournée')).toBeVisible({ timeout: 30_000 });
-  await panneau.getByLabel(/Nombre de sacs de farine/).fill('2');
-  // Consommables décimaux : sel (grammes, entier), levure (paquets, décimal), huile (litres, décimal).
-  await panneau.getByLabel('Sel en grammes').fill('450');
-  await panneau.getByLabel('Levure en paquets').fill('0.25');
-  await panneau.getByLabel('Huile en litres').fill('0.5');
-  await expect(panneau.getByText(/Montant à atteindre :/)).toBeVisible();
-
-  await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
-  await expect(panneau.getByText('Fournée en cours')).toBeVisible({ timeout: 20_000 });
+  // BUG-148 : une seule fournee par equipe et par jour. Le test doit etre idempotent : selon l'etat de la base
+  // (premiere execution du jour ou rejeu), le panneau affiche soit le formulaire de declaration, soit la
+  // fournee deja en cours. On attend explicitement l'un OU l'autre (aucune attente fixe).
+  const formulaire = panneau.getByText('Déclaration de Fournée');
+  const enCours = panneau.getByText('Fournée en cours');
+  await expect(formulaire.or(enCours)).toBeVisible({ timeout: 30_000 });
+  if (!(await enCours.isVisible()) && (await formulaire.isVisible())) {
+    await panneau.getByLabel(/Nombre de sacs de farine/).fill('2');
+    // Consommables décimaux : sel (grammes, entier), levure (paquets, décimal), huile (litres, décimal).
+    await panneau.getByLabel('Sel en grammes').fill('450');
+    await panneau.getByLabel('Levure en paquets').fill('0.25');
+    await panneau.getByLabel('Huile en litres').fill('0.5');
+    await expect(panneau.getByText(/Montant à atteindre :/)).toBeVisible();
+    await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+  }
+  await expect(enCours).toBeVisible({ timeout: 20_000 });
   await expect(panneau.getByTestId('batch-objective')).toBeVisible();
   await expect(page.getByText(/stock insuffisant/i)).toHaveCount(0);
 

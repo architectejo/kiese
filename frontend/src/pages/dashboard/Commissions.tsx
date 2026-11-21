@@ -4,7 +4,7 @@ import {
   FiPocket, FiAward, FiSearch, FiRefreshCw, FiEdit2,
   FiPrinter, FiDownload
 } from 'react-icons/fi';
-import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/services';
+import { commissionsApi, coreApi, ClientCommission, CommissionPeriod, BakeryNode } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { localIsoDate } from '@/store/workDateStore';
@@ -35,6 +35,12 @@ export const Commissions: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid'>('All');
   const [nodeFilter, setNodeFilter] = useState('');
+  // BUG-412 : filtre mois/année (défaut = mois courant ; '' = tous). Indépendant de la fenêtre « Générer ».
+  const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
+  const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+  const [periods, setPeriods] = useState<CommissionPeriod[] | null>(null);
+  const [periodsError, setPeriodsError] = useState<string | null>(null);
+  const [periodsTick, setPeriodsTick] = useState(0);
 
   // Generate period modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -50,19 +56,51 @@ export const Commissions: React.FC = () => {
   // BUG-164 : liste lue page par page (page 1 affichée tout de suite, suite en arrière-plan).
   // KPI, totaux d'impression/export, recherche et filtre de statut (côté client) ne sont
   // fiables qu'une fois la liste COMPLÈTE : voir `isReady` ci-dessous.
+  // BUG-412 : l'API des commissions n'a pas de filtre mois/année : on résout d'abord les périodes
+  // (filtrables par month/year/node), puis on charge les commissions (`period` si une seule période,
+  // sinon filtre par identifiants de période côté client).
+  const periodFilterActive = filterMonth !== '' || filterYear !== '';
+  useEffect(() => {
+    let cancelled = false;
+    setPeriods(null);
+    setPeriodsError(null);
+    commissionsApi.periods.list({
+      ...(filterMonth ? { month: filterMonth } : {}),
+      ...(filterYear ? { year: filterYear } : {}),
+      ...(nodeFilter ? { node: nodeFilter } : {}),
+    })
+      .then(res => { if (!cancelled) setPeriods(res.data); })
+      .catch(err => { if (!cancelled) setPeriodsError(getErrorDetail(err, 'Impossible de charger les périodes de commissions.')); });
+    return () => { cancelled = true; };
+  }, [filterMonth, filterYear, nodeFilter, periodsTick]);
+  const periodIds = periods ? periods.map(p => p.id) : [];
+  const noPeriod = periodFilterActive && periods !== null && periods.length === 0;
+  const singlePeriod = periodFilterActive && periods !== null && periods.length === 1 ? periods[0].id : '';
   const commissionsQ = useProgressiveList<ClientCommission>({
     fetchPage: p => commissionsApi.commissions.page({
       ...(nodeFilter ? { period__node: nodeFilter } : {}),
+      ...(singlePeriod ? { period: singlePeriod } : {}),
       page: String(p), page_size: '100',
     }),
-    resetKey: `cm|${nodeFilter}`,
+    resetKey: `cm|${nodeFilter}|${filterMonth}|${filterYear}|${singlePeriod}|${periods === null ? 'wait' : 'ok'}`,
+    enabled: periods !== null && !noPeriod,
   });
-  const commissions = commissionsQ.items;
-  const isLoading = commissionsQ.isLoading;
-  const isReady = commissionsQ.isComplete;
+  const commissions = noPeriod || periods === null
+    ? []
+    : (periodFilterActive && !singlePeriod ? commissionsQ.items.filter(c => periodIds.includes(c.period)) : commissionsQ.items);
+  const isLoading = (periods === null && !periodsError) || (!noPeriod && commissionsQ.isLoading);
+  const isReady = noPeriod || (periods !== null && commissionsQ.isComplete);
   const reloadCommissions = commissionsQ.reload;
   const loadData = useCallback(async () => { reloadCommissions(); }, [reloadCommissions]);
   const progress = `${commissionsQ.loaded} / ${commissionsQ.total ?? '…'}`;
+  const periodLabel = filterMonth || filterYear
+    ? `${filterMonth ? MONTHS_FR[Number(filterMonth) - 1] : 'Tous les mois'} ${filterYear || '(toutes années)'}`
+    : 'Toutes les périodes';
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear + 1 - i);
+  if (filterYear && !yearOptions.includes(Number(filterYear))) yearOptions.push(Number(filterYear));
+  // BUG-412 : mois de départ de l'historique client = mois filtré (seulement si mois ET année choisis).
+  const historyInitialMonth = filterMonth && filterYear ? `${filterYear}-${filterMonth.padStart(2, '0')}` : undefined;
 
   useEffect(() => {
     if (user?.can_access_all_nodes && nodesList.length === 0) {
@@ -187,7 +225,7 @@ export const Commissions: React.FC = () => {
       tfoot td{font-weight:bold;background:#f3f4f6;border-top:2px solid #9ca3af}
       @media print{body{padding:10px}}</style></head><body>
       <h1>Situation des Ristournes &amp; Rémunérations</h1>
-      <div class="sub">Imprimé le ${dateStr} · ${filteredCommissions.length} client(s)</div>
+      <div class="sub">Imprimé le ${dateStr} · ${periodLabel} · ${filteredCommissions.length} client(s)</div>
       <table><thead><tr>
         <th>Client</th><th style="text-align:right">Commande (FC)</th><th style="text-align:center">Taux</th>
         <th style="text-align:right">CM Brute</th><th style="text-align:right">NET/ORDI</th>
@@ -228,7 +266,7 @@ export const Commissions: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ristournes_${localIsoDate()}.csv`;
+    a.download = `ristournes_${filterYear || 'tous'}${filterMonth ? '-' + filterMonth.padStart(2, '0') : ''}_${localIsoDate()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -296,6 +334,13 @@ export const Commissions: React.FC = () => {
         </div>
       </div>
 
+      {periodsError && (
+        <div role="alert" className="glass-card" style={{ padding: '10px 14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {periodsError}
+          <button onClick={() => setPeriodsTick(t => t + 1)} className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '0.7rem' }}>Réessayer</button>
+        </div>
+      )}
+
       {commissionsQ.error && (
         <div role="alert" className="glass-card" style={{ padding: '10px 14px', color: 'hsl(var(--color-danger))', fontSize: '0.78rem', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           {commissionsQ.error}
@@ -304,7 +349,7 @@ export const Commissions: React.FC = () => {
       )}
 
       {/* Bandeau : aucune commission générée pour le mois courant */}
-      {isReady && commissions.length === 0 && (
+      {isReady && !periodsError && commissions.length === 0 && (
         <div className="glass-card animate-fade-in" style={{
           padding: '14px 18px',
           borderLeft: '4px solid hsl(var(--color-warning))',
@@ -315,10 +360,10 @@ export const Commissions: React.FC = () => {
             <FiRefreshCw style={{ color: 'hsl(var(--color-warning))', fontSize: '1.2rem', flexShrink: 0 }} />
             <div>
               <div style={{ fontWeight: 800, fontSize: '0.82rem', color: 'hsl(var(--color-warning))' }}>
-                Aucune commission générée pour cette période
+                Aucune commission générée pour {periodLabel}
               </div>
               <div style={{ fontSize: '0.72rem', color: 'hsl(var(--text-secondary))', marginTop: '2px' }}>
-                Cliquez sur "Générer Commissions" pour calculer les commissions du mois courant à partir des factures livrées.
+                Cliquez sur "Générer Commissions" pour calculer les commissions du mois voulu à partir des factures livrées.
               </div>
             </div>
           </div>
@@ -342,6 +387,34 @@ export const Commissions: React.FC = () => {
               className="form-input"
               style={{ paddingLeft: '36px', height: '36px', fontSize: '0.8rem' }}
             />
+          </div>
+          <div style={{ flex: 1, minWidth: '130px' }}>
+            <select
+              value={filterMonth}
+              onChange={(e) => setFilterMonth(e.target.value)}
+              className="form-input"
+              aria-label="Filtrer par mois"
+              style={{ cursor: 'pointer', height: '36px', fontSize: '0.8rem' }}
+            >
+              <option value="">Tous les mois</option>
+              {MONTHS_FR.map((m, i) => (
+                <option key={m} value={String(i + 1)}>{m}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ flex: 1, minWidth: '110px' }}>
+            <select
+              value={filterYear}
+              onChange={(e) => setFilterYear(e.target.value)}
+              className="form-input"
+              aria-label="Filtrer par année"
+              style={{ cursor: 'pointer', height: '36px', fontSize: '0.8rem' }}
+            >
+              <option value="">Toutes les années</option>
+              {yearOptions.map(y => (
+                <option key={y} value={String(y)}>{y}</option>
+              ))}
+            </select>
           </div>
           <div style={{ flex: 1, minWidth: '160px' }}>
             <select
@@ -382,7 +455,7 @@ export const Commissions: React.FC = () => {
       <div className="glass-card" style={{ padding: '16px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
           <h2 style={{ fontSize: '0.95rem', fontWeight: 800, margin: 0 }}>
-            Situation des Ristournes & Rémunérations
+            Situation des Ristournes & Rémunérations <span style={{ fontWeight: 600, color: 'hsl(var(--text-secondary))' }}>· {periodLabel}</span>
           </h2>
           {!isLoading && filteredCommissions.length > 0 && (
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -766,7 +839,7 @@ export const Commissions: React.FC = () => {
             </form>
       </Modal>
 
-      <ClientHistoryModal clientId={historyClient?.id ?? null} clientName={historyClient?.name} onClose={() => setHistoryClient(null)} />
+      <ClientHistoryModal clientId={historyClient?.id ?? null} clientName={historyClient?.name} initialMonth={historyInitialMonth} onClose={() => setHistoryClient(null)} />
     </div>
   );
 };

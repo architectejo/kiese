@@ -21,7 +21,7 @@ export async function seConnecter(page: Page, username: string, password: string
   await page.getByPlaceholder('Ex: pierre').fill(username);
   await page.getByPlaceholder('••••••••').fill(password || username);
   await page.getByRole('button', { name: /se connecter/i }).click();
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
 }
 
 /**

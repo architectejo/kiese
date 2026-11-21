@@ -1628,7 +1628,9 @@ export const productionApi = {
 
 export const commissionsApi = {
   periods: {
-    list: () => getList<CommissionPeriod>('/api/commissions/periods/'),
+    // BUG-412 : l'API filtre les périodes par `month`, `year` et `node`.
+    list: (params?: { month?: string; year?: string; node?: string }) =>
+      getList<CommissionPeriod>('/api/commissions/periods/', params),
     create: (data: Partial<CommissionPeriod>) =>
       apiClient.post<CommissionPeriod>('/api/commissions/periods/', data),
     close: (id: string) =>

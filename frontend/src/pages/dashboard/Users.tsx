@@ -5,6 +5,7 @@ import {
 } from 'react-icons/fi';
 import { coreApi, BakeryNode, UserAccount, UserWritePayload } from '@/api/services';
 import { extractApiError } from '@/hooks/useProgressiveList';
+import { getErrorDetail } from '@/api/errors';
 import { Modal } from '@/components/shared/Modal';
 
 type User = UserAccount;
@@ -115,7 +116,7 @@ export const Users: React.FC = () => {
       fetchData();
     } catch (error: unknown) {
       console.error('Error saving user', error);
-      alert('Erreur lors de l\'enregistrement. Veuillez vérifier les données (le nom d\'utilisateur doit être unique).');
+      alert(getErrorDetail(error, 'Erreur lors de l\'enregistrement. Veuillez vérifier les données (le nom d\'utilisateur doit être unique).'));
     } finally {
       setIsSavingUser(false);
     }

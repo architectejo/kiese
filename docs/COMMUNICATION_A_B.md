@@ -235,3 +235,84 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **À regarder par C** : toute ligne couverte par un ticket que tu as vérifié (par ex. consommables / intrants, BUG-147 et 357 ; trésorerie), en veillant à ne marquer que ce qui est entièrement traité.
 
 **Statut :** OUVERT
+
+### #10 — 2026-11-21 — C → A, B — Re #09 : `remarque.md`, aucune ligne à marquer `[c]` côté C
+
+`dev-c` contient `origin/dev-a` (jusqu'à `bf4d4cd`, consigne `[c]` incluse). J'ai passé en revue les 10 lignes encore à `[]` de `remarque.md` (95 sont à `[c]`) : **aucune** n'est à la fois couverte par un ticket que j'ai vérifié et entièrement traitée, donc je ne modifie pas `remarque.md`.
+- BUG-147 et BUG-357 (consommables) corrigent l'auto-création du stock et le CUMP ; ils **ne couvrent pas** la ligne « Intrants — Stocks Consommables … la direction doit avoir une vue globale » : ligne laissée à `[]`, à toi de dire (A) si cette vue globale existe déjà côté frontend.
+- Les lignes de trésorerie encore à `[]` (« Versement » visible de la direction ; options de clôture déplacées vers « Clôture Journalière ») ne sont pas faites.
+- Lignes 452 et 454 (commissions par boulangerie, carte et cotisation) : à B, comme tu l'as indiqué.
+Si un autre ticket que j'ai vérifié te semble couvrir l'une de ces lignes, cite la ligne et le ticket ; je ne marque que ce qui est implémenté ET vérifié.
+
+**Statut :** INFO
+
+### #11 — 2026-11-21 — C → A, B — Ce que j'attends de chacun pour continuer (dans l'ordre)
+
+**Où en est C** : tout ce qui était `CORRIGÉ` à notre arrivée dans production, ventes, trésorerie et sécurité est vérifié ; le découpage B-4 est relu sans régression ; `dev-c`, `dev-a` et `dev-b` sont synchronisées (`dev-c` ≥ `5d7dbd0`). **C n'a plus de ticket à vérifier tant que vous n'avez pas livré de correction** : le travail de C dépend maintenant de vous. Règle de livraison : quand un ticket passe `CORRIGÉ`, **commit + push puis un message `Re #11` avec les numéros de ticket et les fichiers de test** ; C fait vérifier par le testeur d'origine (jamais par le développeur du correctif).
+
+#### Pour A, dans cet ordre
+1. **BUG-503** (`treasury`, **Bloquant**) : `FacturierReportViewSet.perform_create` doit forcer le nœud (comme le mixin BUG-313 le fait pour PUT/PATCH).
+2. **BUG-504** (`production`, **Bloquant**) : `POST /api/production/movements/` doit refuser un `stock` d'un autre nœud (vérifier `stock.node`, y compris pour les SORTIES, non testées).
+3. **BUG-505** (`production`, Majeur) : `flour_history` ne doit pas honorer `?node=` pour un non-siège.
+4. **Garde « compte sans boulangerie »** (suite de BUG-506) : dans les `get_queryset` de production, treasury et sales, un utilisateur non-siège sans `node_id` ne doit rien voir (au lieu de tout voir).
+5. **BUG-501** puis **BUG-502** (production, Majeur), puis **BUG-508, 509, 510** (Mineur).
+6. **Décision BUG-159 / BUG-303** : clore (REJETÉ ou VÉRIFIÉ « caduc ») ou reformuler.
+7. **Réponse à ma question de #10** : la vue globale des consommables pour la direction (ligne 470 de `remarque.md`) existe-t-elle déjà côté frontend ?
+Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (503, 504, 505), `test_verif_bug357_147_c.py` (501, 502) et `test_verif_rotation_prod_c.py` (508, 509, 510) sont tes tests de non-régression : retire la marque quand le défaut est corrigé.
+
+#### Pour B, dans cet ordre
+1. **BUG-506** (`core`, Majeur) : refuser la création (et la modification) d'un compte GERANT/FACTURIER/LIVREUR **sans boulangerie** ; ajouter le test `@expectedFailure` correspondant à ceux de `test_verif_matrice_c.py` (3 cas).
+2. **BUG-411** (routes sans `isAllowed`) : à corriger, ou à clarifier avec le client pour le parcours LIVREUR.
+3. **BUG-507** (recherche de clients inter-boulangeries ouverte au livreur) : question au client, à transmettre avec BUG-253 (`cleanup_expired` pour le livreur).
+4. **BUG-266, 267, 268** : transmettre au client les questions Q-022 à Q-024 que tu as préparées, et me dire où en est la réponse ; sans réponse, ces trois tickets restent `À CLARIFIER`.
+5. **B-5** (BUG-148 : e2e de production instable ; ajouter un parcours Clients à 360 px, que la relecture B-4 n'a pas pu valider), **B-6** (cloud) et **B-7** (documentation) à ton rythme ; préviens-moi pour que `testeur-e2e`, `nettoyeur-securite` et `testeur-charge` contre-vérifient depuis `dev-c`.
+6. **Lignes 452 et 454 de `remarque.md`** (carte et cotisation par boulangerie) : dis si elles sont entièrement faites, A et moi ne les marquerons pas à ta place.
+
+#### Pour les deux
+- `git fetch` puis fusion de `origin/dev-c` avant de reprendre ; poussez **à chaque lot vérifié**, pas seulement en fin de journée.
+- On cite l'expéditeur dans les références (#04-B, #06-A…) ; prochain numéro libre : **#12**.
+- `desktop/` reste gelé. Sous Python 3.14, pas de `manage.py test --parallel`.
+
+**Ce que C fera dès qu'il reçoit vos signaux** : vérification indépendante (testeur-permissions pour 503, 504, 505, 506 ; testeur-production pour 501, 502, 508 à 510 ; testeur-e2e / testeur-charge pour B-5 et B-6), passage à `VÉRIFIÉ`, puis mise à jour de `remarque.md` et PR `dev-*` → `main` quand les trois branches sont stables.
+
+**Statut :** OUVERT
+
+### #12 — 2026-11-21 — B → C, A — Re #11-C : BUG-506, 511, 412, 413 livrés (CORRIGÉ) ; questions client prêtes ; lignes 452/454 non faites
+
+**Livraison** (commit `e347918` sur `dev-b`, suite `core` + `clients` + `commissions` + `sync` : 733 tests, aucun échec ; `makemigrations --check` : aucun changement) :
+
+| Ticket | Contenu | Fichiers de test (pour C) |
+|---|---|---|
+| **BUG-506** (Majeur) | un GERANT/FACTURIER/LIVREUR sans boulangerie est refusé en 400 (création, PATCH `node=null`, changement de rôle) ; `is_node_less_non_hq` (`core/mixins.py`) renvoie `none()` dans 8 `get_queryset` de core/clients/commissions ; commande de contrôle `check_users_sans_noeud` (lecture seule, à lancer sur la base réelle) | `core/tests/test_bug506_user_sans_noeud.py` (9 tests) |
+| **BUG-511** | `period__month` / `period__year` sur `ClientCommissionViewSet` | `commissions/tests/test_bug511_filtre_periode.py` |
+| **BUG-412** | filtre mois/année dans l'écran Commissions (frontend, sans test navigateur : `tsc` et build OK) | marche manuelle dans la fiche |
+| **BUG-413** | `Users.tsx` affiche maintenant l'erreur réelle (au lieu de « nom d'utilisateur unique ») | marche manuelle dans la fiche |
+
+**Pour C** : dans `core/tests/test_verif_matrice_c.py`, `IsolationExtra::test_non_hq_user_cannot_be_created_without_node` passe en « unexpected success » → retire la marque. Les deux autres (`test_node_less_non_hq_sees_nothing_cross_node`, `IsolationProduction::test_bug147_node_less_non_hq_account_cannot_reach_other_nodes`) restent attendues en échec jusqu'à la garde `node_id` absent chez A.
+
+**Pour A** (suite de BUG-506) : dans les `get_queryset` de production, treasury et sales, un utilisateur non-siège dont `node_id` est vide doit voir `none()`. Le helper `core.mixins.is_node_less_non_hq` est réutilisable.
+
+**Questions client prêtes** dans `docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md` : Q-022 à Q-024 (BUG-266/267/268, commissions) et Q-025 (BUG-507 : le livreur voit-il les clients des autres boulangeries ?). Elles sont à transmettre au propriétaire par le responsable du projet ; sans réponse, les tickets restent À CLARIFIER. Pas encore de réponse à ce jour.
+
+**`remarque.md` lignes 452 et 454** (valeurs §2.3, carte et cotisation par boulangerie, filtre mois) : **non faites en totalité** → elles restent `[]`. Fait : cotisation sociale par boulangerie (BUG-289/295), filtre mois/année (BUG-412). Reste : taux CM par défaut et frais d'imprimés encore globaux (`Config`), et le frais de carte, mis à 0 par décision du client du 14/11 (BUG-291), ce qui contredit la remarque : **contradiction à faire trancher par le client** avant tout développement.
+
+**En cours côté B** : BUG-148 (e2e production instable) + parcours Clients 360 px (spec 32, demandé en #11). BUG-411 (routes sans garde) attend la réponse sur le parcours du livreur. B-6 (cloud) : différé sur décision du responsable ; B-7 (docs) après la fin des fonctionnalités.
+
+**Statut :** OUVERT
+
+### #13 — 2026-11-21 — C → B, A — Re #12-B : BUG-506/511/412/413 VÉRIFIÉS ; BUG-148 reste CORRIGÉ ; trois demandes à B
+
+**Vérifiés par un testeur ≠ développeur (Dev C), sur `dev-c` à `0517d60` et suivants :**
+- **BUG-506** : VÉRIFIÉ (`testeur-permissions`, 12 tests : `core/tests/test_verif_bug506_c.py`). Contournements essayés sans succès : création et PATCH/PUT avec `node` nul ou vide, changement de rôle sans nœud, orphelin créé hors API ; rôles du siège non cassés ; `check_users_sans_noeud` en lecture seule confirmée. `core` + `clients` + `commissions` : 667 tests OK. **Réserve** : la garde « `node_id` vide → `none()` » reste à poser par **A** dans production, treasury, sales (deux tests de `test_verif_matrice_c.py` restent `@expectedFailure` jusque-là).
+- **BUG-511** (11 tests, `commissions/tests/test_verif_bug511_c.py`), **BUG-412** et **BUG-413** : VÉRIFIÉS (412 et 413 par relecture, `tsc` et build, sans contrôle navigateur).
+
+**BUG-148 : reste `CORRIGÉ`, non vérifié.** `testeur-e2e` n'a pas pu rejouer (pas de `node_modules` dans `e2e/`, pas de navigateur Playwright sur ce poste). La correction de `05-production.spec.ts` est plausible à la relecture. En revanche **la spec 32 ne prouve pas 360 px** : pas de `viewport`, pas de contrôle `scrollWidth <= clientWidth`, pas de `toBeInViewport` sur les boutons œil/historique, et `if (await histo.count())` peut sauter l'historique.
+
+**Demandes à B, dans l'ordre**
+1. Spec 32 : ajouter `test.use({ viewport: { width: 360, height: 740 } })` (ou le projet `pos` explicite), l'assertion `scrollWidth <= clientWidth` sur le body, `toBeInViewport()` sur les boutons d'action, et remplacer le `if (count())` par une assertion qui échoue si l'historique n'est pas présent.
+2. Rejouer sur une machine avec navigateur : `npx playwright test 05-production --project=pos --repeat-each=5` puis la spec 32, et joindre le résultat dans le message de livraison. Je ne marquerai BUG-148 `VÉRIFIÉ` qu'avec un rejeu réel.
+3. Deux améliorations signalées par les testeurs, au choix : l'écran Commissions peut utiliser `period__month/year` côté API au lieu de filtrer côté client sur des pages de 100 ; le message de repli de `Users.tsx` mentionne encore « nom d'utilisateur unique » quand l'API ne renvoie rien d'exploitable. Et si tu supprimes un nœud depuis l'API, les comptes deviennent orphelins (`SET_NULL`) : un `PROTECT` ou un refus de suppression d'un nœud ayant des utilisateurs serait plus net (observation de `testeur-permissions`, sans ticket).
+
+**Pour A** (toujours en attente de ton côté, voir #11) : BUG-503, BUG-504, BUG-505, la garde `node_id` vide (suite de BUG-506, helper réutilisable `core.mixins.is_node_less_non_hq`), puis BUG-501/502/508/509/510. Les remarques de BUG-159 et de la ligne 470 de `remarque.md` (#10, #11) attendent aussi ta réponse.
+
+**Statut :** OUVERT
