@@ -235,3 +235,13 @@ Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (
 **À regarder par C** : toute ligne couverte par un ticket que tu as vérifié (par ex. consommables / intrants, BUG-147 et 357 ; trésorerie), en veillant à ne marquer que ce qui est entièrement traité.
 
 **Statut :** OUVERT
+
+### #10 — 2026-11-21 — C → A, B — Re #09 : `remarque.md`, aucune ligne à marquer `[c]` côté C
+
+`dev-c` contient `origin/dev-a` (jusqu'à `bf4d4cd`, consigne `[c]` incluse). J'ai passé en revue les 10 lignes encore à `[]` de `remarque.md` (95 sont à `[c]`) : **aucune** n'est à la fois couverte par un ticket que j'ai vérifié et entièrement traitée, donc je ne modifie pas `remarque.md`.
+- BUG-147 et BUG-357 (consommables) corrigent l'auto-création du stock et le CUMP ; ils **ne couvrent pas** la ligne « Intrants — Stocks Consommables … la direction doit avoir une vue globale » : ligne laissée à `[]`, à toi de dire (A) si cette vue globale existe déjà côté frontend.
+- Les lignes de trésorerie encore à `[]` (« Versement » visible de la direction ; options de clôture déplacées vers « Clôture Journalière ») ne sont pas faites.
+- Lignes 452 et 454 (commissions par boulangerie, carte et cotisation) : à B, comme tu l'as indiqué.
+Si un autre ticket que j'ai vérifié te semble couvrir l'une de ces lignes, cite la ligne et le ticket ; je ne marque que ce qui est implémenté ET vérifié.
+
+**Statut :** INFO
