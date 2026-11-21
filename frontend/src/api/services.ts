@@ -373,6 +373,51 @@ export interface ProductionClosureSummary extends ProductionReconciliation {
   anomaly: boolean;
 }
 
+// BUG-327 : « liste du jour » des clients servis — GET /api/production/daily-closure/clients/
+export type DailyClosureSaleType =
+  | 'REGULIER' | 'SOLDE' | 'CASH' | 'EPARGNE' | 'REMBOURSEMENT' | 'REGULARISATION' | 'MOUVEMENT_INTERNE';
+
+export interface DailyClosureClientRow {
+  /** null = vente sans client enregistré (« Client de passage »). */
+  client: string | null;
+  client_code: string;
+  client_name: string;
+  tours: number;
+  order_value: string;
+  paid: string;
+  commission: string;
+  bp_before: string | null;
+  bp_current: string | null;
+  sale_types: DailyClosureSaleType[];
+}
+
+export interface DailyClosureNonServiRow {
+  client: string | null;
+  client_code: string;
+  client_name: string;
+  count: number;
+}
+
+export interface DailyClosureClientsReport {
+  node: string;
+  date: string;
+  team: string | null;
+  count: number;
+  page: number;
+  page_size: number;
+  results: DailyClosureClientRow[];
+  non_servis: { count: number; results: DailyClosureNonServiRow[] };
+  totals: { clients: number; tours: number; order_value: string; paid: string; commission: string };
+}
+
+export interface DailyClosureClientsParams {
+  node: string;
+  date: string;
+  team?: 'A' | 'B';
+  page?: number;
+  page_size?: number;
+}
+
 // BUG-120 : rapport de clôture journalier consolidé, par catégorie de pain
 // (CLAUDE.md §5.4) — GET /api/production/daily-closure/?node=<code>&date=<AAAA-MM-JJ>.
 // Contrat exact : docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md
@@ -1527,6 +1572,9 @@ export const productionApi = {
       apiClient.get<DailyClosureReport>('/api/production/daily-closure/', { params: { node, date } })
         .then(res => feedWorkDate(res, d => ({ workDate: d.work_date }))),
   },
+  // BUG-327 : liste du jour des clients (gérant et supérieurs ; node ignoré pour un gérant).
+  dailyClosureClients: (params: DailyClosureClientsParams) =>
+    apiClient.get<DailyClosureClientsReport>('/api/production/daily-closure/clients/', { params }),
   // BUG-133/134 : boîte modale « stock de départ » — pas de paramètre `node`
   // pour un GERANT non-HQ (le backend le force à son nœud, jamais forgeable).
   openingConfirmation: {

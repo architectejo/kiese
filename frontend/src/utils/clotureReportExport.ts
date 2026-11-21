@@ -7,6 +7,7 @@
 // déjà calculées par le backend (DailyClosureReport) pour l'export et l'impression.
 import * as XLSX from 'xlsx';
 import type {
+  DailyClosureClientsReport,
   DailyClosureReport,
   DailyClosureRepartitionRow,
 } from '@/api/services';
@@ -254,6 +255,115 @@ export function printClotureReport(
       <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); };</script>
     </body></html>`;
 
+  const w = window.open('', '_blank', 'width=1100,height=800');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
+// --- BUG-327 : liste du jour des clients servis (export Excel / impression) -------
+
+export const SALE_TYPE_LABELS: Record<string, string> = {
+  REGULIER: 'Régulier',
+  SOLDE: 'Solde',
+  CASH: 'Cash',
+  EPARGNE: 'Épargne',
+  REMBOURSEMENT: 'Remboursement',
+  REGULARISATION: 'Régularisation',
+  MOUVEMENT_INTERNE: 'Mouvement interne',
+};
+
+const saleTypesLabel = (types: string[]): string =>
+  types.map(t => SALE_TYPE_LABELS[t] ?? t).join(', ');
+
+const escapeHtml = (v: string): string =>
+  v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Feuille 1 : clients du jour ; feuille 2 : « Non servis ». Nombres natifs, formatés en FC. */
+export function exportClientsListToExcel(
+  data: DailyClosureClientsReport,
+  nodeLabel: string,
+  teamLabel: string,
+) {
+  const label = dateLabel(data.date);
+  const header = ['Code', 'Client', 'Tours', 'Valeur commandée (FC)', 'Versé (FC)', 'Commission (FC)', 'BP avant (FC)', 'BP actuel (FC)', 'Types de vente'];
+  const rows: (string | number | null)[][] = [
+    [`Liste du jour — ${nodeLabel} — ${label} — ${teamLabel}`],
+    [],
+    header,
+    ...data.results.map(r => [
+      r.client_code, r.client_name, r.tours, toNum(r.order_value), toNum(r.paid), toNum(r.commission),
+      toNum(r.bp_before), toNum(r.bp_current), saleTypesLabel(r.sale_types),
+    ]),
+    ['', 'TOTAUX', data.totals.tours, toNum(data.totals.order_value), toNum(data.totals.paid), toNum(data.totals.commission), null, null, `${data.totals.clients} client(s)`],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 10 }, { wch: 28 }, { wch: 8 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 30 }];
+  for (let r = 3; r <= rows.length; r++) {
+    [3, 4, 5, 6, 7].forEach(c => setFmt(ws, `${XLSX.utils.encode_col(c)}${r + 1}`, FC_FMT));
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Clients du jour');
+
+  const nsRows: (string | number)[][] = [
+    [`Non servis — ${nodeLabel} — ${label}`],
+    [],
+    ['Code', 'Client', 'Nombre de non servis'],
+    ...data.non_servis.results.map(r => [r.client_code, r.client_name, r.count]),
+    ['', 'TOTAL', data.non_servis.count],
+  ];
+  const wsNs = XLSX.utils.aoa_to_sheet(nsRows);
+  wsNs['!cols'] = [{ wch: 10 }, { wch: 28 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsNs, 'Non servis');
+
+  XLSX.writeFile(wb, `liste-du-jour-${data.node || 'NA'}-${data.date}.xlsx`);
+}
+
+export function printClientsList(
+  data: DailyClosureClientsReport,
+  nodeLabel: string,
+  teamLabel: string,
+) {
+  const label = dateLabel(data.date);
+  const body = data.results.map(r => `
+    <tr>
+      <td>${escapeHtml(r.client_code)} ${escapeHtml(r.client_name)}</td>
+      <td class="n">${r.tours}</td>
+      <td class="n">${formatFC(r.order_value)}</td>
+      <td class="n">${formatFC(r.paid)}</td>
+      <td class="n">${formatFC(r.commission)}</td>
+      <td class="n">${formatFC(r.bp_before)}</td>
+      <td class="n">${formatFC(r.bp_current)}</td>
+      <td>${escapeHtml(saleTypesLabel(r.sale_types))}</td>
+    </tr>`).join('');
+  const ns = data.non_servis.results.map(r =>
+    `<tr><td>${escapeHtml(r.client_code)} ${escapeHtml(r.client_name)}</td><td class="n">${r.count}</td></tr>`).join('');
+  const html = `
+    <html><head><title>Liste du jour — ${escapeHtml(nodeLabel)} — ${label}</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
+      h1 { font-size: 18px; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 2px; }
+      h2 { font-size: 14px; margin: 18px 0 6px; }
+      p.meta { font-size: 12px; color: #444; margin: 2px 0 10px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      th, td { border: 1px solid #999; padding: 4px 6px; }
+      th { background: #eee; }
+      td.n { text-align: right; white-space: nowrap; }
+      tfoot td { font-weight: 700; background: #f3f4f6; }
+      tr { page-break-inside: avoid; }
+      @media print { @page { size: landscape; margin: 10mm; } }
+    </style></head>
+    <body>
+      <h1>LISTE DU JOUR — ETS. KIESE</h1>
+      <p class="meta">Boulangerie : ${escapeHtml(nodeLabel)} — Date : ${label} — ${escapeHtml(teamLabel)}</p>
+      <table>
+        <thead><tr><th>Client</th><th>Tours</th><th>Valeur commandée</th><th>Versé</th><th>Commission</th><th>BP avant</th><th>BP actuel</th><th>Types de vente</th></tr></thead>
+        <tbody>${body || '<tr><td colspan="8" style="text-align:center">Aucun client servi.</td></tr>'}</tbody>
+        <tfoot><tr><td>Totaux (${data.totals.clients} client(s))</td><td class="n">${data.totals.tours}</td><td class="n">${formatFC(data.totals.order_value)}</td><td class="n">${formatFC(data.totals.paid)}</td><td class="n">${formatFC(data.totals.commission)}</td><td></td><td></td><td></td></tr></tfoot>
+      </table>
+      <h2>Non servis (${data.non_servis.count})</h2>
+      <table><thead><tr><th>Client</th><th>Nombre</th></tr></thead>
+        <tbody>${ns || '<tr><td colspan="2" style="text-align:center">Aucun non servi.</td></tr>'}</tbody></table>
+      <script>window.onload = () => { window.print(); window.onafterprint = () => window.close(); };</script>
+    </body></html>`;
   const w = window.open('', '_blank', 'width=1100,height=800');
   if (w) { w.document.write(html); w.document.close(); }
 }

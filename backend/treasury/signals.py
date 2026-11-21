@@ -56,6 +56,12 @@ def block_delivery_on_already_reported_vacation(sender, instance, **kwargs):
         # treasury.services.regenerate_facturier_reports).
         return
 
+    if getattr(instance, 'special_code', '') == 'RG':
+        # BUG-179 : une régularisation (RG) est ignorée par le Rapport
+        # Facturier (BUG-178) : aucune donnée figée à protéger, rien à
+        # régénérer. Le verrou BUG-036 ne s'applique donc pas.
+        return
+
     if instance.pk:
         try:
             previous_status = sender.objects.only('status').get(pk=instance.pk).status

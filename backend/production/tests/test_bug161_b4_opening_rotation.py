@@ -260,10 +260,19 @@ class ChainingTests(_Base):
             self.assertEqual(self._proposed(self.api.get(OPENING)), 12)
 
     def test_without_rotation_proposed_is_current_stock(self):
+        # Sans instantané de clôture : stock courant.
+        BreadStock.objects.create(node=self.node, bread_price=self.bp, qty_adjusted=12)
+        with _now(12, 0):
+            self.assertEqual(self._proposed(self.api.get(OPENING)), 12)
+
+    def test_without_rotation_proposed_is_last_declared_remaining(self):
+        # BUG-325 (remplace l'ancien attendu « stock courant » = 12 : depuis
+        # BUG-319 BreadStock n'est plus crédité du produit) : le dernier reste
+        # déclaré (7) prime hors rotation comme en rotation.
         BreadStock.objects.create(node=self.node, bread_price=self.bp, qty_adjusted=12)
         self._snapshot(PREV, 'A', 7)
         with _now(12, 0):
-            self.assertEqual(self._proposed(self.api.get(OPENING)), 12)
+            self.assertEqual(self._proposed(self.api.get(OPENING)), 7)
 
     def test_report_reste_du_hier_chained_on_designated_team_only(self):
         self._rotation()

@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FiRefreshCw, FiAlertTriangle, FiCalendar, FiDownload, FiPrinter } from 'react-icons/fi';
+import { FiRefreshCw, FiAlertTriangle, FiCalendar, FiDownload, FiPrinter, FiUsers } from 'react-icons/fi';
 import { coreApi, productionApi, BakeryNode, DailyClosureReport } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
+import { ClotureClientsModal } from '@/components/production/ClotureClientsModal';
 import { isProduitEnAttente, PRODUIT_EN_ATTENTE_HELP } from '@/utils/clotureProduit';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
 
@@ -53,6 +54,9 @@ export const ClotureJournaliere: React.FC = () => {
   // BUG-128 : calendrier dans une boîte modale (remarque.md l.394) à la place du
   // sélecteur natif du navigateur, pour revoir les résultats des jours passés.
   const [calendarOpen, setCalendarOpen] = useState(false);
+  // BUG-327 : boîte « liste du jour » des clients servis.
+  const [clientsOpen, setClientsOpen] = useState(false);
+  const canSeeClientsList = !!user && ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'].includes(user.role);
 
   const myNodeCode = nodes.find(n => n.id === user?.node)?.code || '';
   const effectiveNodeCode = user?.can_access_all_nodes ? selectedNodeCode : myNodeCode;
@@ -162,6 +166,18 @@ export const ClotureJournaliere: React.FC = () => {
               <FiRefreshCw style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               <span>Actualiser</span>
             </button>
+            {canSeeClientsList && (
+              <button
+                onClick={() => setClientsOpen(true)}
+                disabled={!effectiveNodeCode}
+                title="Liste du jour : clients servis, tours, versé, commission, BP"
+                className="btn btn-secondary"
+                style={{ padding: '5px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '5px', height: '32px' }}
+              >
+                <FiUsers />
+                <span>Liste du jour (clients)</span>
+              </button>
+            )}
             <button
               onClick={handleExportExcel}
               disabled={!report}
@@ -364,6 +380,16 @@ export const ClotureJournaliere: React.FC = () => {
             </p>
           </div>
         </>
+      )}
+
+      {canSeeClientsList && (
+        <ClotureClientsModal
+          isOpen={clientsOpen}
+          onClose={() => setClientsOpen(false)}
+          nodeCode={effectiveNodeCode}
+          nodeLabel={nodeLabel}
+          date={date}
+        />
       )}
 
       <Modal

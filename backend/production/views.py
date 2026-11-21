@@ -841,9 +841,9 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
                         notes=serializer.validated_data.get('notes', ''),
                     )
                 except IntegrityError:
-                    raise ValidationError(
-                        f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
-                    )
+                    raise ValidationError({
+                        'detail': f"Une session existe déjà pour l'Équipe {team} le {date} à la boulangerie {node.code}."
+                    })
                 for line_data in lines_data:
                     qty = line_data.get('quantity', 0)
                     if qty > 0:
@@ -3319,13 +3319,12 @@ class DailyOpeningConfirmationView(APIView):
         if not rotation:
             # BUG-325 : depuis BUG-319, BreadStock n'est plus crédité du
             # « produit » ; hors rotation on reprend donc, comme en rotation,
-            # le dernier reste DÉCLARÉ à une clôture (jamais négatif, BUG-317).
+            # le dernier reste DÉCLARÉ à une clôture (jamais négatif, BUG-317 ; sans
+            # instantané le stock courant négatif est borné à 0 à la sortie, BUG-330).
             for bp in categories:
                 previous = DailyBreadStockSnapshot.last_snapshot_upto(node, bp, report_date)
                 if previous is not None:
                     proposed_by_bp[bp.id] = max(previous.qty_at_close, 0)
-                elif proposed_by_bp.get(bp.id, 0) < 0:
-                    proposed_by_bp[bp.id] = 0
         if rotation:
             # BUG-161 (B4) : chaînage inter-équipes — la quantité proposée est
             # le dernier reste déclaré à une clôture du nœud avant cette
@@ -3344,7 +3343,10 @@ class DailyOpeningConfirmationView(APIView):
                 'bread_price': bp.id,
                 'label': bp.label,
                 'unit_price': bp.unit_price,
-                'qty_proposed': proposed_by_bp.get(bp.id, 0),
+                # BUG-330 : jamais de proposition négative (règle BUG-317),
+                # y compris sans instantané avec un stock courant négatif.
+                # Le BreadStock réel n'est pas modifié.
+                'qty_proposed': max(proposed_by_bp.get(bp.id, 0), 0),
             }
             for bp in categories
         ]

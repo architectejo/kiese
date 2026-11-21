@@ -441,9 +441,9 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 [c] Au niveau "Production & Stocks" section "Stock Pains du Jour" chaque pains vendu par categorie, j'ajoute au fornée" on ne connais plus le stoque disponible, on compte que le pains vendu, qui vont s'ajouter aux pains produits à la cloture on va déclarer les restes du jour et on va ajouter au pains produits pour avoir le nombre total.
 
 
-[] Au niveau "Clôture Journalière" on doit voir un bouton qui ouvre une boite nodal avec la liste du jour, avec le detail comme nombre des tours(nombre des factures), montant total versé, commussion, BP Actuel etc...
+[c] Au niveau "Clôture Journalière" on doit voir un bouton qui ouvre une boite nodal avec la liste du jour, avec le detail comme nombre des tours(nombre des factures), montant total versé, commussion, BP Actuel etc...
 
-[] Au niveau de "Production & Stocks" section "Stock Pains du Jour - ...." enleve les pains disponible, affiche que les pains produit qui sont les pains comptabiliser lors de la facturaton ou vente, lors de la cloture, les pains déclarer restant vont completer le nombre total des pains produits par catégorie.
+[c] Au niveau de "Production & Stocks" section "Stock Pains du Jour - ...." enleve les pains disponible, affiche que les pains produit qui sont les pains comptabiliser lors de la facturaton ou vente, lors de la cloture, les pains déclarer restant vont completer le nombre total des pains produits par catégorie.
 
 [] Au niveau de "Production & Stocks" section "Fournée en cours" le champ "Augmenter les sacs (nouveau total)" doit incrémanter le nombre de sac de la valeur saisit dans ce champ, d'ou le champ doit s'appeler "Augmenter les sacs" et pas "(nouveau total)"
 

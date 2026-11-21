@@ -163,10 +163,15 @@ class Scenario1And2Cascade(Base):
 
 class Scenario3RgLockedAfterReport(Base):
     def test_rg_delivery_blocked_after_report_but_not_in_report(self):
+        # BUG-179 : comportement inversé volontairement (ticket) : la RG, ignorée
+        # du rapport, n'est plus bloquée par le verrou BUG-036 ; une vente
+        # normale, elle, l'est toujours.
         _mk(self.node, self.facA, self.cl, self.bread, 2, CASH, 'FULL')
         self.gen()
+        rg = _mk(self.node, self.facA, self.cl, self.bread, 4, CASH, '0', code='RG')
+        self.assertEqual(rg.status, Invoice.Status.DELIVERED)
         with self.assertRaises(ValidationError):
-            _mk(self.node, self.facA, self.cl, self.bread, 4, CASH, '0', code='RG')
+            _mk(self.node, self.facA, self.cl, self.bread, 1, CASH, 'FULL')
 
 
 class Scenario5StaleReport(Base):
@@ -243,7 +248,6 @@ class Scenario4Retroactive(TransactionTestCase):
 
 
 class Bug179RgLockedWithoutNeed(Base):
-    @unittest.expectedFailure
     def test_bug179_rg_delivery_should_not_be_blocked_by_reported_vacation(self):
         """BUG-179 : le rapport ignore les RG ; le verrou BUG-036 ne devrait
         pas bloquer leur livraison (rien à régénérer, aucune donnée figée)."""

@@ -408,7 +408,8 @@ def _push_invoice_line(node, record):
         # BUG-324 : un push rejoué/retardé ne doit jamais ramener la ligne
         # d'une facture terminale (NOT_SERVED/DELIVERED/CANCELLED) à une
         # quantité plus ancienne : sur statut terminal, la quantité servie ne
-        # peut que diminuer et le commandé initial n'est plus touché.
+        # peut que diminuer et le commandé initial, une fois renseigné, n'est
+        # plus touché.
         inv_status = Invoice.objects.filter(pk=existing_line.invoice_id).values_list(
             'status', flat=True).first()
         terminal = inv_status in ('NOT_SERVED', 'DELIVERED', 'CANCELLED')
@@ -424,8 +425,19 @@ def _push_invoice_line(node, record):
             current = getattr(existing_line, fname)
             if val == current:
                 continue
-            if terminal and (fname == 'ordered_quantity' or val > current):
-                continue
+            if terminal:
+                # Commandé initial : renseigné une seule fois (None -> valeur),
+                # jamais réécrit ; quantité servie : uniquement à la baisse.
+                if fname == 'ordered_quantity' and current is not None:
+                    continue
+                if fname == 'quantity' and val > current:
+                    # Quantité périmée (supérieure à la servie) = l'ancien
+                    # commandé : on la retient comme commandé initial si
+                    # celui-ci n'est pas encore renseigné.
+                    if existing_line.ordered_quantity is None:
+                        existing_line.ordered_quantity = val
+                        changed.append('ordered_quantity')
+                    continue
             setattr(existing_line, fname, val)
             changed.append(fname)
         if changed:

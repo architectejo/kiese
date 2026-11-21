@@ -125,12 +125,14 @@ class NegativeRemainingEndToEndTests(_Base):
         get = self.api.get(OPENING_URL, {'date': NEXT_DAY.isoformat()})
         self.assertEqual(get.status_code, 200)
         proposed = next(c for c in get.data['categories'] if c['bread_price'] == self.bp.pk)
-        self.assertEqual(proposed['qty_proposed'], -20)
+        # BUG-325 : la proposition reprend le dernier reste déclaré (borné à 0,
+        # BUG-317) et non plus le stock courant négatif (-20).
+        self.assertEqual(proposed['qty_proposed'], 0)
 
-        # BUG-317 : la valeur négative proposée n'est plus acceptée à la confirmation.
+        # BUG-317 : la valeur négative (-20) n'est pas acceptée à la confirmation.
         resp = self.api.post(OPENING_URL, {
             'team': 'B', 'date': NEXT_DAY.isoformat(),
-            'lines': [{'bread_price': self.bp.pk, 'qty': proposed['qty_proposed']}],
+            'lines': [{'bread_price': self.bp.pk, 'qty': -20}],
         }, format='json')
         self.assertEqual(resp.status_code, 400, resp.data)
         self.assertFalse(DailyOpeningConfirmationLine.objects.filter(bread_price=self.bp).exists())

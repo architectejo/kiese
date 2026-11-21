@@ -252,8 +252,10 @@ class GetProposedNegativeTests(_Base):
         resp = self.api.get(URL, {'date': DAY_S})
         self.assertEqual(resp.status_code, 200)
         row = next(c for c in resp.data['categories'] if c['bread_price'] == self.bp.pk)
-        # Constat : l'API GET renvoie encore -30 ; le frontend doit le ramener à 0 (volet e2e).
-        self.assertEqual(row['qty_proposed'], -30)
+        # BUG-330 : changement de spécification voulu (règle « plus de
+        # négatifs ») : l'API borne la proposition à 0 ; stock réel inchangé.
+        self.assertEqual(row['qty_proposed'], 0)
+        self.assertEqual(self.stock().qty_available, -30)
 
     def test_posting_proposed_negative_is_refused_then_zero_works(self):
         _adjust_bread_stock(self.node, self.bp, disposed=50)
