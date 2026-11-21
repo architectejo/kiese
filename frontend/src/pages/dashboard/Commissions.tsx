@@ -9,6 +9,7 @@ import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { localIsoDate } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
+import { ClientHistoryModal } from '@/components/clients/ClientHistoryModal';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
 
 const MONTHS_FR = [
@@ -28,6 +29,9 @@ export const Commissions: React.FC = () => {
   const [actionError, setActionError] = useState<string | null>(null);
   // BUG-270 : « Payer » et l'ajustement manuel réservés à ADMIN/DIRECTION (403 pour COMPTABLE).
   const canPay = user?.role === 'ADMIN' || user?.role === 'DIRECTION' || !!user?.is_superuser;
+  // BUG-400 : historique mensuel du client (réservé gérant et supérieurs ; 403 pour facturier/livreur).
+  const canSeeHistory = !!user && user.role !== 'FACTURIER' && user.role !== 'LIVREUR';
+  const [historyClient, setHistoryClient] = useState<{ id: string; name: string } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid'>('All');
   const [nodeFilter, setNodeFilter] = useState('');
@@ -104,7 +108,7 @@ export const Commissions: React.FC = () => {
     const matchesSearch = label.includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'All' || (statusFilter === 'Paid' ? c.is_paid : !c.is_paid);
     return matchesSearch && matchesStatus;
-  });
+  }).sort((a, b) => (a.client_display || a.client || '').localeCompare(b.client_display || b.client || '', 'fr', { sensitivity: 'base' }));
 
   const handleMarkPaid = async (id: string) => {
     if (payoutLoading) return;
@@ -443,7 +447,16 @@ export const Commissions: React.FC = () => {
                       onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}
                     >
                       <td style={{ padding: '8px 10px', fontWeight: 800 }}>
-                        {c.client_display || c.client}
+                        {canSeeHistory ? (
+                          <button
+                            type="button"
+                            title="Voir l'historique des achats et dépôts"
+                            onClick={e => { e.stopPropagation(); setHistoryClient({ id: c.client, name: c.client_display || c.client }); }}
+                            style={{ background: 'none', border: 0, padding: 0, font: 'inherit', fontWeight: 800, color: 'hsl(var(--accent-color))', cursor: 'pointer', textDecoration: 'underline', textAlign: 'left' }}
+                          >
+                            {c.client_display || c.client}
+                          </button>
+                        ) : (c.client_display || c.client)}
                         {hasManuel && <span title="Ajustement manuel" style={{ marginLeft: '4px', color: 'hsl(var(--color-warning))', fontSize: '0.6rem' }}>✎</span>}
                         {carriedDebtIn > 0 && (
                           <span
@@ -752,6 +765,8 @@ export const Commissions: React.FC = () => {
               </div>
             </form>
       </Modal>
+
+      <ClientHistoryModal clientId={historyClient?.id ?? null} clientName={historyClient?.name} onClose={() => setHistoryClient(null)} />
     </div>
   );
 };
