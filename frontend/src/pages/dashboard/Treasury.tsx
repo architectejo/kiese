@@ -279,13 +279,16 @@ export const Treasury: React.FC = () => {
     resetKey: `sav|${savingsMonth}|${savingsYear}|${nodeFilter}`,
   });
 
+  // BUG-175 : `reports` = rapports du JOUR uniquement (totaux, validation en masse, impression §5.1.1).
+  // Les rapports rétroactifs (`pastReports`) sont affichés à part, à leur propre date, et n'entrent
+  // jamais dans ces calculs. Ils ne sont gardés que pour la boulangerie consultée.
   const reports = useMemo(
-    // BUG-175 : un rapport rétroactif n'est gardé que pour la boulangerie consultée.
-    () => [
-      ...extraReports.filter(x => (!nodeFilter || x.node === nodeFilter) && !reportsQ.items.some(r => r.id === x.id)),
-      ...reportsQ.items,
-    ],
-    [extraReports, reportsQ.items, nodeFilter],
+    () => reportsQ.items.filter(r => r.date === today),
+    [reportsQ.items, today],
+  );
+  const pastReports = useMemo(
+    () => extraReports.filter(x => x.date !== today && (!nodeFilter || x.node === nodeFilter)),
+    [extraReports, today, nodeFilter],
   );
   const closures = closuresQ.items;
   const expenses = expensesQ.items;
@@ -631,6 +634,29 @@ export const Treasury: React.FC = () => {
     } finally {
       setGeneratingReport(false);
     }
+  };
+
+  // BUG-175 : validation / impression individuelles d'un rapport rétroactif (hors totaux du jour).
+  const handleValidatePastReport = async (id: string) => {
+    try {
+      await treasuryApi.reports.validate(id);
+      setExtraReports(prev => prev.map(r => (r.id === id ? { ...r, is_validated: true } : r)));
+    } catch (err: unknown) {
+      setGenerateError(getErrorDetail(err, 'Erreur lors de la validation.'));
+    }
+  };
+
+  const handlePrintPastReport = (r: FacturierReport) => {
+    const n = (v: string) => Math.round(parseFloat(v || '0')).toLocaleString('fr-FR');
+    const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">
+      <title>Rapport facturier ${r.date}</title>
+      <style>body{font-family:Arial,sans-serif;font-size:12px;margin:20px}td,th{border:1px solid #ddd;padding:4px 8px}table{border-collapse:collapse}</style></head><body>
+      <h1 style="font-size:14px">Rapport facturier — ${new Date(r.date).toLocaleDateString('fr-FR')} (date rétroactive)</h1>
+      <table><thead><tr><th>Boulangerie</th><th>Équipe</th><th>Cash</th><th>Crédit</th><th>Théorique</th><th>Statut</th></tr></thead>
+      <tbody><tr><td>${r.node_display || r.node_origin || '—'}</td><td>Éq. ${r.team}</td><td>${n(r.total_cash_sales)} FC</td><td>${n(r.total_credit_sales)} FC</td><td>${n(r.theoretical_cash)} FC</td><td>${r.is_validated ? 'Validé' : 'En attente'}</td></tr></tbody></table>
+      <script>window.onload=()=>{ window.print(); window.onafterprint=()=>window.close(); }</script></body></html>`;
+    const w = window.open('', '_blank', 'width=800,height=600');
+    if (w) { w.document.write(html); w.document.close(); }
   };
 
   const handleValidateReport = async (id: string) => {
@@ -1637,6 +1663,46 @@ export const Treasury: React.FC = () => {
                   )}
                   <td colSpan={2} />
                 </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+        {pastReports.length > 0 && (
+          <div style={{ marginTop: '12px', overflowX: 'auto' }}>
+            <div style={{ fontSize: '0.62rem', fontWeight: 800, textTransform: 'uppercase', color: 'hsl(var(--text-muted))', marginBottom: '4px' }}>
+              Rapports rétroactifs (hors totaux et validation du jour)
+            </div>
+            <table className="premium-table">
+              <thead>
+                <tr style={{ fontSize: '0.62rem', textTransform: 'uppercase' }}>
+                  <th>Date</th><th>Boulangerie</th><th style={{ textAlign: 'center' }}>Équipe</th>
+                  <th style={{ textAlign: 'right' }}>Cash FC</th><th style={{ textAlign: 'right' }}>Crédit FC</th>
+                  <th style={{ textAlign: 'right' }}>Théorique Caisse</th><th style={{ textAlign: 'center' }}>Statut</th>
+                  <th style={{ textAlign: 'center' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody style={{ fontSize: '0.72rem' }}>
+                {pastReports.map(r => (
+                  <tr key={r.id}>
+                    <td>{new Date(r.date).toLocaleDateString('fr-FR')}</td>
+                    <td style={{ fontWeight: 700 }}>{r.node_display || r.node}</td>
+                    <td style={{ textAlign: 'center' }}>Équipe {r.team}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(r.total_cash_sales)}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(r.total_credit_sales)}</td>
+                    <td style={{ textAlign: 'right' }}>{fmt(r.theoretical_cash)}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span className={`badge ${r.is_validated ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.52rem' }}>
+                        {r.is_validated ? 'VALIDÉ' : 'EN ATTENTE'}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      {!r.is_validated && (
+                        <button onClick={() => handleValidatePastReport(r.id)} className="btn btn-primary" style={{ padding: '2px 8px', fontSize: '0.62rem', marginRight: '4px' }}>Valider</button>
+                      )}
+                      <button onClick={() => handlePrintPastReport(r)} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>Imprimer</button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

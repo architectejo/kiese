@@ -99,5 +99,47 @@ Les 4 tickets que tu m'avais destinés sont corrigés (dev-backend) et **VÉRIFI
 2. `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py` : retirer l'`@expectedFailure` de `test_bug331_page_size_param_is_honored`, et adapter `Bug176Tests.test_expenses_identical_date_and_timestamp_pages_no_dup_no_gap` : son `_walk` utilise `page_size=2`, désormais honoré, donc il compte 30 pages au lieu de 3 (utiliser `page_size=25`). Ce n'est pas un défaut applicatif.
 
 Le registre : le numéro BUG-333 remplace l'ancien BUG-331 « pagination » en doublon.
+### #04 — 2026-11-21 — C → A, B — Arrivée du Dev C : ce qui a été fait à la place de A, plan à trois
+
+**Contexte** : un troisième développeur, **C** (branche `dev-c`, tickets `BUG-5NN` à partir de 500), a rejoint le projet. Pendant l'absence de A, C a repris le périmètre de A sur `dev-c`. Plan complet : [PLAN_TROIS_DEVELOPPEURS.md](PLAN_TROIS_DEVELOPPEURS.md). Décision : **`desktop/` est gelé** pour les trois, on ne travaille que sur backend et frontend.
+
+**Pour A, au retour** : `git fetch`, puis fusionner `origin/dev-c` dans `dev-a` (`dev-c` contient déjà `dev-b` et `dev-a` jusqu'à `ae8dbc6`). Ne pas reprendre un ticket marqué `CORRIGÉ` ou `VÉRIFIÉ` par le Dev C.
+
+**Fait par C dans les modules de A (commits sur `dev-c`)**
+
+| Ticket | Résultat | Testeur |
+|---|---|---|
+| BUG-402 | CUMP borné aux quantités positives (`ConsumableMovement.save()`) : **VÉRIFIÉ** | testeur-production (16 tests) |
+| BUG-199 | livre de caisse, chaîne de hash : **VÉRIFIÉ** | testeur-tresorerie (12 tests) |
+| BUG-177 | volet trésorerie (« Non servi ») : **VÉRIFIÉ** ; le volet Clôture Journalière / production reste à vérifier | testeur-tresorerie |
+| BUG-175, 164 | `Treasury.tsx` : rapports rétroactifs hors totaux du jour, tableau à part : **VÉRIFIÉ** (volet trésorerie de 164) | testeur-tresorerie |
+| BUG-173, 197 | **VÉRIFIÉ** ; BUG-076 volet ventes **VÉRIFIÉ** sur le code | testeur-ventes |
+| BUG-357 (ouvert par C) | CUMP déjà gonflés en base non recalculés : commande `recompute_cump` en cours | — |
+| BUG-147, 129 | en cours de traitement par C (dev-backend) | — |
+
+Le test `test_verif_bug143_testeur_production.py::…stale_unit_price…` est réécrit (sortie revalorisée, BUG-146). Suite `treasury`+`blockchain` : 282 OK ; suite `sales` : 384 OK. `backend/requirements.txt` : `Pillow>=10.4,<14.0` (pas de wheel Pillow 10 pour Python 3.14). Sous Python 3.14, **ne pas utiliser `manage.py test --parallel`** (plante à la sérialisation d'une exception).
+
+**À ne pas toucher pour l'instant, A** : `production/` (BUG-357, 147, 129 en cours chez C) ; un message de suite dira quand c'est libre. Libre tout de suite : dette frontend de `Sales.tsx` et `Treasury.tsx`, refonte finance (A6) si le client a répondu à Q-003.
+
+**Pour B** : le plan à trois te réoriente sur des corrections backend/frontend, le cloud, les e2e et la documentation (sans desktop) ; les vérifications passent à C. Détail : tableau B-1 à B-8 dans le plan. BUG-331, 332, 333, 401, 407 restent les tiens. Rien à décider de ta part sur `App.tsx` (réponse à #03 : A ne l'a pas modifié).
+
+**Statut :** OUVERT
+
+### #05 — 2026-11-21 — C → A — Re #04 : `production/` est libre, BUG-357/147/129 vérifiés, deux tickets pour toi (BUG-501, 502)
+
+**`production/` est libre : tu peux le toucher.** Le Dev C n'y travaille plus. Tout est poussé sur `origin/dev-c` (dernier commit de code : `f34abb3`, tests de vérification et registre dans le commit suivant). Fais `git fetch` puis fusionne `origin/dev-c` dans `dev-a` avant de commencer.
+
+**Vérifiés par `testeur-production` (testeur ≠ développeur), à ne pas refaire :**
+- **BUG-357** — commande `python manage.py recompute_cump` (`backend/production/management/commands/recompute_cump.py`) : simulation par défaut, `--apply`, `--node K1`. Elle rejoue les mouvements avec la formule de BUG-402 et revalorise aussi le `unit_price` des sorties déjà enregistrées. Elle n'a **pas** été lancée sur une base réelle : sauvegarde et lecture de la simulation avant tout `--apply`.
+- **BUG-147** — `production/views.py::_get_or_create_consumable_stock` : la ligne `ConsumableStock` manquante est créée à la volée (fournée et régularisation de farine du PATCH de session).
+- **BUG-129** — déjà corrigé par ton commit `7f1890d` ; vérifié côté backend et côté frontend (`BatchInProgressPanel.tsx` affiche `detail`).
+- Tests réalignés (`test_verif_bug143…::NoStockRowAtAllTests`, `test_consumables.py::OverconsumptionAlertTests`) : esprit préservé.
+
+**Deux tickets OUVERTS pour toi, trouvés pendant cette vérification** (numérotés 5NN car ouverts par le Dev C ; ils sont dans ton module et c'est à toi de les prendre) :
+- **BUG-501 [Majeur]** — `recompute_cump --apply` sur un stock dont le stock initial n'est pas tracé par des mouvements : exemple 10 @ 50 puis entrée de 5 @ 100, le CUMP sain 66,6667 est écrasé par 100,0000 et les sorties antérieures sont revalorisées à 0,00 (seul un avertissement s'affiche). Attendu : ne pas toucher ce stock, ou exiger `--force`. Tests `test_bug501_*` en `@expectedFailure`.
+- **BUG-502 [Majeur]** — 2e déclaration de fournée le même jour et la même équipe (cumul BUG-142) : `_record_consumable_exits` sort le total cumulé de sacs au lieu des seuls sacs ajoutés (2 + 2 déclarés, 6 sortis ; stock 10 → 4 au lieu de 6). Indépendant de BUG-147. Test `test_bug502_*` en `@expectedFailure`.
+Tests de vérification : `backend/production/tests/test_verif_bug357_147_c.py` (32 tests dont 3 `@expectedFailure` : retire la marque quand tu corriges). Le correcteur ne valide pas : fais vérifier par `testeur-production`.
+
+**Rappels** : `desktop/` gelé ; sous Python 3.14, pas de `manage.py test --parallel` ; `Bug255` (`core`) échoue selon `DJANGO_DEBUG` : c'est BUG-401, ticket de B. Toujours en attente du client : BUG-161/278 (rotation 24 h).
 
 **Statut :** OUVERT

@@ -134,6 +134,12 @@ class OverconsumptionAlertTests(TestCase):
         self.stock = ConsumableStock.objects.create(
             node=self.node, consumable_type='SALT', quantity=Decimal('100000.000')
         )
+        # BUG-147 : la ligne FLOUR est désormais auto-créée (à 0, donc négative
+        # après la sortie, avec notification BUG-143). Comme en conditions
+        # réelles, on la fournit approvisionnée pour isoler la surconsommation.
+        ConsumableStock.objects.create(
+            node=self.node, consumable_type='FLOUR', quantity=Decimal('1000.000')
+        )
         self.client_api = APIClient()
         self.client_api.force_authenticate(self.user)
 
