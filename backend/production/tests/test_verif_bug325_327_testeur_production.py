@@ -90,7 +90,7 @@ class Bug325Tests(TestCase):
     def test_sans_snapshot_sans_stock_zero(self):
         self.assertEqual(self.proposed(), 0)
 
-    def test_sans_snapshot_stock_courant_negatif_expose_tel_quel(self):
+    def test_sans_snapshot_stock_courant_negatif_borne_a_zero(self):
         # BUG-330 : changement de spécification voulu (règle « plus de
         # négatifs » BUG-317, remarque.md l.441) : proposition bornée à 0,
         # le stock réel reste inchangé.

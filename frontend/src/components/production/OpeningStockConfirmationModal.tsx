@@ -496,7 +496,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
                     step={1}
                     inputMode="numeric"
                     pattern="[0-9]*"
-                    className="input"
+                    className="form-input"
                     value={draft[category.bread_price] ?? ''}
                     onChange={e => handleQtyChange(category.bread_price, e.target.value)}
                     onKeyDown={e => { if (['-', '+', '.', ',', 'e', 'E'].includes(e.key)) e.preventDefault(); }}

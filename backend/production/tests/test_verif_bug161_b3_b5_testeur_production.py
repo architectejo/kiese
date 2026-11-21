@@ -205,7 +205,10 @@ class FullRotationDayTests(_Base):
             self.assertEqual(o.data['opening_team'], 'B')
             prop = self._proposed(o)
             self.assertEqual(prop[bp5.pk], 45)   # reste de A chaîné
-            self.assertEqual(prop[bp3.pk], -30)  # NÉGATIF conservé
+            # BUG-340 : changement de spécification voulu (remarque.md « plus de négatifs »,
+            # BUG-330) : la proposition de stock de départ est bornée à 0 ; l'instantané de
+            # clôture de A reste, lui, à -30 (assertion l.194) et le stock réel aussi.
+            self.assertEqual(prop[bp3.pk], 0)
             self.assertEqual(prop[bp2.pk], 0)    # catégorie absente
 
             # ---- (2) GARDE : confirmer/modifier J+1 ne touche pas J --------
@@ -267,7 +270,8 @@ class FullRotationDayTests(_Base):
             o = self.g.get(OPENING)
             prop = self._proposed(o)
             self.assertEqual(prop[bp5.pk], 30)
-            self.assertEqual(prop[bp3.pk], -30)
+            # BUG-340 / BUG-330 : proposition bornée à 0 (instantané B à -30 asserté plus haut).
+            self.assertEqual(prop[bp3.pk], 0)
             rep1 = self.g.get(CLOSURE, {'date': str(J1)})
             rep0 = self.g.get(CLOSURE, {'date': str(J)})
 

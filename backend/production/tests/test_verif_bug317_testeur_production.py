@@ -246,7 +246,7 @@ class MethodsRolesIsolationTests(_Base):
 
 
 class GetProposedNegativeTests(_Base):
-    def test_get_still_exposes_negative_qty_proposed(self):
+    def test_get_qty_proposed_borne_a_zero_stock_reel_negatif_inchange(self):
         # Stock physique négatif en base (ex. sorties > production).
         _adjust_bread_stock(self.node, self.bp, disposed=50)
         resp = self.api.get(URL, {'date': DAY_S})

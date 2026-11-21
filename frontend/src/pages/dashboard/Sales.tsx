@@ -824,6 +824,12 @@ export const Sales: React.FC = () => {
             onNotServed={reason => markNotServed(item, reason)}
           />
         )}
+        {/* BUG-335 : le detail serveur d'un 409 reste affiche tant qu'aucune autre action n'est lancee. */}
+        {!isPending && deliveryError && deliveryError.id === item._apiId && (
+          <div role="alert" style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--color-danger) / 0.4)', backgroundColor: 'hsl(var(--color-danger) / 0.08)', color: 'hsl(var(--color-danger))', fontSize: '0.7rem', fontWeight: 700 }}>
+            {deliveryError.message}
+          </div>
+        )}
         {isNotServed && (
           <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--text-secondary))', fontSize: '0.7rem', fontWeight: 700, flexWrap: 'wrap' }}>
             <FiCheckCircle />
@@ -850,7 +856,7 @@ export const Sales: React.FC = () => {
             </button>
           </div>
         )}
-        {!isPending && !isNonServi && (
+        {!isPending && !isNonServi && !isNotServed && (
           <div style={{ padding: '6px 12px', borderTop: '1px solid hsl(var(--border-color) / 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'hsl(var(--color-success))', fontSize: '0.7rem', fontWeight: 700 }}>
               <FiCheckCircle />
