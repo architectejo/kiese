@@ -269,7 +269,7 @@ export const App: React.FC = () => {
         <Route
           path="/admin/backups"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION'].includes(u.role)}>
               <Administration />
             </ProtectedRoute>
           }

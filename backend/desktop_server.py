@@ -25,10 +25,13 @@ import argparse
 import gzip
 import logging
 import logging.handlers
+import os
+import re
 import shutil
 import sqlite3
 import sys
 import time
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -87,10 +90,22 @@ def _checkpoint_wal(db_path: Path) -> None:
         pass
 
 
-def backup_database(db_path: Path, backups_dir: Path, logger: logging.Logger) -> Optional[Path]:
+def backup_database(
+    db_path: Path,
+    backups_dir: Path,
+    logger: logging.Logger,
+    label: str = '',
+    with_seconds: bool = False,
+) -> Optional[Path]:
     """Sauvegarde cohérente via l'API de sauvegarde SQLite (DESKTOP.md §8),
     compressée, utilisable même pendant que la base est en cours d'usage
     (appelée aussi depuis l'API d'administration avant restauration/clôture).
+
+    `sqlite3.Connection.backup()` lit la base ET son journal WAL : les
+    transactions validées mais non checkpointées sont incluses (BUG-403).
+    `label` s'insère dans le nom (`kiese-<label>-<horodatage>.sqlite3.gz`) ;
+    le préfixe `kiese-` est conservé pour rester dans la liste blanche de
+    restauration et dans la rotation sur 30 jours.
 
     Renvoie le chemin du fichier `.sqlite3.gz` créé (ou `None` s'il n'y
     avait rien à sauvegarder) — utilisé par `_apply_migrations` pour que
@@ -101,22 +116,150 @@ def backup_database(db_path: Path, backups_dir: Path, logger: logging.Logger) ->
         return None
     _checkpoint_wal(db_path)
     backups_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime('%Y%m%d-%H%M')
-    dest_plain = backups_dir / f'kiese-{stamp}.sqlite3'
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S' if with_seconds else '%Y%m%d-%H%M')
+    stem = f'kiese-{label}-{stamp}' if label else f'kiese-{stamp}'
+    dest_plain = backups_dir / f'{stem}.sqlite3.tmp'
+    dest_gz = backups_dir / f'{stem}.sqlite3.gz'
+    dest_gz_part = backups_dir / f'{stem}.sqlite3.gz.part'
     src = sqlite3.connect(str(db_path))
     dest = sqlite3.connect(str(dest_plain))
     try:
-        src.backup(dest)
+        try:
+            src.backup(dest)
+        finally:
+            src.close()
+            dest.close()
+        with open(dest_plain, 'rb') as f_in, gzip.open(dest_gz_part, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.replace(dest_gz_part, dest_gz)
     finally:
-        src.close()
-        dest.close()
-    dest_gz = backups_dir / f'kiese-{stamp}.sqlite3.gz'
-    with open(dest_plain, 'rb') as f_in, gzip.open(dest_gz, 'wb') as f_out:
-        shutil.copyfileobj(f_in, f_out)
-    dest_plain.unlink()
+        for leftover in (dest_plain, dest_gz_part):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
     logger.info('Sauvegarde créée : %s', dest_gz.name)
     _rotate_backups(backups_dir, logger)
     return dest_gz
+
+
+BACKUP_NAME_RE = re.compile(r'kiese-[A-Za-z0-9_.-]+\.sqlite3\.gz')  # utilisé avec fullmatch (BUG-409)
+
+
+class RestoreError(Exception):
+    """Erreur de restauration : le message est destiné à l'utilisateur (français)."""
+
+
+def validate_backup_file_name(file_name: str) -> str:
+    """Liste blanche `kiese-*.sqlite3.gz`, sans composant de chemin (BUG-404)."""
+    if (
+        not isinstance(file_name, str)
+        or not file_name
+        or '/' in file_name
+        or '\\' in file_name
+        or '..' in file_name
+        or not BACKUP_NAME_RE.fullmatch(file_name)
+    ):
+        raise RestoreError(f"Nom de sauvegarde invalide : « {file_name} ».")
+    return file_name
+
+
+def _integrity_ok(path: Path) -> bool:
+    try:
+        conn = sqlite3.connect(str(path))
+        try:
+            rows = conn.execute('PRAGMA integrity_check;').fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return len(rows) == 1 and rows[0][0] == 'ok'
+
+
+def _has_tables(path: Path) -> bool:
+    """Vrai si la base contient au moins une table (une base SQLite vide réussit
+    `integrity_check`) - BUG-408."""
+    try:
+        conn = sqlite3.connect(str(path))
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0] > 0)
+
+
+def restore_database(db_path: Path, backups_dir: Path, file_name: str, logger: logging.Logger) -> Path:
+    """Restaure `file_name` (dans `backups_dir`) sur `db_path`. Le backend doit
+    être arrêté. Ordre (BUG-404) : validation du nom, décompression vers un
+    fichier temporaire, `PRAGMA integrity_check`, copie de sécurité
+    `kiese-avant-restauration-*` de la base actuelle, puis seulement
+    remplacement atomique. En cas d'échec avant le remplacement, la base
+    courante n'est pas touchée. Renvoie la copie de sécurité (ou la base
+    restaurée si aucune base n'existait)."""
+    validate_backup_file_name(file_name)
+    src = backups_dir / file_name
+    if not src.is_file():
+        raise RestoreError(f'Sauvegarde introuvable : {file_name}.')
+
+    tmp = db_path.with_name(db_path.name + '.restore.tmp')
+    safety: Optional[Path] = None
+    try:
+        try:
+            with gzip.open(src, 'rb') as f_in, open(tmp, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        except (OSError, EOFError, zlib.error) as exc:
+            raise RestoreError(
+                f"La sauvegarde {file_name} est illisible ou corrompue ; la base actuelle n'a pas été modifiée."
+            ) from exc
+        if not _integrity_ok(tmp):
+            raise RestoreError(
+                f"La sauvegarde {file_name} ne contient pas une base valide ; la base actuelle n'a pas été modifiée."
+            )
+        if not tmp.exists() or tmp.stat().st_size == 0 or not _has_tables(tmp):
+            raise RestoreError(
+                f"La sauvegarde {file_name} est vide ; la base actuelle n'a pas été modifiée."
+            )
+
+        if db_path.exists():
+            try:
+                safety = backup_database(db_path, backups_dir, logger, label='avant-restauration', with_seconds=True)
+            except Exception as exc:  # noqa: BLE001
+                raise RestoreError(
+                    "Impossible de créer la copie de sécurité de la base actuelle ; restauration annulée, "
+                    "la base actuelle n'a pas été modifiée."
+                ) from exc
+            if safety is None or not safety.is_file() or safety.stat().st_size == 0:
+                raise RestoreError(
+                    "La copie de sécurité de la base actuelle n'est pas valide ; restauration annulée."
+                )
+
+        for suffix in ('-wal', '-shm'):
+            stale = Path(str(db_path) + suffix)
+            try:
+                stale.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise RestoreError(
+                    f'Impossible de remplacer la base (fichier {stale.name} verrouillé) ; fermez KIESE puis réessayez.'
+                ) from exc
+        try:
+            os.replace(tmp, db_path)
+        except OSError as exc:
+            raise RestoreError(
+                "Impossible de remplacer la base actuelle ; une copie de sécurité est disponible dans le dossier backups."
+            ) from exc
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    logger.info('Base restaurée depuis %s (copie de sécurité : %s).', file_name, safety.name if safety else 'aucune')
+    return safety if safety else db_path
 
 
 def _rotate_backups(backups_dir: Path, logger: logging.Logger, keep_days: int = 30) -> None:
@@ -267,10 +410,46 @@ def _run_single_management_command(argv) -> None:
     logger.info('Commande de gestion ponctuelle terminée avec succès.')
 
 
+def _run_backup_or_restore(mode: str, argv) -> int:
+    """Modes ponctuels `backup` / `restore` (BUG-403/404), sans Django ni
+    secrets : `kiese-server.exe backup --data-dir D` ou
+    `kiese-server.exe restore --data-dir D --file kiese-XXXX.sqlite3.gz`.
+    Écrit une ligne JSON sur stdout (`{"ok": true, ...}`) ; code 0 si OK."""
+    import json
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data-dir', required=True)
+    parser.add_argument('--file')
+    ns = parser.parse_args(argv)
+    data_dir = Path(ns.data_dir)
+    ensure_data_dirs(data_dir)
+    logger = configure_logging(data_dir)
+    db_path = data_dir / 'kiese.sqlite3'
+    backups_dir = data_dir / 'backups'
+    try:
+        if mode == 'backup':
+            dest = backup_database(db_path, backups_dir, logger, label='manuelle', with_seconds=True)
+            if dest is None:
+                raise RestoreError('Aucune base de données à sauvegarder.')
+            result = {'ok': True, 'path': str(dest)}
+        else:
+            safety = restore_database(db_path, backups_dir, ns.file or '', logger)
+            result = {'ok': True, 'safetyCopy': safety.name}
+    except RestoreError as exc:
+        result = {'ok': False, 'error': str(exc)}
+    except Exception:  # noqa: BLE001
+        logger.exception('Échec du mode %s.', mode)
+        result = {'ok': False, 'error': 'Erreur inattendue (voir logs\\backend.log).'}
+    print(json.dumps(result, ensure_ascii=True), flush=True)
+    return 0 if result['ok'] else 1
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == 'manage':
         _run_single_management_command(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] in ('backup', 'restore'):
+        sys.exit(_run_backup_or_restore(sys.argv[1], sys.argv[2:]))
 
     args = parse_args()
     data_dir = Path(args.data_dir)

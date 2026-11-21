@@ -1,33 +1,22 @@
 /**
- * Sauvegardes et restauration depuis l'interface (DESKTOP.md §8). La
- * création proprement dite réutilise la même logique que
- * `backend/desktop_server.py::backup_database` (sauvegarde cohérente via
- * l'API SQLite), déclenchée ici en demandant au backend de l'exécuter
- * (plutôt que de dupliquer la logique SQLite côté Node) via une commande
- * `manage.py` lancée ponctuellement avec le même exécutable PyInstaller.
+ * Sauvegardes et restauration depuis l'interface (DESKTOP.md §8).
  *
- * Note de conception : exécuter `kiese-server.exe backup` suppose que le
- * point d'entrée du binaire accepte un sous-mode `backup`/`restore` en plus
- * du mode serveur. Ce point est volontairement laissé en commentaire
- * `TODO` ci-dessous plutôt que résolu silencieusement : il touche le
- * contrat d'interface de `backend/desktop_server.py` et doit être confirmé
- * avant la V1 (voir rapport `packaging-desktop`, section « Points
- * ouverts »). En l'état, ce module implémente directement les opérations
- * fichier (copie/compression/restauration), qui ne nécessitent pas
- * Python — seule la cohérence "pendant une écriture concurrente" profite
- * de l'API de sauvegarde SQLite, qui reste utilisée côté backend pour la
- * sauvegarde automatique (au démarrage, avant migration) ; la sauvegarde
- * "à la demande" depuis l'interface attend ici que le backend soit arrêté
- * (voir `restoreBackup`) pour éviter toute lecture incohérente du fichier
- * `.sqlite3` par un outil qui ne passerait pas par l'API sqlite3 backup().
+ * BUG-403/404 : aucune opération fichier sur la base n'est faite côté Node.
+ * Sauvegarde et restauration sont déléguées au binaire backend
+ * (`kiese-server.exe backup|restore`, voir `backend/desktop_server.py`) :
+ * sauvegarde via `sqlite3.backup()` (journal WAL inclus), restauration avec
+ * décompression temporaire, `PRAGMA integrity_check` et copie de sécurité
+ * `kiese-avant-restauration-*` AVANT tout remplacement. Ces modes n'ont pas
+ * besoin de secret ni de Django.
  */
 import { ipcMain } from 'electron';
+import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as zlib from 'zlib';
 import log from './logger';
-import { getBackupsDir, getDbPath } from './paths';
+import { getBackendExecutablePath, getBackupsDir, getDataDir } from './paths';
 import { BackendHandle } from './backend';
+import { isValidBackupName, parseBackendResult, BackendModeResult } from './backupNames';
 
 export function registerBackupHandlers(getBackendHandle: () => BackendHandle | null, restartBackend: () => Promise<void>): void {
   ipcMain.handle('kiese:backup:list', async () => {
@@ -35,7 +24,7 @@ export function registerBackupHandlers(getBackendHandle: () => BackendHandle | n
     if (!fs.existsSync(dir)) return [];
     return fs
       .readdirSync(dir)
-      .filter((f) => f.endsWith('.sqlite3.gz'))
+      .filter((f) => isValidBackupName(f))
       .map((name) => {
         const stat = fs.statSync(path.join(dir, name));
         return { name, sizeBytes: stat.size, createdAt: stat.mtime.toISOString() };
@@ -53,7 +42,7 @@ export function registerBackupHandlers(getBackendHandle: () => BackendHandle | n
     }
   });
 
-  ipcMain.handle('kiese:backup:restore', async (_event, fileName: string) => {
+  ipcMain.handle('kiese:backup:restore', async (_event, fileName: unknown) => {
     try {
       await restoreBackup(fileName, getBackendHandle, restartBackend);
       return { ok: true };
@@ -64,47 +53,56 @@ export function registerBackupHandlers(getBackendHandle: () => BackendHandle | n
   });
 }
 
+/** Lance `kiese-server <mode> --data-dir ...` et renvoie le résultat JSON. */
+function runBackendMode(mode: 'backup' | 'restore', extraArgs: string[]): Promise<BackendModeResult> {
+  return new Promise((resolve, reject) => {
+    const args = [mode, '--data-dir', getDataDir(), ...extraArgs];
+    execFile(
+      getBackendExecutablePath(),
+      args,
+      { windowsHide: true, timeout: 10 * 60 * 1000, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        const parsed = parseBackendResult(String(stdout ?? ''));
+        if (parsed) {
+          resolve(parsed);
+          return;
+        }
+        reject(
+          new Error(
+            err
+              ? `Le module de sauvegarde n'a pas répondu (${err.message}).`
+              : 'Réponse illisible du module de sauvegarde.'
+          )
+        );
+      }
+    );
+  });
+}
+
 /**
- * Copie simple compressée du fichier courant. Suffisante pour une
- * sauvegarde déclenchée manuellement pendant une période d'inactivité
- * (bouton « Sauvegarder maintenant » de l'écran Administration) : la
- * cohérence sous charge réelle (backend actif, écritures concurrentes) est
- * assurée par la sauvegarde automatique interne au backend
- * (`sqlite3.Connection.backup()`, `backend/desktop_server.py`), qui reste
- * la voie utilisée avant chaque migration/mise à jour.
+ * Sauvegarde à chaud : `sqlite3.backup()` côté backend (WAL inclus), sûre
+ * même pendant que Waitress écrit (BUG-403).
  */
 async function createBackupFile(): Promise<string> {
-  const dbPath = getDbPath();
-  if (!fs.existsSync(dbPath)) {
-    throw new Error('Aucune base de données à sauvegarder.');
+  const res = await runBackendMode('backup', []);
+  if (!res.ok || !res.path) {
+    throw new Error(res.error ?? 'La sauvegarde a échoué.');
   }
-  const backupsDir = getBackupsDir();
-  fs.mkdirSync(backupsDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = path.join(backupsDir, `kiese-manuelle-${stamp}.sqlite3.gz`);
-
-  await new Promise<void>((resolve, reject) => {
-    const src = fs.createReadStream(dbPath);
-    const gzip = zlib.createGzip();
-    const out = fs.createWriteStream(dest);
-    src.pipe(gzip).pipe(out);
-    out.on('finish', () => resolve());
-    out.on('error', reject);
-    src.on('error', reject);
-  });
-
-  return dest;
+  return res.path;
 }
 
 async function restoreBackup(
-  fileName: string,
+  fileName: unknown,
   getBackendHandle: () => BackendHandle | null,
   restartBackend: () => Promise<void>
 ): Promise<void> {
-  const backupsDir = getBackupsDir();
-  const src = path.join(backupsDir, fileName);
-  if (!fs.existsSync(src)) {
-    throw new Error(`Sauvegarde introuvable : ${fileName}`);
+  // Refus d'un nom hors liste blanche / hors dossier backups (BUG-404).
+  if (!isValidBackupName(fileName)) {
+    throw new Error('Nom de sauvegarde invalide.');
+  }
+  const safeName = path.basename(fileName);
+  if (!fs.existsSync(path.join(getBackupsDir(), safeName))) {
+    throw new Error(`Sauvegarde introuvable : ${safeName}`);
   }
 
   const handle = getBackendHandle();
@@ -113,24 +111,24 @@ async function restoreBackup(
     await handle.stop();
   }
 
-  const dbPath = getDbPath();
-  // Supprime les fichiers WAL/SHM associés : une restauration ne doit
-  // jamais rejouer un journal WAL appartenant à l'ancienne base.
-  for (const suffix of ['', '-wal', '-shm']) {
-    const p = dbPath + suffix;
-    if (fs.existsSync(p)) fs.unlinkSync(p);
+  let failure: Error | null = null;
+  try {
+    // Validation, copie de sécurité puis remplacement : tout est fait par le
+    // backend ; en cas d'échec la base courante est intacte.
+    const res = await runBackendMode('restore', ['--file', safeName]);
+    if (!res.ok) {
+      failure = new Error(res.error ?? 'La restauration a échoué.');
+    } else {
+      log.info(
+        `Restauration terminée (copie de sécurité : ${res.safetyCopy ?? 'aucune'}), ` +
+          'redémarrage du backend (une synchronisation suivra, SYNC.md §9).'
+      );
+    }
+  } catch (err) {
+    failure = err as Error;
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const inp = fs.createReadStream(src);
-    const gunzip = zlib.createGunzip();
-    const out = fs.createWriteStream(dbPath);
-    inp.pipe(gunzip).pipe(out);
-    out.on('finish', () => resolve());
-    out.on('error', reject);
-    inp.on('error', reject);
-  });
-
-  log.info('Restauration terminée, redémarrage du backend (une synchronisation suivra, SYNC.md §9).');
+  // Le backend est toujours relancé (même après un échec : base inchangée).
   await restartBackend();
+  if (failure) throw failure;
 }

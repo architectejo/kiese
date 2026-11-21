@@ -75,17 +75,13 @@ export const ThermalReceipt: React.FC<{
   onClose: () => void;
   printId?: string;
   /**
-   * Largeur du rouleau thermique réellement configurée sur le poste
-   * (58 ou 80 mm). BUG-076 : à ce jour, `window.kiese` (desktop/src/preload.ts)
-   * n'expose PAS la valeur choisie à l'installation (`DesktopConfig.printerWidthMm`,
-   * voir desktop/src/config.ts) — aucun endpoint IPC ne la lit. Tant que ce
-   * n'est pas ajouté côté `desktop/` (ticket à ouvrir pour packaging-desktop),
-   * ce composant ne peut pas la détecter lui-même : la valeur par défaut
-   * (80 mm, identique au défaut de `firstRun.ts`) est utilisée si l'appelant
-   * ne la précise pas explicitement.
+   * Largeur du rouleau thermique (58 ou 80 mm). BUG-406 : si la prop est absente,
+   * la valeur configurée à l'installation (`window.kiese?.printerWidthMm`) est
+   * lue ici, puis 80 mm par défaut. Une prop explicite reste prioritaire.
    */
   printerWidthMm?: 58 | 80;
-}> = ({ receipt, onClose, printId = 'receipt', printerWidthMm = 80 }) => {
+}> = ({ receipt, onClose, printId = 'receipt', printerWidthMm: printerWidthProp }) => {
+  const printerWidthMm: 58 | 80 = printerWidthProp ?? window.kiese?.printerWidthMm ?? 80;
   // BUG-099 : priorité à la date réelle de la transaction transmise par l'appelant
   // (`transactionDate`, issue de `inv.delivered_at`/`inv.invoice_date`) ; repli sur
   // l'horloge courante uniquement si elle est absente ou invalide (ex. ancien
