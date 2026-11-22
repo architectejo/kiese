@@ -211,6 +211,38 @@ class NodeViewSet(viewsets.ModelViewSet):
             qs = qs.exclude(code='SIEGE')
         return qs
 
+    # BUG-414 : User.node est en SET_NULL ; supprimer une boulangerie laissait
+    # des comptes actifs sans boulangerie (qui, depuis BUG-506, ne voient plus
+    # rien). On refuse tant que des comptes ACTIFS y sont rattachés. Les comptes
+    # désactivés ne bloquent pas (ils ne peuvent pas se connecter). Les autres
+    # relations (clients, factures, stocks, clôtures...) sont en PROTECT :
+    # ProtectedError est traduit en 400, comme pour BreadPrice.
+    def destroy(self, request, *args, **kwargs):
+        node = self.get_object()
+        active_users = User.objects.filter(node=node, is_active=True).count()
+        if active_users:
+            return Response(
+                {'detail': (
+                    f"Impossible de supprimer la boulangerie « {node.name} » : "
+                    f"{active_users} compte(s) utilisateur actif(s) y sont encore rattachés. "
+                    "Réaffectez-les à une autre boulangerie ou désactivez-les d'abord."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        label = f"{node.code} — {node.name}"
+        try:
+            response = super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {'detail': (
+                    f"Impossible de supprimer la boulangerie « {node.name} » : elle est déjà utilisée "
+                    "(clients, factures, stocks, clôtures...). Conservez-la pour garder l'historique."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        log_activity(request.user, 'DELETE', f"Suppression de la boulangerie {label}")
+        return response
+
 
 # ─── Users ───────────────────────────────────────────────────────────
 

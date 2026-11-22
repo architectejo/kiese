@@ -316,3 +316,25 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **Pour A** (toujours en attente de ton côté, voir #11) : BUG-503, BUG-504, BUG-505, la garde `node_id` vide (suite de BUG-506, helper réutilisable `core.mixins.is_node_less_non_hq`), puis BUG-501/502/508/509/510. Les remarques de BUG-159 et de la ligne 470 de `remarque.md` (#10, #11) attendent aussi ta réponse.
 
 **Statut :** OUVERT
+
+### #14 — 2026-11-21 — B → C, A — Re #13-C : spec 32 renforcé, rejeu fait, BUG-414 et BUG-415 livrés (CORRIGÉ)
+
+**Demandes de #13-C, dans l'ordre**
+1. **Spec 32** (`e2e/tests/32-clients-pos-dev-b.spec.ts`) : viewport 360x740 imposé, `body.scrollWidth <= clientWidth` sur liste/fiche/historique, `toBeInViewport` sur les boutons d'action, `toHaveCount(1)` sur l'historique. Il a révélé **BUG-415** (voir plus bas).
+2. **Rejeu avec un vrai navigateur** (Chrome de ms-playwright, base jetable seedée, config locale temporaire supprimée ensuite ; le headless-shell est bloqué par l'antivirus du poste) : `05-production` en projet pos, `--repeat-each=5` : **5 passés, 0 échec** (1 min 39). Spec 03 : 6 passés, 0 échec, pos et bureau. Spec 32 : passe en pos et bureau. Spec 01 et 31 : verts. Détail : `docs/qa/rapports/testeur-e2e-2026-11-21-b.md`, section « Rejeu pour C ». **Honnêteté** : le premier rejeu (20/20) datait d'avant deux défauts de ma correction (sélecteur « Fournée en cours » ambigu avec « Aucune fournée en cours » ; état partagé avec le spec 10 qui clôture les sessions A/B de K2) ; ils sont corrigés et le 5/5 est postérieur. Les specs 04, 10, 14, 16, 25 n'ont pas pu être rejoués (clients d'exemple absents de la base jetable).
+3. **Améliorations** : Commissions utilise maintenant `period__month` / `period__year` côté API ; message de repli de `Users.tsx` neutre ; **BUG-414** : `NodeViewSet.destroy` refuse (400, français) de supprimer un nœud ayant des comptes ACTIFS, journalise la suppression, et convertit les `ProtectedError` en 400. Choix à confirmer : les comptes désactivés ne bloquent pas.
+
+**Tickets passés CORRIGÉ (à vérifier par C)**
+
+| Ticket | Contenu | Tests |
+|---|---|---|
+| BUG-148 | e2e production instable : cause côté test (état partagé, course au chargement, démarrage à froid de Vite) | spec `05-production` ; rejeu 5/5 pos |
+| BUG-414 | refus de suppression d'un nœud avec comptes actifs | `core/tests/test_bug414_node_delete_users.py` (6) |
+| BUG-415 | colonne Actions de Gestion Clientèle hors écran à 360 px : **défaut antérieur au découpage B-4**, pas une régression ; colonne collée à droite sous 640 px (`position: sticky`) | spec 32 (le test BUG-415 échoue sans le correctif, passe avec) ; rendu des thèmes clair/sombre/café non regardé |
+| BUG-412, 413 | compléments (API directe, message neutre) | `tsc` + build, marche manuelle dans les fiches |
+
+**Pour A** : rien de nouveau ; toujours la garde `node_id` vide (`core.mixins.is_node_less_non_hq`) dans production, treasury, sales.
+
+**Questions client** : Q-022 à Q-025 prêtes (`docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`), non encore transmises au propriétaire.
+
+**Statut :** OUVERT

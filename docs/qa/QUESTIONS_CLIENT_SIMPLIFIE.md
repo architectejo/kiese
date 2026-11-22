@@ -107,3 +107,11 @@ En mars, le client commande 60 000 FC (commission 15 000 FC) et a entre-temps pa
 - **B.** Le livreur ne voit que les clients de sa propre boulangerie. Conséquence : un client d'une autre boulangerie n'apparaît plus dans sa recherche ; il confirme toujours les livraisons des factures de sa boulangerie, mais pour un client venu d'ailleurs il faut que le facturier ou le gérant s'en occupe.
 
 *Question : voulez-vous que le livreur voie aussi les clients des autres boulangeries (A), ou seulement ceux de la sienne (B) ?*
+
+### Q-026 (remarque.md, ligne 452) — Quelles valeurs doivent être propres à chaque boulangerie ?
+
+Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q4 (options A, B, C). Remplace la ligne de `remarque.md` sur les valeurs de §2.3 par boulangerie ; contredit la décision du 14/11 sur le frais de carte (BUG-291).
+
+### Q-027 (BUG-411, BUG-253) — Quels écrans le livreur doit-il avoir ?
+
+Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Conditionne les gardes de routes de BUG-411 et le droit du livreur sur `cleanup_expired` (BUG-253).

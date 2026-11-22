@@ -657,3 +657,17 @@ select.form-input {
 .chat-error { margin: 12px; padding: 10px 12px; border-radius: var(--radius-md); font-size: 0.85rem; font-weight: 600; background: hsl(var(--color-danger) / 0.12); color: hsl(var(--color-danger)); border: 1px solid hsl(var(--color-danger) / 0.3); }
 @media (max-width: 768px) { .chat-panel { width: 100vw; border-left: none; } }
 @media (min-width: 1600px) { .chat-panel { width: 520px; } .chat-row { font-size: 1.05rem; } }
+
+/* BUG-415 : sous 640 px, la colonne Actions du tableau Clients reste collée à droite
+   (accessible sans défilement horizontal). Bureau inchangé. */
+@media (max-width: 640px) {
+  .premium-table th.col-actions-sticky,
+  .premium-table td.col-actions-sticky,
+  .premium-table tr:hover td.col-actions-sticky {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    background-color: hsl(var(--bg-secondary));
+    box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.35);
+  }
+}

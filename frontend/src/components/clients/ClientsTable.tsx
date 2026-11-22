@@ -87,7 +87,7 @@ export const ClientsTable: React.FC<ClientsTableProps> = ({
                 <th style={{ padding: '8px 10px' }}>BP</th>
                 <th style={{ padding: '8px 10px' }}>Risque</th>
                 <th style={{ padding: '8px 10px' }}>Statut</th>
-                <th style={{ textAlign: 'center', padding: '8px 10px', width: '100px' }}>Actions</th>
+                <th className="col-actions-sticky" style={{ textAlign: 'center', padding: '8px 10px', width: '100px' }}>Actions</th>
               </tr>
             </thead>
             <tbody style={{ fontSize: '0.72rem' }}>
@@ -175,7 +175,7 @@ export const ClientsTable: React.FC<ClientsTableProps> = ({
                         {client.active ? 'ACTIF' : 'SUSPENDU'}
                       </span>
                     </td>
-                    <td style={{ padding: '8px 10px' }}>
+                    <td className="col-actions-sticky" style={{ padding: '8px 10px' }}>
                       <div style={{ display: 'flex', justifyContent: 'center', gap: '4px' }}>
                         {/* Nouvelle action : Enregistrer un achat pour cet ancien client */}
                         <button

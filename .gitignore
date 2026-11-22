@@ -50,3 +50,6 @@ e2e/test-results/
 e2e/playwright-report/
 docs/qa/captures/e2e-results/
 .run_*.txt
+
+# Photos de test creees par les e2e
+backend/media/clients/photos/demo-client-e2e_*.png
