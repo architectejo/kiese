@@ -1087,6 +1087,8 @@ export interface Doc1Row {
   qty_300: number;
   qty_500: number;
   qty_1000: number;
+  /** Pains à un prix hors 200/300/500/1000 (absent sur un ancien backend). */
+  qty_other?: number;
   invoice_total: string;
   payment_amount: string;
   debt_after: string;

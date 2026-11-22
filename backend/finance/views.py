@@ -166,6 +166,16 @@ def _cashflow_for_year(year: int) -> dict:
     }
 
 
+def _doc1_add_quantities(agg, inv):
+    """BUG-822/823 : quantités DOC 1 signées (ajustement négatif = pains repris) ; un prix
+    hors 200/300/500/1000 est totalisé dans `qty_other` (aucune perte)."""
+    sign = -1 if (inv.is_adjustment and inv.adjustment_sign == -1) else 1
+    for line in inv.lines.all():
+        up = int(line.bread_price.unit_price) if line.bread_price else 0
+        key = f'qty_{up}' if up in (200, 300, 500, 1000) else 'qty_other'
+        agg[key] += sign * line.quantity
+
+
 def _balance_sheet_for_year(year: int) -> dict:
     from clients.models import Client
     from treasury.models import CashbookEntry
@@ -180,16 +190,18 @@ def _balance_sheet_for_year(year: int) -> dict:
 
     # Receivables (outstanding client debt)
     if is_past_year:
-        # BP à la clôture = `debt_after` de la dernière facture non annulée du client
-        # (BP cumulative, CLAUDE.md 5.2) ; aucune facture -> 0.
+        # BUG-820 : BP à la clôture = somme des variations de BP (`debt_delta`) des factures
+        # non annulées / non expirées datées <= fin d'exercice. Contrairement à `debt_after` de
+        # la « dernière facture », cette somme ne dépend ni de l'ordre de saisie (facture
+        # antidatée) ni d'une annulation survenue après coup. Limite documentée : une dette
+        # portée sans facture (import, reprise) n'apparaît pas dans un exercice clos.
         last_debt = {}
-        rows = (Invoice.objects
-                .filter(invoice_date__lte=year_end, client__is_active=True)
-                .exclude(status__in=['CANCELLED', 'NOT_SERVED'])
-                .order_by('invoice_date', 'created_at')
-                .values_list('client_id', 'debt_after'))
-        for client_id, debt_after in rows.iterator():
-            last_debt[client_id] = debt_after
+        qs = (Invoice.objects
+              .filter(invoice_date__lte=year_end, client__is_active=True)
+              .exclude(status__in=['CANCELLED', 'NOT_SERVED'])
+              .select_related('adjusts', 'client'))
+        for inv in qs.iterator():
+            last_debt[inv.client_id] = last_debt.get(inv.client_id, Decimal('0')) + inv.debt_delta
         total_receivables = sum(last_debt.values(), Decimal('0'))
     else:
         total_receivables = Client.objects.filter(is_active=True).aggregate(
@@ -370,17 +382,14 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             if cid not in client_agg:
                 client_agg[cid] = {
                     'client': inv.client,
-                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0,
+                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0, 'qty_other': 0,
                     'invoice_total': Decimal('0'),
                     'payment_amount': Decimal('0'),
                     'debt_after': Decimal('0'),  # last invoice BP
                     'last_date': inv.invoice_date,
                 }
             agg = client_agg[cid]
-            for line in inv.lines.all():
-                up = int(line.bread_price.unit_price) if line.bread_price else 0
-                if up in (200, 300, 500, 1000):
-                    agg[f'qty_{up}'] += line.quantity
+            _doc1_add_quantities(agg, inv)
             agg['invoice_total']  += inv.order_total
             agg['payment_amount'] += inv.payment_amount
             # Keep the most recent debt_after as end-of-month BP
@@ -399,6 +408,7 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
                 'qty_300':         agg['qty_300'],
                 'qty_500':         agg['qty_500'],
                 'qty_1000':        agg['qty_1000'],
+                'qty_other':       agg['qty_other'],
                 'invoice_total':   str(agg['invoice_total']),
                 'payment_amount':  str(agg['payment_amount']),
                 'debt_after':      str(agg['debt_after']),
@@ -451,17 +461,14 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             if cid not in client_agg:
                 client_agg[cid] = {
                     'client': inv.client,
-                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0,
+                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0, 'qty_other': 0,
                     'invoice_total': Decimal('0'),
                     'payment_amount': Decimal('0'),
                     'debt_after': Decimal('0'),
                     'last_date': inv.invoice_date,
                 }
             agg = client_agg[cid]
-            for line in inv.lines.all():
-                up = int(line.bread_price.unit_price) if line.bread_price else 0
-                if up in (200, 300, 500, 1000):
-                    agg[f'qty_{up}'] += line.quantity
+            _doc1_add_quantities(agg, inv)
             agg['invoice_total']  += inv.order_total
             agg['payment_amount'] += inv.payment_amount
             if inv.invoice_date >= agg['last_date']:
@@ -470,7 +477,7 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
 
         rows_sorted = sorted(client_agg.values(), key=lambda a: a['client'].full_name)
 
-        header = ['CODE', 'CLIENT', 'QTÉ 200', 'QTÉ 300', 'QTÉ 500', 'QTÉ 1000',
+        header = ['CODE', 'CLIENT', 'QTÉ 200', 'QTÉ 300', 'QTÉ 500', 'QTÉ 1000', 'QTÉ AUTRES',
                   'COMMANDE (FC)', 'PAIEMENT (FC)', 'BP FIN MOIS (FC)', 'TAUX CM', 'CM (FC)']
 
         def _rows():
@@ -481,7 +488,7 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
                 yield [
                     agg['client'].code,
                     agg['client'].full_name,
-                    agg['qty_200'], agg['qty_300'], agg['qty_500'], agg['qty_1000'],
+                    agg['qty_200'], agg['qty_300'], agg['qty_500'], agg['qty_1000'], agg['qty_other'],
                     str(agg['invoice_total']),
                     str(agg['payment_amount']),
                     str(agg['debt_after']),

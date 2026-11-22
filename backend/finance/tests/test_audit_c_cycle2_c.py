@@ -71,7 +71,6 @@ class Verif800BalanceSheetAttacks(Cycle2Base):
         b = _balance_sheet_for_year(self.year - 5)
         self.assertEqual((b['receivables'], b['cash_position'], b['total_assets']), (D('0'), D('0'), D('0')))
 
-    @unittest.expectedFailure  # BUG-820
     def test_backdated_invoice_created_later_is_in_year_end_receivables_BUG_820(self):
         """Facture du 31/12 saisie d'abord, facture du 05/12 saisie ensuite (antidatée) :
         la BP réelle fin N-1 est 1 500 (chaîne par ordre de saisie) ; la reconstitution trie par date
@@ -82,7 +81,6 @@ class Verif800BalanceSheetAttacks(Cycle2Base):
         self.assertEqual(self.cl.current_debt, D('1500.00'))
         self.assertEqual(_balance_sheet_for_year(self.year - 1)['receivables'], D('1500.00'))
 
-    @unittest.expectedFailure  # BUG-820
     def test_cancelled_pending_invoice_leaves_stale_debt_after_BUG_820(self):
         """Facture A (en attente, +1000) puis B livrée (+500, debt_after 1500) ; A annulée :
         current_debt = 500 mais B.debt_after reste 1500 -> créances fin d'exercice = 1 500 au lieu de 500."""
@@ -212,7 +210,6 @@ class Doc1Checks(Cycle2Base):
         self.assertEqual(D(rows[0]['invoice_total']), D('4000'))
         self.assertEqual(D(rows[0]['payment_amount']), D('5000'))
 
-    @unittest.expectedFailure  # BUG-822
     def test_doc1_quantities_subtract_a_negative_adjustment_BUG_822(self):
         inv = self.sale(self.f1, self.cl, [(self.bp_grand, 10)], 5000, 'CASH', self.d1)
         self.adjust(inv, -1, 2)
@@ -229,7 +226,6 @@ class Doc1Checks(Cycle2Base):
         self.assertEqual(cm.order_value, D('4000.00'))      # valeur : juste
         self.assertEqual(cm.total_breads, 8)                # observé : 12
 
-    @unittest.expectedFailure  # BUG-823
     def test_doc1_quantity_columns_cover_every_price_BUG_823(self):
         """Seuls 200/300/500/1000 sont comptés ; un pain à un autre prix (tarif configurable,
         CLAUDE.md 5.4) disparaît des colonnes alors que sa valeur est dans COMMANDE."""
@@ -238,7 +234,7 @@ class Doc1Checks(Cycle2Base):
         self.sale(self.f1, self.cl, [(bp250, 4)], 1000, 'CASH', self.d1)
         row = self.doc1(self.d1)[0]
         self.assertEqual(D(row['invoice_total']), D('1000'))
-        self.assertEqual(row['qty_200'] + row['qty_300'] + row['qty_500'] + row['qty_1000'], 4)
+        self.assertEqual(row['qty_200'] + row['qty_300'] + row['qty_500'] + row['qty_1000'] + row['qty_other'], 4)
 
     @unittest.expectedFailure  # BUG-824
     def test_adjustment_does_not_move_total_breads_received_BUG_824(self):

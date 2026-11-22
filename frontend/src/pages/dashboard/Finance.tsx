@@ -413,8 +413,8 @@ export const Finance: React.FC = () => {
                 <table className="premium-table" style={{ fontSize: '0.75rem' }}>
                   <thead>
                     <tr style={{ fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                      {['Code', 'Client', '200', '300', '500', '1000', 'Commande (FC)', 'Paiement (FC)', 'BP fin mois (FC)', 'Taux', 'CM (FC)'].map(h => (
-                        <th key={h} style={{ padding: '7px 8px', textAlign: ['200','300','500','1000','Commande (FC)','Paiement (FC)','BP fin mois (FC)','Taux','CM (FC)'].includes(h) ? 'right' : 'left' }}>{h}</th>
+                      {['Code', 'Client', '200', '300', '500', '1000', 'Autres', 'Commande (FC)', 'Paiement (FC)', 'BP fin mois (FC)', 'Taux', 'CM (FC)'].map(h => (
+                        <th key={h} style={{ padding: '7px 8px', textAlign: ['200','300','500','1000','Autres','Commande (FC)','Paiement (FC)','BP fin mois (FC)','Taux','CM (FC)'].includes(h) ? 'right' : 'left' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -427,6 +427,7 @@ export const Finance: React.FC = () => {
                         <td style={{ padding: '6px 8px', textAlign: 'right' }}>{row.qty_300 || '—'}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right' }}>{row.qty_500 || '—'}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right' }}>{row.qty_1000 || '—'}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(row.qty_other ?? 0) || '—'}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{fmt(row.invoice_total)}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right', color: 'hsl(var(--color-success))' }}>{fmt(row.payment_amount)}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right', color: parseFloat(row.debt_after) > 0 ? 'hsl(var(--color-warning))' : 'hsl(var(--color-success))' }}>{fmt(row.debt_after)}</td>
@@ -442,6 +443,7 @@ export const Finance: React.FC = () => {
                       <td style={{ padding: '7px 8px', textAlign: 'right' }}>{doc1Data.reduce((s, r) => s + r.qty_300, 0)}</td>
                       <td style={{ padding: '7px 8px', textAlign: 'right' }}>{doc1Data.reduce((s, r) => s + r.qty_500, 0)}</td>
                       <td style={{ padding: '7px 8px', textAlign: 'right' }}>{doc1Data.reduce((s, r) => s + r.qty_1000, 0)}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{doc1Data.reduce((s, r) => s + (r.qty_other ?? 0), 0)}</td>
                       <td style={{ padding: '7px 8px', textAlign: 'right' }}>{doc1Data.reduce((s, r) => s + parseFloat(r.invoice_total), 0).toLocaleString('fr-FR')}</td>
                       <td style={{ padding: '7px 8px', textAlign: 'right', color: 'hsl(var(--color-success))' }}>{doc1Data.reduce((s, r) => s + parseFloat(r.payment_amount), 0).toLocaleString('fr-FR')}</td>
                       <td />
