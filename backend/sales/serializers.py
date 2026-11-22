@@ -100,8 +100,15 @@ MAX_LINE_QUANTITY = 100000
 
 class InvoiceLineInputSerializer(serializers.Serializer):
     """BUG-208 : ligne de saisie validée (pain existant côté vue, quantité entière >= 1)."""
+    # BUG-644 : borne haute (clé entière 32 bits) ; un entier géant provoquait un 500 (OverflowError).
     bread_price = serializers.IntegerField(
-        min_value=1, error_messages={'invalid': "Identifiant de pain invalide."},
+        min_value=1, max_value=2_147_483_647,
+        error_messages={
+            'invalid': "Identifiant de pain invalide.",
+            'max_value': "Identifiant de pain invalide.",
+            'min_value': "Identifiant de pain invalide.",
+            'max_string_length': "Identifiant de pain invalide.",
+        },
     )
     quantity = serializers.IntegerField(
         min_value=1, max_value=MAX_LINE_QUANTITY,
@@ -120,7 +127,9 @@ class InvoiceCreateSerializer(serializers.Serializer):
     # `SyncableModel`) — `UUIDField` ici rejetait systématiquement tout `node`
     # explicite avec 400 "Doit être un UUID valide", masquant de fait BUG-030
     # (la valeur n'atteignait jamais `InvoiceViewSet.create`).
-    node            = serializers.IntegerField(required=False)
+    node            = serializers.IntegerField(
+        required=False, min_value=1, max_value=2147483647,
+        error_messages={'min_value': "Boulangerie invalide.", 'max_value': "Boulangerie invalide."})
     client          = serializers.UUIDField(required=False, allow_null=True)
     payment_type    = serializers.ChoiceField(choices=Invoice.PaymentType.choices)
     # BUG-290 (décision client 2026-11-14, remplace BUG-209) : le signe « − »

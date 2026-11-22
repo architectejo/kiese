@@ -38,19 +38,26 @@ def parse_qty(raw, label, allow_zero=False):
     """Décimal borné (3 décimales). Retourne (Decimal, None) ou (None, message FR)."""
     if raw is None or isinstance(raw, bool) or raw == '':
         return None, f"{label} : quantité requise."
+    text = str(raw).strip().replace(',', '.')
+    if len(text) > 40:  # chaîne énorme : refusée avant tout calcul
+        return None, f"{label} : quantité invalide."
     try:
-        value = Decimal(str(raw).strip().replace(',', '.'))
+        value = Decimal(text)
     except (InvalidOperation, ValueError):
         return None, f"{label} : quantité invalide."
     if not value.is_finite():
         return None, f"{label} : quantité invalide."
-    if value != value.quantize(Q3):
-        return None, f"{label} : au plus 3 décimales."
+    # BUG-562 : la borne haute est testée AVANT quantize() (« 1e400 » levait InvalidOperation -> 500).
+    if value > MAX_QTY:
+        return None, f"{label} : quantité trop grande."
     if value < 0 or (value == 0 and not allow_zero):
         return None, f"{label} : la quantité doit être strictement positive." if not allow_zero \
             else f"{label} : la quantité ne peut pas être négative."
-    if value > MAX_QTY:
-        return None, f"{label} : quantité trop grande."
+    try:
+        if value != value.quantize(Q3):
+            return None, f"{label} : au plus 3 décimales."
+    except InvalidOperation:
+        return None, f"{label} : quantité invalide."
     return value, None
 
 

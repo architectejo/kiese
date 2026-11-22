@@ -44,6 +44,35 @@ from .serializers import InvoiceSerializer, InvoiceCreateSerializer, InvoiceAdju
 _INVOICE_CREATE_MAX_RETRIES = 200
 
 
+# BUG-650 : retentative bornée sur « database is locked / table is locked »
+# (SQLite, nœud desktop). Chaque tentative rejoue l'action dans sa propre
+# transaction atomique ; toute autre erreur (métier ou SQL) est propagée.
+_ACTION_LOCK_MAX_RETRIES = 100
+
+
+def _retry_on_lock(fn):
+    last_exc = None
+    for _attempt in range(_ACTION_LOCK_MAX_RETRIES):
+        try:
+            return fn()
+        except OperationalError as exc:
+            if 'locked' not in str(exc).lower():
+                raise
+            last_exc = exc
+            time.sleep(random.uniform(0.02, 0.15))
+    raise last_exc
+
+
+class BoundedSearchFilter(filters.SearchFilter):
+    """BUG-645 : borne nombre et longueur des termes (SQLite : LIKE trop complexe -> 500)."""
+    MAX_TERMS = 5
+    MAX_TERM_LENGTH = 100
+
+    def get_search_terms(self, request):
+        terms = super().get_search_terms(request)
+        return [t[:self.MAX_TERM_LENGTH] for t in terms[:self.MAX_TERMS]]
+
+
 def _effective_credit_limit(client, node, config):
     """
     Plafond de crédit effectivement opposable à ce client sur ce nœud.
@@ -90,6 +119,24 @@ def _combine_date_with_now_time(target_date, node=None):
         return timezone.now()
     combined = datetime.combine(target_date, now.time())
     return timezone.make_aware(combined, now.tzinfo)
+
+
+def _strict_whole_number(raw, maximum):
+    """BUG-6NN : entier strict >= 0 et <= `maximum`, ou None. Refuse booléen, flottant
+    (NaN, Infinity, 1e400, 1.5, 2.0), liste/objet, chaîne non décimale ou géante :
+    jamais de troncature silencieuse ni d'OverflowError (500)."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        n = raw
+    elif isinstance(raw, str) and len(raw.strip()) <= 20 and raw.strip().isascii() and raw.strip().isdigit():
+        n = int(raw.strip())
+    else:
+        return None
+    return n if 0 <= n <= maximum else None
+
+
+_MAX_DB_ID = 2_147_483_647
 
 
 def _default_work_date(user):
@@ -216,7 +263,7 @@ class InvoiceViewSet(
         'node', 'client', 'facturier', 'livreur'
     ).prefetch_related('lines__bread_price').all()
     serializer_class = InvoiceSerializer
-    filter_backends  = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends  = [DjangoFilterBackend, BoundedSearchFilter, filters.OrderingFilter]
     filterset_fields = ['node', 'status', 'payment_type', 'invoice_date', 'client', 'adjusts', 'is_adjustment']
     search_fields    = ['receipt_number', 'client__first_name', 'client__last_name', 'client__code']
     ordering_fields  = ['invoice_date', 'order_total', 'created_at']
@@ -487,7 +534,9 @@ class InvoiceViewSet(
         client_id = data.get('client')
         if client_id:
             try:
-                client = Client.objects.get(pk=client_id)
+                # BUG-640 : ligne client verrouillée (lecture de `current_debt` pour le
+                # plafond, `debt_before`/`debt_after`) jusqu'à la fin de la transaction.
+                client = Client.objects.select_for_update().get(pk=client_id)
             except Client.DoesNotExist as e:
                 return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -531,6 +580,14 @@ class InvoiceViewSet(
             # RG : ni paiement ni dette. NS au comptant : rien n'a été remis,
             # aucune dette (seul NS à crédit conserve `order_total - paiement`).
             payment_amount = Decimal('0.00')
+
+        # BUG-646 : un client désactivé ne peut plus être facturé (vente) ; un
+        # versement/remboursement de sa dette reste accepté (la dette subsiste).
+        if client is not None and not client.is_active and not is_debt_repayment:
+            return Response(
+                {'detail': "Ce client est désactivé : il ne peut plus être facturé."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if is_debt_repayment:
             # Pure repayment — no bread lines, no stock deduction, commission = 0
@@ -607,6 +664,13 @@ class InvoiceViewSet(
         missing = [i for i in bp_ids if i not in bp_map]
         if missing:
             return Response({'detail': f"BreadPrice(s) introuvable(s) : {missing}"}, status=status.HTTP_400_BAD_REQUEST)
+        # BUG-646 : catégorie de pain désactivée -> non vendable.
+        inactive = sorted({bp.label for bp in bp_map.values() if not bp.is_active})
+        if inactive:
+            return Response(
+                {'detail': f"Catégorie(s) de pain désactivée(s) : {', '.join(inactive)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # BUG-092 : si la facture est soldée, `InvoiceLine.save()` facture
         # chaque ligne à 75 % du catalogue (CLAUDE.md §5.1) — l'estimation
@@ -735,22 +799,25 @@ class InvoiceViewSet(
             lid, qty = entry['id'], entry['quantity']
             if isinstance(lid, bool) or isinstance(qty, bool):
                 return None, "Ligne ou quantité invalide."
-            try:
-                lid = int(lid)
-            except (TypeError, ValueError):
+            lid = _strict_whole_number(lid, _MAX_DB_ID)  # BUG-6NN : pas de float/NaN/inf/géant
+            if lid is None:
                 return None, "Identifiant de ligne invalide."
             if lid not in current:
                 return None, f"La ligne {lid} n'appartient pas à cette facture."
             if lid in served:
                 return None, f"La ligne {lid} est fournie plusieurs fois."
-            if isinstance(qty, float) and qty != int(qty):
-                return None, "La quantité servie doit être un nombre entier."
-            try:
-                qty_int = int(str(qty).strip()) if not isinstance(qty, (int, float)) else int(qty)
-            except (TypeError, ValueError):
-                return None, "La quantité servie doit être un nombre entier."
-            if qty_int < 0:
+            # BUG-6NN : NaN / Infinity / 1e400 faisaient lever OverflowError/ValueError (500).
+            if isinstance(qty, float):
+                if qty != qty or qty in (float('inf'), float('-inf')) or qty != int(qty):
+                    return None, "La quantité servie doit être un nombre entier."
+                qty = int(qty)
+            if isinstance(qty, int) and qty < 0:
                 return None, "La quantité servie ne peut pas être négative."
+            if isinstance(qty, str) and qty.strip().startswith('-') and qty.strip()[1:].isdigit():
+                return None, "La quantité servie ne peut pas être négative."
+            qty_int = _strict_whole_number(qty, 2_000_000_000)
+            if qty_int is None:
+                return None, "La quantité servie doit être un nombre entier."
             if qty_int > current[lid]:
                 return None, (
                     f"La quantité servie ({qty_int}) ne peut pas dépasser la quantité commandée ({current[lid]})."
@@ -759,8 +826,12 @@ class InvoiceViewSet(
         return served, None
 
     @action(detail=True, methods=['post'], permission_classes=[IsFacturierOrLivreur])
-    @transaction.atomic
     def deliver(self, request, pk=None):
+        # BUG-650 : retentative bornée sur verrou SQLite (une transaction par tentative).
+        return _retry_on_lock(lambda: self._deliver_once(request, pk))
+
+    @transaction.atomic
+    def _deliver_once(self, request, pk=None):
         """Facturier or livreur confirms physical delivery. Locks BP, updates client debt.
 
         BUG-318 : corps optionnel `{"lines": [{"id": <ligne>, "quantity": <servi>}]}`
@@ -798,7 +869,10 @@ class InvoiceViewSet(
         requested_delivery_date_raw = request.data.get('delivered_at')
         if requested_delivery_date_raw:
             from django.utils.dateparse import parse_date
-            requested_delivery_date = parse_date(str(requested_delivery_date_raw)[:10])
+            try:
+                requested_delivery_date = parse_date(str(requested_delivery_date_raw)[:10])
+            except ValueError:  # BUG-643 : date bien formée mais impossible (2026-02-30)
+                requested_delivery_date = None
             if requested_delivery_date is None:
                 return Response({'detail': "delivered_at invalide — format attendu AAAA-MM-JJ."}, status=status.HTTP_400_BAD_REQUEST)
             config = Config.get_instance()
@@ -865,7 +939,7 @@ class InvoiceViewSet(
         if len(reason.strip()) > 200:
             return Response({'detail': "Le motif ne peut pas dépasser 200 caractères."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            invoice = mark_not_served(invoice.pk, request.user, reason=reason)
+            invoice = _retry_on_lock(lambda: mark_not_served(invoice.pk, request.user, reason=reason))
         except InvoiceStateError as exc:
             return Response({'detail': exc.detail}, status=exc.status_code)
         return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
@@ -873,30 +947,53 @@ class InvoiceViewSet(
     @action(detail=True, methods=['post'], permission_classes=[IsFacturier])
     def cancel(self, request, pk=None):
         """Gérant or Facturier can cancel a PENDING order. Restores bread stock and reverses client debt."""
-        invoice = self.get_object()
+        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        return _retry_on_lock(lambda: self._cancel_once(request, invoice.pk))
+
+    @transaction.atomic
+    def _cancel_once(self, request, invoice_pk):
+        # BUG-642 : facture verrouillée (comme `deliver_invoice`) : deux annulations
+        # ou annulation + livraison simultanées ne restituent jamais deux fois.
+        invoice = Invoice.objects.select_for_update(of=('self',)).select_related('node', 'client').get(pk=invoice_pk)
         if invoice.status == Invoice.Status.DELIVERED:
             return Response(
                 {'detail': "Impossible d'annuler une facture déjà livrée."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        if invoice.status == Invoice.Status.PENDING:
-            if invoice.client_id:
-                # Reverse only the debt that was actually applied at creation
-                net_delta = invoice.debt_delta
-                Client.objects.filter(pk=invoice.client_id).update(
-                    current_debt=F('current_debt') - net_delta
+        # BUG-647 : seule une facture EN ATTENTE est annulable (NOT_SERVED est terminal).
+        if invoice.status != Invoice.Status.PENDING:
+            return Response(
+                {'detail': f"Impossible d'annuler une facture au statut « {invoice.get_status_display()} »."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # BUG-648 : des ajustements liés ont déjà restitué/consommé une part ;
+        # on ne restitue que le NET (originale + ajustements signés).
+        adjustments = list(invoice.adjustments.filter(is_adjustment=True).prefetch_related('lines'))
+        if invoice.client_id:
+            client = Client.objects.select_for_update().get(pk=invoice.client_id)
+            net_delta = invoice.debt_delta + sum((a.debt_delta for a in adjustments), Decimal('0.00'))
+            Client.objects.filter(pk=client.pk).update(current_debt=F('current_debt') - net_delta)
+            if net_delta != 0:
+                _record_debt_movement_after_commit(
+                    client, -net_delta, DebtMovement.Kind.ADJUSTMENT,
+                    node_origin=invoice.node.code, invoice=invoice,
+                    note=f"Annulation {invoice.receipt_number}",
                 )
-                if net_delta != 0:
-                    _record_debt_movement_after_commit(
-                        invoice.client, -net_delta, DebtMovement.Kind.ADJUSTMENT,
-                        node_origin=invoice.node.code, invoice=invoice,
-                        note=f"Annulation {invoice.receipt_number}",
+        # Restitution du stock par catégorie (BUG-177 : une NS n'a jamais déstocké).
+        if invoice.special_code != Invoice.SpecialCode.NS:
+            net_by_bp = {}
+            bps = {}
+            for line in invoice.lines.select_related('bread_price').all():
+                net_by_bp[line.bread_price_id] = net_by_bp.get(line.bread_price_id, 0) + line.quantity
+                bps[line.bread_price_id] = line.bread_price
+            for adj in adjustments:
+                for line in adj.lines.all():
+                    net_by_bp[line.bread_price_id] = (
+                        net_by_bp.get(line.bread_price_id, 0) + adj.adjustment_sign * line.quantity
                     )
-            # Restore bread stock per category (BUG-177 : une NS n'a jamais
-            # déstocké, rien à restituer)
-            if invoice.special_code != Invoice.SpecialCode.NS:
-                for line in invoice.lines.select_related('bread_price').all():
-                    _adjust_bread_stock(invoice.node, line.bread_price, sent=-line.quantity)
+            for bp_id, qty in net_by_bp.items():
+                if qty:
+                    _adjust_bread_stock(invoice.node, bps[bp_id], sent=-qty)
         invoice.status = Invoice.Status.CANCELLED
         invoice.save(update_fields=['status'])
         log_activity(
@@ -944,6 +1041,12 @@ class InvoiceViewSet(
                 {'detail': "Impossible d'ajuster une facture annulée."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        # BUG-649 : NOT_SERVED est terminal (commande 0) : un ajustement créerait une vente fantôme.
+        if original.status == Invoice.Status.NOT_SERVED:
+            return Response(
+                {'detail': "Impossible d'ajuster une facture non servie."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         if original.is_debt_repayment:
             return Response(
                 {'detail': "Impossible d'ajuster un remboursement BP — ce n'est pas une commande."},
@@ -963,10 +1066,15 @@ class InvoiceViewSet(
         payment_magnitude = data['payment_amount']
         lines_data = data['lines']
 
+        # BUG-6NN : id et quantité entiers stricts (pas de booléen, flottant, NaN/inf, géant) ;
+        # quantité plafonnée comme à la création (MAX_LINE_QUANTITY).
+        from .serializers import MAX_LINE_QUANTITY
         try:
-            bp_ids = [int(ld['bread_price']) for ld in lines_data]
-            quantities = [int(ld['quantity']) for ld in lines_data]
+            bp_ids = [_strict_whole_number(ld['bread_price'], _MAX_DB_ID) for ld in lines_data]
+            quantities = [_strict_whole_number(ld['quantity'], MAX_LINE_QUANTITY) for ld in lines_data]
         except (TypeError, ValueError, KeyError):
+            return Response({'detail': "Ligne d'ajustement invalide (bread_price/quantity)."}, status=status.HTTP_400_BAD_REQUEST)
+        if any(b is None for b in bp_ids) or any(q is None for q in quantities):
             return Response({'detail': "Ligne d'ajustement invalide (bread_price/quantity)."}, status=status.HTTP_400_BAD_REQUEST)
         if any(q <= 0 for q in quantities):
             return Response({'detail': "Les quantités d'un ajustement doivent être strictement positives (le signe se règle via adjustment_sign)."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1043,6 +1151,9 @@ class InvoiceViewSet(
         )
 
         with transaction.atomic():
+            if client is not None:
+                # BUG-640 : `debt_before` lu sous verrou de la ligne client.
+                client = Client.objects.select_for_update().get(pk=client.pk)
             debt_before = client.current_debt if client is not None else 0
 
             adjustment = Invoice.objects.create(
@@ -1209,10 +1320,11 @@ class InvoiceViewSet(
         elif is_node_less_non_hq(user):
             nodes = Node.objects.none()  # compte sans boulangerie : rien
         elif node_param:
-            try:
-                nodes = Node.objects.filter(pk=int(node_param))
-            except (TypeError, ValueError):
+            # BUG-6NN : entier strict borné (« 1e400 », « 9…9 » géant -> 400, pas de surprise).
+            node_pk = _strict_whole_number(node_param, _MAX_DB_ID)
+            if node_pk is None:
                 return Response({'detail': 'Boulangerie invalide.'}, status=status.HTTP_400_BAD_REQUEST)
+            nodes = Node.objects.filter(pk=node_pk)
         else:
             nodes = Node.objects.all()
         # BUG-211 : « livré le » = journée de travail du nœud (relève à

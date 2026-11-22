@@ -234,6 +234,7 @@ export interface Invoice {
   team?: string;
   node: string;
   node_display?: string;
+  node_code?: string | null;
   client_code?: string;
   client_photo?: string | null;
   client_current_debt?: string;

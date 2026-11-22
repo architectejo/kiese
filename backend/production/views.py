@@ -111,6 +111,37 @@ def _strict_int(value, label, minimum=0):
     return n
 
 
+def _strict_pk(value, label='identifiant'):
+    """
+    BUG-6NN : identifiant entier strict (int ou chaîne de chiffres ASCII, 1 à 2^31-1).
+    Refuse booléen (True == pk 1), flottant (1.5 tronqué en 1), liste/objet, chaîne
+    géante : 400 en français `{"detail": ...}` au lieu d'un id inattendu ou d'un 500.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        n = value
+    elif isinstance(value, str) and len(value.strip()) <= 12 and value.strip().isascii() \
+            and value.strip().isdigit():
+        n = int(value.strip())
+    else:
+        n = None
+    if n is None or n < 1 or n > 2_147_483_647:
+        raise ValidationError({'detail': f"Valeur invalide pour {label} : identifiant numérique attendu."})
+    return n
+
+
+def _strict_bool(value, label):
+    """
+    BUG-621 : booléen strict. Accepte `true`/`false` JSON (et les chaînes
+    « true »/« false » insensibles à la casse) ; toute autre valeur (« 0 »,
+    « non », nombre, liste...) est ambiguë -> 400 français.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ('true', 'false'):
+        return value.strip().lower() == 'true'
+    raise ValidationError({'detail': f"Valeur invalide pour « {label} » : true ou false attendu."})
+
+
 def _safe_parse_date(value):
     """
     BUG-225 : `parse_date` renvoie None pour un format non conforme mais LÈVE
@@ -720,10 +751,11 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
             node_ref = data.get('node')
             node = None
             if node_ref not in (None, ''):
-                try:
-                    node = Node.objects.filter(pk=node_ref).first()
-                except (TypeError, ValueError, DjangoValidationError):
-                    node = None
+                # BUG-6NN : booléen / flottant / géant ne désignent aucune boulangerie
+                # (le serializer rejettera ensuite la valeur).
+                from kiese.node_guard import resolve_node_param
+                found, bad = resolve_node_param(node_ref)
+                node = found if bad is None else None
             node = node or user.node
         if node is None or not node.team_rotation_enabled:
             return data
@@ -835,6 +867,16 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
                         )
                     })
                 session = existing
+                # BUG-623 : le cumul avec la session du jour ne doit pas dépasser la capacité de la colonne.
+                from .serializers import MAX_SESSION_FC
+                added_fc = sum(
+                    (l.get('quantity') or 0) * l['bread_price'].unit_price for l in lines_data
+                    if (l.get('quantity') or 0) > 0
+                )
+                if (session.total_fc_produced or 0) + added_fc > MAX_SESSION_FC:
+                    raise ValidationError({'detail': (
+                        "Quantités trop grandes : la valeur produite cumulée dépasse la limite autorisée."
+                    )})
                 if flour_add:
                     session.flour_sacks_used = session.flour_sacks_used + flour_add
                     session.save(update_fields=['flour_sacks_used'])
@@ -1656,13 +1698,12 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         if user.can_access_all_nodes:
             node_id = self.request.data.get('node')
             if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
-                except (ValueError, TypeError):
-                    # BUG-525 (même défaut) : pk non numérique -> 400, pas 500.
+                # BUG-525 (pk non numérique -> 400) ; BUG-6NN : booléen / flottant / géant -> 400.
+                from kiese.node_guard import resolve_node_param
+                found, bad = resolve_node_param(node_id)
+                if bad is not None:
                     raise ValidationError({'detail': "Boulangerie invalide : identifiant numérique attendu."})
+                node = found
         if not node:
             raise ValidationError({'node': 'Boulangerie requise.'})
 
@@ -1725,6 +1766,16 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             "Vous n'êtes pas autorisé à agir sur un transfert qui ne concerne pas votre boulangerie."
         )
 
+    def create(self, request, *args, **kwargs):
+        # BUG-612 : `from_node` flottant (1.5) ou chiffre non ASCII (« १ ») était tronqué par
+        # PrimaryKeyRelatedField -> pk 1. Contrôle strict AVANT le serializer.
+        data = request.data
+        if hasattr(data, 'get') and 'from_node' in data:
+            raw = data.get('from_node')
+            if raw is not None and raw != '':
+                _strict_pk(raw, 'boulangerie fournisseuse (from_node)')
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         """
         A (to_node) requests bread FROM B (from_node).
@@ -1743,6 +1794,11 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             )})
         if serializer.validated_data.get('from_node') == user.node:
             raise ValidationError({'detail': "Une boulangerie ne peut pas demander des pains à elle-même."})
+        # BUG-627 (comme BUG-540) : le nœud technique SIEGE et les boulangeries inactives
+        # ne peuvent pas être fournisseurs.
+        supplier = serializer.validated_data.get('from_node')
+        if supplier is not None and (supplier.code == 'SIEGE' or not supplier.is_active):
+            raise ValidationError({'detail': f"« {supplier.code} » n'est pas une boulangerie fournisseuse valide."})
         raw_data = self.request.data
         raw_lines = raw_data.get('lines') if hasattr(raw_data, 'get') else None
         if not isinstance(raw_lines, list) or not raw_lines:
@@ -1753,7 +1809,7 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
                 raise ValidationError({'detail': "Chaque ligne doit être un objet {bread_price, quantity_sent}."})
             bp_id = ld.get('bread_price')
             try:
-                bp = BP.objects.get(pk=bp_id)
+                bp = BP.objects.get(pk=_strict_pk(bp_id, 'catégorie de pain'))
             except (BP.DoesNotExist, TypeError, ValueError, DjangoValidationError):
                 raise ValidationError({'detail': f"Catégorie de pain introuvable ({bp_id})."})
             qty = _strict_int(ld.get('quantity_sent'), f"quantité envoyée ({bp.label})", minimum=1)
@@ -1799,7 +1855,7 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
         bad_body = _body_not_object_response(request)
         if bad_body is not None:
             return bad_body
-        approved = bool(request.data.get('approved', True))
+        approved = _strict_bool(request.data.get('approved', True), 'approved')
 
         if not approved:
             transfer.transfer_status = BreadTransfer.TransferStatus.CANCELLED
@@ -1828,7 +1884,10 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             if not isinstance(ld, dict):
                 return Response({'detail': "Chaque ligne doit être un objet {bread_price, quantity_sent}."},
                                 status=status.HTTP_400_BAD_REQUEST)
-            parsed.append((ld.get('bread_price'), _strict_int(ld.get('quantity_sent', 0), "quantité envoyée")))
+            raw_bp = ld.get('bread_price')
+            if raw_bp is not None:
+                raw_bp = _strict_pk(raw_bp, 'catégorie de pain')
+            parsed.append((raw_bp, _strict_int(ld.get('quantity_sent', 0), "quantité envoyée")))
 
         with transaction.atomic():
             # Relecture verrouillée : deux réponses simultanées ne doivent pas
@@ -1908,7 +1967,10 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             if not isinstance(ld, dict):
                 return Response({'detail': "Chaque ligne doit être un objet {bread_price, quantity_received}."},
                                 status=status.HTTP_400_BAD_REQUEST)
-            parsed.append((ld.get('bread_price'), _strict_int(ld.get('quantity_received', 0), "quantité reçue")))
+            raw_bp = ld.get('bread_price')
+            if raw_bp is not None:
+                raw_bp = _strict_pk(raw_bp, 'catégorie de pain')
+            parsed.append((raw_bp, _strict_int(ld.get('quantity_received', 0), "quantité reçue")))
 
         has_dispute = False
         with transaction.atomic():
@@ -1920,11 +1982,28 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
                     {'detail': f"Le transfert doit être au statut 'Réceptionné' pour être confirmé (statut : {locked.get_transfer_status_display()})."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # BUG-620 : chaque ligne ENVOYÉE doit être validée, et chaque ligne du corps
+            # doit correspondre à une ligne du transfert ; sinon 400 sans aucune écriture
+            # (les pains ne disparaissent plus du groupe, la clôture reste bloquée à juste titre).
+            sent_ids = set(transfer.lines.values_list('bread_price_id', flat=True))
+            given_ids = [bp_id for bp_id, _q in parsed]
+            unknown = [b for b in given_ids if b not in sent_ids]
+            if unknown:
+                return Response(
+                    {'detail': f"Catégorie de pain absente de ce transfert ({unknown[0]})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(set(given_ids)) != len(given_ids):
+                return Response({'detail': "Une même catégorie de pain figure plusieurs fois dans les lignes."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if sent_ids - set(given_ids):
+                return Response(
+                    {'detail': "Toutes les lignes du transfert doivent être validées (quantité reçue "
+                               "pour chaque catégorie envoyée, 0 si rien reçu)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             for bp_id, qty_received in parsed:
-                try:
-                    line = transfer.lines.get(bread_price_id=bp_id)
-                except (BreadTransferLine.DoesNotExist, ValueError, TypeError):
-                    continue
+                line = transfer.lines.get(bread_price_id=bp_id)
                 previous = line.quantity_received or 0
                 line.quantity_received = qty_received
                 line.save(update_fields=['quantity_received'])
@@ -2066,6 +2145,11 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
         )
         return Response(BreadTransferSerializer(transfer).data)
 
+    @staticmethod
+    def _initiator_node_id(transfer):
+        # Demande : l'initiateur est la demandeuse (to_node) ; envoi direct : l'émettrice (from_node).
+        return transfer.from_node_id if transfer.flow == BreadTransfer.Flow.DIRECT else transfer.to_node_id
+
     def perform_update(self, serializer):
         # BUG-223 : un transfert qui a déjà eu un effet sur les stocks
         # (réponse, réception, litige) n'est plus modifiable directement.
@@ -2074,6 +2158,10 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
                 "Ce transfert a déjà un effet sur les stocks : il n'est plus modifiable "
                 "(utilisez la résolution de litige le cas échéant)."
             )})
+        # BUG-624 : seul l'initiateur du transfert (ou le siège) peut le modifier ;
+        # le fournisseur d'une demande ne fait que répondre (accepter / refuser).
+        # (Garde de statut BUG-223 d'abord : un transfert engagé reste un 400.)
+        self._check_node_involved(self.request, self._initiator_node_id(serializer.instance))
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -2089,6 +2177,8 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             raise ValidationError({'detail': (
                 "Ce transfert a déjà un effet sur les stocks : il ne peut pas être supprimé."
             )})
+        # BUG-624 : suppression réservée à l'initiateur (ou au siège), après la garde de statut.
+        self._check_node_involved(self.request, self._initiator_node_id(instance))
         instance.delete()
 
 
@@ -2423,11 +2513,11 @@ def _resolve_node(node_param):
     """
     if not node_param:
         return None
-    try:
-        return Node.objects.filter(pk=int(node_param)).first()
-    except (TypeError, ValueError):
-        pass
-    return Node.objects.filter(code__iexact=str(node_param)).first()
+    # BUG-541 / BUG-6NN : un booléen, un flottant ou une valeur géante ne sont
+    # pas un identifiant (int(True) == 1, int(1.5) == 1) : helper commun strict.
+    from kiese.node_guard import resolve_node_param
+    node, bad = resolve_node_param(node_param)
+    return None if bad is not None else node
 
 
 def _resolve_hq_node_param(node_param):
@@ -3689,7 +3779,11 @@ class DailyOpeningConfirmationView(APIView):
             try:
                 if isinstance(raw_bp, bool) or isinstance(raw_qty, bool):
                     raise ValueError
-                bread_price_id = int(raw_bp)
+                # BUG-6NN : id entier strict (pas 1.5 -> 1, pas de chaîne géante / 1_0).
+                try:
+                    bread_price_id = _strict_int(raw_bp, 'bread_price', minimum=1)
+                except ValidationError:
+                    raise ValueError
                 # BUG-322 : bornes comparées sur le Decimal avant tout int().
                 qty, qty_err = _bounded_integral_decimal(raw_qty)
                 if qty_err == 'invalid':

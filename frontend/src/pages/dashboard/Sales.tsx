@@ -303,6 +303,7 @@ export const Sales: React.FC = () => {
       const built: ReceiptData = {
         receiptNumber: inv.receipt_number,
         boulangerie: inv.node_display || inv.node || '—',
+        boulangerieCode: inv.node_code ?? null,
         agentName: user?.first_name ? `${user.first_name} ${user.last_name}` : 'Facturier',
         // BUG-184 : équipe portée par la facture (équipe de service si rotation active) ;
         // repli sur l'équipe de l'utilisateur : facture qu'il vient de créer.
@@ -497,6 +498,7 @@ export const Sales: React.FC = () => {
       const built: ReceiptData = {
         receiptNumber: inv.receipt_number,
         boulangerie: inv.node_display || inv.node || '—',
+        boulangerieCode: inv.node_code ?? null,
         agentName: user?.first_name ? `${user.first_name} ${user.last_name}` : 'Facturier',
         // BUG-184 : la livraison peut concerner une facture d'un autre utilisateur ou plus
         // ancienne : jamais de repli sur l'équipe de l'utilisateur connecté.

@@ -25,14 +25,29 @@ def resolve_node_param(raw):
     from rest_framework.response import Response
     from core.models import Node
 
-    node = None
-    try:
-        node = Node.objects.filter(pk=int(raw)).first()
-    except (TypeError, ValueError):
-        node = Node.objects.filter(code__iexact=str(raw)).first()
-    if node is None:
-        return None, Response({'detail': f"Boulangerie « {raw} » introuvable."},
+    def _invalid():
+        return None, Response({'detail': f"Boulangerie « {str(raw)[:40]} » introuvable."},
                               status=status.HTTP_400_BAD_REQUEST)
+
+    # BUG-541 : un booléen JSON (int(True) == 1), un flottant (tronqué par int()),
+    # une liste ou un objet ne sont jamais un identifiant de boulangerie.
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        return _invalid()
+    text = str(raw).strip()
+    if len(text) > 40:
+        return _invalid()
+    node = None
+    if text.isascii() and text.isdigit():
+        value = int(text)
+        if value < 1 or value > 2147483647:
+            return _invalid()
+        node = Node.objects.filter(pk=value).first()
+    elif isinstance(raw, int):
+        return _invalid()  # entier négatif
+    else:
+        node = Node.objects.filter(code__iexact=text).first()
+    if node is None:
+        return _invalid()
     return node, None
 
 

@@ -73,7 +73,6 @@ class DirectSendAttacks(SendBase):
         self.assertEqual(self.send(self.u['GERANT'], to='P1').status_code, 400)
         self.assertEqual(self.send(self.u['GERANT'], to=self.k1.pk).status_code, 400)
 
-    @expectedFailure  # BUG-540
     def test_BUG_540_send_to_technical_siege_node_refused(self):
         """Envoyer vers le noeud technique SIEGE (inactif) = pains perdus : doit etre refuse."""
         Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege', 'is_active': False})
@@ -81,7 +80,6 @@ class DirectSendAttacks(SendBase):
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(avail(self.k1, self.bp), 50)
 
-    @expectedFailure  # BUG-540
     def test_BUG_540_send_to_inactive_node_refused(self):
         k9 = Node.objects.create(code='P9', name='Ferme', is_active=False)
         r = self.send(self.u['GERANT'], to=k9.pk)
@@ -477,7 +475,6 @@ class Bug526(Base):
 
 
 class BoolNodeAsPk(CB):
-    @expectedFailure  # BUG-541
     def test_BUG_541_json_true_is_not_node_pk_1(self):
         n = ConsumableMovement.objects.count()
         r = cl(self.u['DIRECTION']).post(DISPATCH, {'consumable_type': 'FLOUR', 'allocations': [
@@ -533,7 +530,6 @@ class Bug527a529(Base):
 
 
 class FloatDestination(SendBase):
-    @expectedFailure  # BUG-541
     def test_BUG_541_float_to_node_is_not_truncated_to_pk(self):
         r = self.send(self.u['GERANT'], to=float(self.k2.pk) + 0.5)
         self.assertEqual(r.status_code, 400, r.status_code)
