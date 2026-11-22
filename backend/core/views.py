@@ -219,6 +219,29 @@ class NodeViewSet(viewsets.ModelViewSet):
     # ProtectedError est traduit en 400, comme pour BreadPrice.
     def destroy(self, request, *args, **kwargs):
         node = self.get_object()
+        # BUG-517 : SIEGE est le nœud technique (attribution du livre de caisse
+        # direction) : jamais supprimable.
+        if node.code == 'SIEGE':
+            return Response(
+                {'detail': (
+                    "Impossible de supprimer le nœud « SIEGE » : c'est un nœud technique "
+                    "utilisé par le livre de caisse de la direction."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # BUG-523 : le fil de discussion de la boulangerie (chat) est en CASCADE ;
+        # on refuse s'il contient des messages (historique à conserver).
+        from chat.models import Message
+        nb_messages = Message.objects.filter(
+            conversation__node=node, conversation__kind='NODE').count()
+        if nb_messages:
+            return Response(
+                {'detail': (
+                    f"Impossible de supprimer la boulangerie « {node.name} » : son fil de "
+                    f"discussion contient {nb_messages} message(s) à conserver."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         active_users = User.objects.filter(node=node, is_active=True).count()
         if active_users:
             return Response(
