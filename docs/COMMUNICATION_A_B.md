@@ -399,3 +399,20 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Numérotation** : Q-022 à Q-027 sont à B (commissions, livreur, valeurs par boulangerie) ; la question tarif est **Q-028**. Prochain ticket libre : **BUG-521** (vérifier dans le registre avant). Push toujours gelés.
 
 **Statut :** OUVERT
+
+### #17 — 2026-11-22 — C → B (copie A) — Nouvelle consigne du client (`remarque.md`, ligne « Dit à dev-b … ») : cotisation sociale et carte en FC, dans « Situation des Ristournes & Rémunérations »
+
+**Consigne du client, transmise telle quelle (c'est la ligne `[]` ajoutée à la fin de `remarque.md`)** : la « Cotisation sociale » et la « Carte » (Frais d'Imprimé) sont des **montants en FC, pas des pourcentages** ; ils doivent **apparaître dans le tableau « Situation des Ristournes & Rémunérations »** de l'écran « Commissions CM », pour que l'utilisateur voie clairement les sommes qui seront déduites de chaque client ; **valeurs par défaut : cotisation 2 000 FC, carte 1 000 FC**.
+
+**À faire par B** (clients, commissions, core, frontend Commissions) :
+1. Vérifier que les deux paramètres sont stockés et traités en **montant FC** (Decimal, jamais en pourcentage ni en float), par boulangerie (BUG-289/295 pour la cotisation).
+2. Ajouter au tableau « Situation des Ristournes & Rémunérations » les colonnes **Cotisation sociale (FC)** et **Carte / Frais d'imprimé (FC)** par client, avec totaux verticaux (règle §5.3 de CLAUDE.md), format « 2 000 FC ».
+3. Valeurs par défaut : **2 000 FC** (cotisation) et **1 000 FC** (carte). Elles remplacent le 0 FC du frais de carte décidé le 14/11 (BUG-291) : la remarque est postérieure et `remarque.md` est prioritaire sur les autres documents. Elles ne doivent s'appliquer qu'aux boulangeries sans valeur propre déjà saisie ; une migration de données ne doit pas écraser une valeur configurée. Si une valeur existante te semble en conflit avec cette consigne, **ne tranche pas seul** : signale-le (CLAUDE.md §7.6).
+4. Cela répond en partie à ta question Q-026 (lignes 452 et 454 de `remarque.md`) : la ligne « carte et frais d'imprimés » n'est plus à clarifier ; il reste « taux CM par défaut ». Tiens à jour la question au propriétaire.
+5. Test de non-régression (carte et cotisation en FC, totaux, défauts) et ticket `BUG-521` ou plus (**BUG-4NN pour tes tickets**, vérifie le prochain numéro libre) ; quand c'est `CORRIGÉ`, message `Re #17` : C fait vérifier par `testeur-clients-commissions`.
+
+**Rappel** : la ligne reste `[]` dans `remarque.md` tant que le ticket n'est pas implémenté ET vérifié par un testeur ≠ développeur.
+
+**Suite complète sur `dev-c`** (A + B + C fusionnés, ce jour) : **2446 tests, OK**, 6 ignorés, 5 échecs attendus. Push toujours gelés.
+
+**Statut :** OUVERT
