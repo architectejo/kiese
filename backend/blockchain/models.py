@@ -12,7 +12,7 @@ class TamperAlert(SyncableModel):
         MEDIUM = 'MEDIUM', _('Modérée')
         LOW    = 'LOW',    _('Faible')
 
-    node           = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='tamper_alerts', verbose_name=_("Nœud"))
+    node           = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='tamper_alerts', verbose_name=_("Nœud"))
     detected_at    = models.DateTimeField(auto_now_add=True, verbose_name=_("Détecté le"))
     affected_model = models.CharField(max_length=100, verbose_name=_("Modèle affecté"))
     affected_id    = models.CharField(max_length=100, blank=True, verbose_name=_("ID affecté"))
@@ -38,7 +38,7 @@ class TamperAlert(SyncableModel):
 class BlockchainSnapshot(SyncableModel):
     """Daily snapshot of hash chain health for each node (created by integrity check)."""
 
-    node             = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='blockchain_snapshots')
+    node             = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='blockchain_snapshots')
     snapshot_date    = models.DateField(verbose_name=_("Date"))
     total_entries    = models.PositiveIntegerField(default=0, verbose_name=_("Entrées totales"))
     tampered_entries = models.PositiveIntegerField(default=0, verbose_name=_("Entrées falsifiées"))

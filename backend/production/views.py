@@ -1034,8 +1034,14 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
 
         user = request.user
+        # BUG-365 : `node` = nœud RÉELLEMENT utilisé (celui de l'appelant hors
+        # siège), jamais l'écho du paramètre de requête.
+        if not user.can_access_all_nodes:
+            effective_node = user.node_id  # None pour un compte sans boulangerie
+        else:
+            effective_node = node_id or (user.node_id if user.node_id else None)
         return Response({
-            'node': node_id or (user.node.pk if user.node_id else None),
+            'node': effective_node,
             'date': date, 'date_from': date_from, 'date_to': date_to,
             **result,
         })

@@ -119,7 +119,6 @@ class TransferIsolation(IsoBase):
         BreadTransferLine.objects.create(transfer=t, bread_price=self.bp, quantity_sent=2)
         return t, f'/api/production/transfers/{t.pk}/'
 
-    @expectedFailure  # BUG-522 (ouvert) : to_node modifiable par PATCH/PUT
     def test_patch_pending_transfer_cannot_rewire_to_node(self):
         """Le demandeur (K1) ne doit pas pouvoir se faire passer pour une autre boulangerie (to_node)."""
         g = cl(self.u['GERANT'])
@@ -130,7 +129,6 @@ class TransferIsolation(IsoBase):
             t.refresh_from_db()
             self.assertEqual(t.to_node_id, self.k1.pk, body)
 
-    @expectedFailure  # BUG-522 (ouvert) : from_node modifiable par PATCH/PUT
     def test_patch_pending_transfer_cannot_rewire_from_node(self):
         g = cl(self.u['GERANT'])
         t, url = self._pending()

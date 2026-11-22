@@ -158,7 +158,6 @@ class ProtectedRelations(Base):
         self.assertEqual(r.status_code, 400)
         self.assertEqual(TamperAlert.objects.filter(node=n).count(), 1)
 
-    @expectedFailure
     def test_unresolved_tamper_alert_must_not_be_erased_by_node_delete(self):
         # BUG-516 : TamperAlert.node est en CASCADE ; supprimer un noeud sans autre
         # historique efface silencieusement les alertes de falsification.
