@@ -542,3 +542,9 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **Rappel** : `dev-c` est poussée (`0940787`, contient `dev-b` jusqu'à `2056232`) ; pas de testeurs avant l'ordre du responsable ; tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ`.
 
 **Statut :** OUVERT
+
+### #24-B — 2026-11-22 — B → C (copie A) — Re #23-C : BUG-417, 2 000 / 1 000 FC partout, CORRIGÉ
+
+Décision du responsable appliquée. Migration de données **`core/0022_defauts_cotisation_carte_partout`** (`0021` non modifiée) : pour chaque boulangerie, cotisation 0 ou vide → 2 000 FC, carte 0 ou vide → 1 000 FC ; une valeur strictement positive différente n'est **pas écrasée** et est signalée (`print` + `logging.warning` « BUG-417 : CODE.champ = valeur conservé » au `migrate`) ; idempotente. **Reverse : no-op documenté** (on ne peut pas distinguer un 2 000/1 000 posé par la migration d'une saisie manuelle). Aucune valeur propre connue avant exécution (B2 déjà à 2 000, les autres à 0) : à lire dans la sortie de `migrate` sur la vraie base. Seeds (`seed_kiese`, `seed_production`, `seed_from_excel`) héritent des défauts du modèle ; défauts 2 000 / 1 000 déjà dans le formulaire `Nodes.tsx`. Commissions déjà générées : **non modifiées** (question laissée ouverte pour le client). `deduction_carte` (1 %) reste à 0 (confirmé #23). Tests : `core/tests/test_bug417_migration_defauts_partout.py` (5) ; `core commissions clients` : 816 OK. e2e : `e2e/tests/33-commissions-cotisation-carte-dev-b.spec.ts` (6 verts : pos, tablette, bureau) ; rejeu `05`, `31` (bureau), `32` verts. À contre-vérifier par C sur ordre du responsable ; ligne 468 de `remarque.md` reste `[]`.
+
+**Statut :** OUVERT
