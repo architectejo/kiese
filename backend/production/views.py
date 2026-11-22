@@ -204,10 +204,12 @@ def _get_or_create_consumable_stock(node, code):
     return stock
 
 
-def _record_consumable_exits(session, user, extra_consumables=None):
+def _record_consumable_exits(session, user, extra_consumables=None, flour_sacks=None):
     """
     Create ConsumableMovement EXIT records for all consumables used in a session.
-    - Flour is auto-derived from session.flour_sacks_used.
+    - Flour is auto-derived from session.flour_sacks_used, ou de `flour_sacks`
+      quand il est fourni (BUG-502 : sur une déclaration additionnelle du même
+      jour/équipe, seuls les sacs AJOUTÉS par la requête sortent du stock).
     - extra_consumables: list of {consumable_type, quantity} dicts for salt/yeast/oil.
     Each creation triggers ConsumableMovement.save() which decrements ConsumableStock
     (BUG-143, annule BUG-041 : la sortie n'est plus jamais refusée si elle dépasse le
@@ -219,7 +221,7 @@ def _record_consumable_exits(session, user, extra_consumables=None):
     from django.db import transaction
     node = session.node
     desc = f"Fournée Éq.{session.team} {session.date}"
-    entries = [('FLOUR', session.flour_sacks_used)]
+    entries = [('FLOUR', session.flour_sacks_used if flour_sacks is None else flour_sacks)]
     if extra_consumables:
         # `extra_consumables` est déjà validé/normalisé par
         # `_parse_consumables_used` (BUG-219) : quantités `Decimal` finies.
@@ -895,6 +897,7 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
             processed_entries = _record_consumable_exits(
                 session, user,
                 extra_consumables=extra_consumables,
+                flour_sacks=flour_add or 0,
             )
         except DjangoValidationError as exc:
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
@@ -1129,6 +1132,22 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
                 if not bp_id:
                     return Response(
                         {'detail': "« remaining » : catégorie de pain (bread_price) requise."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # BUG-510 : identifiant de catégorie entier borné uniquement
+                # (pas de chaîne non numérique, liste, objet, ni hors bornes).
+                if isinstance(bp_id, bool) or not isinstance(bp_id, (int, str)):
+                    return Response(
+                        {'detail': "« remaining » : catégorie de pain (bread_price) invalide."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                try:
+                    bp_id = int(bp_id)
+                except (TypeError, ValueError):
+                    bp_id = None
+                if bp_id is None or not (0 < bp_id < 2 ** 63):
+                    return Response(
+                        {'detail': "« remaining » : catégorie de pain (bread_price) invalide."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 # BUG-303 (remarque.md, 2026-11-19, postérieure à BUG-158 du
@@ -2359,6 +2378,24 @@ def _resolve_node(node_param):
     return Node.objects.filter(code__iexact=str(node_param)).first()
 
 
+def _full_price_from_frozen_soldee(line):
+    """BUG-508 : prix plein d'une ligne soldée, déduit du prix FIGÉ (75 % arrondi
+    au franc, cf. `InvoiceLine.save`) pour que le rapport d'une journée passée ne
+    bouge pas après un changement de tarif. En cas d'ambiguïté d'arrondi (deux
+    prix pleins donnent le même prix figé), le tarif courant l'emporte s'il est
+    compatible, sinon on prend le plus proche de unit_price / 0,75."""
+    from sales.models import SOLDEE_PRICE_RATIO
+    frozen = Decimal(line.unit_price)
+
+    def _freeze(p):
+        return (Decimal(p) * SOLDEE_PRICE_RATIO).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+
+    catalog = Decimal(line.bread_price.unit_price)
+    if _freeze(catalog) == frozen:
+        return catalog
+    return (frozen / SOLDEE_PRICE_RATIO).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+
+
 def _build_daily_closure_report(node, report_date=None):
     """
     BUG-120 : construit le rapport de clôture journalier consolidé pour
@@ -2493,7 +2530,7 @@ def _build_daily_closure_report(node, report_date=None):
         entry = regularisation_by_bp.setdefault(line.bread_price_id, {'qty': 0, 'fc': Decimal('0.00')})
         entry['qty'] += line.quantity or 0
         entry['fc'] += (
-            Decimal(line.quantity) * Decimal(line.bread_price.unit_price)
+            Decimal(line.quantity) * _full_price_from_frozen_soldee(line)
             if line.invoice.is_soldee else Decimal(line.line_total)
         )
 
@@ -2584,6 +2621,7 @@ def _build_daily_closure_report(node, report_date=None):
     # Absence de confirmation pour ce jour/équipe = comportement auto-dérivé
     # strictement inchangé (rétro-compatibilité totale).
     confirmed_reste_du_hier_by_team_bp = {}
+    day_team_confirmed_at_by_bp = {}  # BUG-509
     handover_confirmations = []
     # BUG-247 : reste de FIN DE JOURNÉE (rotation) = dernier reste déclaré de la
     # date, une fois TOUTES les sessions de la date clôturées ; tant qu'une
@@ -2609,6 +2647,8 @@ def _build_daily_closure_report(node, report_date=None):
             continue
         for line in confirmation.lines.all():
             confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
+            if rotation:
+                day_team_confirmed_at_by_bp[line.bread_price_id] = confirmation.confirmed_at
     confirmed_bp_ids_any_team = {bp_id for (_team, bp_id) in confirmed_reste_du_hier_by_team_bp}
     # BUG-304 : reste d'hier du JOUR (indépendant des équipes) hors rotation =
     # stock de départ confirmé le plus tôt dans la journée, sinon dernier reste
@@ -2716,6 +2756,12 @@ def _build_daily_closure_report(node, report_date=None):
             handover_adjust = 0
             for confirmed_at, qty_by_bp in handover_confirmations:
                 if bp_id not in qty_by_bp:
+                    continue
+                # BUG-509 : une confirmation de l'équipe de service du jour,
+                # POSTÉRIEURE à celle de relève, fait foi (dernière valeur
+                # confirmée) : l'écart de relève antérieur est déjà absorbé.
+                day_conf_at = day_team_confirmed_at_by_bp.get(bp_id)
+                if day_conf_at is not None and confirmed_at <= day_conf_at:
                     continue
                 before = (
                     DailyBreadStockSnapshot.objects
