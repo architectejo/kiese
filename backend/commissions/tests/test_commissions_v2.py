@@ -336,7 +336,6 @@ class ParametresInvalidesTests(Base):
             self.assertEqual(api(u).post(GEN, {'node': self.n1.pk, 'month': 2, 'year': 2026}, format='json').status_code, 403)
         self.assertIn(APIClient().post(GEN, {}, format='json').status_code, (401, 403))
 
-    @expectedFailure   # BUG-744 : `period` non UUID -> 500
     def test_payroll_listing_period_non_uuid_400(self):
         url = COMM + 'payroll_listing/'
         for bad in ('pas-uuid', '123', "x' OR 1=1", '9' * 50):
@@ -378,7 +377,6 @@ class ParametresInvalidesTests(Base):
             with self.subTest(params=params):
                 self.assertEqual(api(self.direction).get(PERIODS, params).status_code, 400, params)
 
-    @expectedFailure   # BUG-745 : NaN/Infinity/hors plage -> 500 et valeur illisible persistee
     def test_set_manuel_valeurs_non_finies_refusees(self):
         c = make_client(self.n1)
         self.invoice(self.n1, c, 100)
@@ -538,13 +536,11 @@ class ClientMultiBoulangerieTests(Base):
         self.assertEqual(self.row(self.p1, self.c).deduction_prints, D('1000.00'))
         self.assertEqual(self.row(self.p1, self.c).commission_gross, D('12500.00'))
 
-    @expectedFailure   # BUG-737
     def test_dette_du_client_retenue_une_seule_fois_sur_l_ensemble_des_boulangeries(self):
         """BP 10 000 FC : la somme des retenues dette sur les deux listings doit valoir 10 000, pas 20 000 (BUG-737)."""
         total = sum(r.deduction_debt for r in ClientCommission.objects.filter(client=self.c))
         self.assertEqual(total, D('10000.00'))
 
-    @expectedFailure   # BUG-737
     def test_cotisation_sociale_retenue_une_seule_fois_par_mois(self):
         """La cotisation mensuelle (1 500 FC de la boulangerie de rattachement) ne doit être retenue qu'une fois (BUG-737)."""
         total = sum(r.deduction_social for r in ClientCommission.objects.filter(client=self.c))

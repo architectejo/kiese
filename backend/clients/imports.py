@@ -1,6 +1,9 @@
 import re
+import unicodedata
 
 import openpyxl
+
+NAME_MAX_LENGTH = 100  # Client.first_name / last_name
 
 # Sheet tab names look like "CL-K1 TABO", "CL- K5 MPIANG", "CL-B1 KUMB" — the
 # node code is always a token like K1..K9 or B1..B9 somewhere in the name.
@@ -12,6 +15,8 @@ def split_name(raw_name: str):
     the same convention used by the manual client-creation form in the
     frontend (Clients.tsx): first word = first_name, remaining words =
     last_name, or the first word repeated when there is only one word."""
+    # BUG-746 : forme NFC (classeurs saisis sous macOS en NFD) pour comparer et stocker.
+    raw_name = unicodedata.normalize('NFC', raw_name)
     parts = raw_name.strip().split()
     first = parts[0] if parts else raw_name.strip()
     last = ' '.join(parts[1:]) or first

@@ -102,7 +102,6 @@ class RechercheTests(Base):
                 r = api(self.f1).get(CL, {'search': term})
                 self.assertIn(str(c.id), [x['id'] for x in results(r)])
 
-    @expectedFailure   # BUG-743 : SQLite LIKE ASCII seulement
     def test_recherche_accent_majuscule_trouve_en_minuscule(self):
         """Prénom commençant par une majuscule accentuée (Élodie, Éric...) : taper « élodie »
         doit le trouver (SQLite LIKE ne replie la casse qu'en ASCII) - BUG-743."""
@@ -363,7 +362,6 @@ class BulkTests(Base):
             self.assertEqual(api(u).post(CL + 'bulk_delete/', {'ids': [str(a.id)]}, format='json').status_code, 403)
         self.assertEqual(api(self.comptable).post(CL + 'bulk_move/', {'ids': [str(a.id)], 'node': self.k3.pk}, format='json').status_code, 200)
 
-    @expectedFailure   # BUG-741 : ids/node invalides -> 500
     def test_bulk_move_parametres_invalides_400_pas_500(self):
         a = self.mk(self.k1, 'A', 'A')
         for payload in ({'ids': ['pas-un-uuid'], 'node': self.k3.pk},
@@ -375,7 +373,6 @@ class BulkTests(Base):
                 r = api(self.direction).post(CL + 'bulk_move/', payload, format='json')
                 self.assertEqual(r.status_code, 400, (payload, r.status_code))
 
-    @expectedFailure   # BUG-741 : ids invalides -> 500
     def test_bulk_delete_parametres_invalides_400_pas_500(self):
         for payload in ({'ids': ['pas-un-uuid']}, {'ids': 'abc'}, {}):
             with self.subTest(payload=payload):
@@ -497,14 +494,12 @@ class ImportTests(Base):
         c = Client.objects.get(node=self.k1)
         self.assertEqual((c.first_name, c.last_name), ('Madame', 'Madame'))
 
-    @expectedFailure   # BUG-746 : nom > 100 caracteres stocke tel quel
     def test_nom_trop_long_n_est_pas_ecrit_tronque_ni_500(self):
         r = upload(self.direction, make_xlsx({'CL-K1': ['X' * 150 + ' Dupont']}))
         self.assertIn(r.status_code, (200, 400))
         for c in Client.objects.all():
             self.assertLessEqual(len(c.first_name), 100)
 
-    @expectedFailure   # BUG-746 : doublon NFC/NFD non detecte
     def test_normalisation_unicode_nfc_nfd_detectee_comme_doublon(self):
         nfc = unicodedata.normalize('NFC', 'Élodie Mukendi')
         nfd = unicodedata.normalize('NFD', 'Élodie Mukendi')
@@ -551,7 +546,6 @@ class CaisseSocialeTests(Base):
         self.assertEqual(r.status_code, 403)
         self.assertEqual(SocialContribution.objects.count(), 0)
 
-    @expectedFailure   # BUG-739 : mois/annee/montant non valides (200 ou 500)
     def test_bulk_create_month_parametres_invalides_400(self):
         for payload in ({'month': 13, 'year': 2026}, {'month': 0, 'year': 2026}, {'month': 'abc', 'year': 2026},
                         {'month': 3, 'year': 'abc'}, {'month': 3, 'year': -5}, {'month': 3, 'year': 99999999999},
@@ -666,7 +660,6 @@ class CaisseSocialeTests(Base):
         self.assertEqual(r.data['remise'], '1400.00')
         self.assertEqual(r.data['total_payer'], '5400.00')
 
-    @expectedFailure   # BUG-740 : indice hors plage / merite negatif acceptes
     def test_ligne_valeurs_negatives_ou_hors_borne_refusees(self):
         d = self._distribution().data
         for bad in ({'indice': -1}, {'indice': 100000}, {'total_social': '-5'}, {'merite': '-5'},
