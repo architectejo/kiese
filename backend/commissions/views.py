@@ -1,7 +1,10 @@
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import F, Q, Sum
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -51,7 +54,7 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                             status=status.HTTP_400_BAD_REQUEST)
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
+    @action(detail=False, methods=['get'], permission_classes=[IsHeadquarters])  # BUG-705 : siège uniquement
     def history(self, request):
         """Last N commission periods for a node with aggregates (total CM, net, paid)."""
         from core.mixins import parse_node_param
@@ -119,8 +122,24 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         node_id = request.data.get('node')
         month   = request.data.get('month')
         year    = request.data.get('year')
-        if not all([node_id, month, year]):
+        if node_id in (None, '') or month in (None, '') or year in (None, ''):
             return Response({'detail': '`node`, `month` et `year` sont requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        # BUG-736 : validation stricte (jamais de 500 sur paramètres invalides).
+        node_id = parse_node_param(node_id)
+        try:
+            if isinstance(month, (bool, list, dict)) or isinstance(year, (bool, list, dict)):
+                raise ValueError
+            month = int(str(month).strip())
+            year = int(str(year).strip())
+        except (TypeError, ValueError):
+            return Response({'detail': 'Paramètres « month » et « year » invalides : entiers attendus.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not 1 <= month <= 12:
+            return Response({'detail': 'Paramètre « month » invalide : un mois entre 1 et 12 est attendu.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not 2000 <= year <= 2100:
+            return Response({'detail': 'Paramètre « year » invalide : une année entre 2000 et 2100 est attendue.'},
+                            status=status.HTTP_400_BAD_REQUEST)
         try:
             node = Node.objects.get(pk=node_id)
         except Node.DoesNotExist:
@@ -307,61 +326,79 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         data['count'] = qs.count()
         return Response(data)
 
+    def _get_locked_object(self):
+        """BUG-735 : ligne verrouillée (select_for_update) ; à appeler dans transaction.atomic()."""
+        obj = get_object_or_404(self.get_queryset().select_for_update(of=('self',)), pk=self.kwargs['pk'])
+        self.check_object_permissions(self.request, obj)
+        return obj
+
     @action(detail=True, methods=['post'], permission_classes=[IsDirection])
     def mark_paid(self, request, pk=None):
-        commission = self.get_object()
-        if commission.is_paid:
-            return Response({'detail': 'Commission déjà marquée comme payée.'}, status=status.HTTP_400_BAD_REQUEST)
-        # BUG-266 : un net négatif est reporté comme dette, il ne se « paie » pas.
-        if Decimal(str(commission.net_payable)) < 0:
-            return Response(
-                {'detail': 'Net à payer négatif : paiement impossible, le solde est reporté comme dette sur la période suivante.'},
-                status=status.HTTP_400_BAD_REQUEST)
-        paid_by = request.data.get('paid_by', request.user.get_full_name())
-        commission.mark_paid(paid_by)
-        log_activity(
-            request.user, "Paiement Commission",
-            f"Commission de {commission.client.full_name} ({commission.period}) payée : {commission.net_payable} FC.",
-            node_origin=commission.period.node.code
-        )
+        with transaction.atomic():
+            commission = self._get_locked_object()
+            if commission.is_paid:
+                return Response({'detail': 'Commission déjà marquée comme payée.'}, status=status.HTTP_400_BAD_REQUEST)
+            # BUG-266 : un net négatif est reporté comme dette, il ne se « paie » pas.
+            if Decimal(str(commission.net_payable)) < 0:
+                return Response(
+                    {'detail': 'Net à payer négatif : paiement impossible, le solde est reporté comme dette sur la période suivante.'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            paid_by = request.data.get('paid_by', request.user.get_full_name())
+            # Mise à jour conditionnelle : garde-fou même sans verrou de ligne (SQLite).
+            rows = ClientCommission.objects.filter(pk=commission.pk, is_paid=False).update(
+                is_paid=True, paid_at=timezone.now(), paid_by=paid_by)
+            if not rows:
+                return Response({'detail': 'Commission déjà marquée comme payée.'}, status=status.HTTP_400_BAD_REQUEST)
+            commission.refresh_from_db()
+            log_activity(
+                request.user, "Paiement Commission",
+                f"Commission de {commission.client.full_name} ({commission.period}) payée : {commission.net_payable} FC.",
+                node_origin=commission.period.node.code
+            )
         return Response(ClientCommissionSerializer(commission).data)
 
     @action(detail=True, methods=['patch'], permission_classes=[IsDirection])
     def set_manuel(self, request, pk=None):
         """Override net_payable with a manual adjustment (DIRECTION only)."""
-        commission = self.get_object()
-        locked = self._locked_response(commission)
-        if locked is not None:
-            return locked
         config = Config.get_instance()
         adj = request.data.get('manuel_adjustment')
         notes = request.data.get('manuel_notes', '')
-        if adj is None:
-            # Clear the manual override
-            commission.manuel_adjustment = None
-            commission.manuel_notes = ''
-        else:
-            try:
-                from decimal import Decimal as D
-                commission.manuel_adjustment = D(str(adj))
-            except Exception:
-                return Response({'detail': 'Valeur invalide pour manuel_adjustment.'}, status=status.HTTP_400_BAD_REQUEST)
-            commission.manuel_notes = notes
-        commission.compute(float(config.annual_bonus_rate))
-        commission.save(update_fields=[
-            'commission_gross', 'annual_bonus',
-            'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
-            'net_ordi', 'net_carte', 'net_payable',
-            'manuel_adjustment', 'manuel_notes',
-        ])
-        log_activity(
-            request.user, "Ajustement Manuel CM",
-            f"Commission {commission.client.full_name} ({commission.period}) — ajustement : {commission.manuel_adjustment} FC.",
-            node_origin=commission.period.node.code
-        )
+        with transaction.atomic():
+            commission = self._get_locked_object()
+            locked = self._locked_response(commission)
+            if locked is not None:
+                return locked
+            if adj is None:
+                # Clear the manual override
+                commission.manuel_adjustment = None
+                commission.manuel_notes = ''
+            else:
+                try:
+                    commission.manuel_adjustment = Decimal(str(adj))
+                except Exception:
+                    return Response({'detail': 'Valeur invalide pour manuel_adjustment.'}, status=status.HTTP_400_BAD_REQUEST)
+                commission.manuel_notes = notes
+            commission.compute(float(config.annual_bonus_rate))
+            fields = [
+                'commission_gross', 'annual_bonus',
+                'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
+                'net_ordi', 'net_carte', 'net_payable',
+                'manuel_adjustment', 'manuel_notes',
+            ]
+            # BUG-735 : écriture conditionnelle, jamais sur une commission payée entre-temps.
+            rows = ClientCommission.objects.filter(pk=commission.pk, is_paid=False).update(
+                **{f: getattr(commission, f) for f in fields})
+            if not rows:
+                return Response({'detail': 'Commission payée : modification impossible.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            log_activity(
+                request.user, "Ajustement Manuel CM",
+                f"Commission {commission.client.full_name} ({commission.period}) — ajustement : {commission.manuel_adjustment} FC.",
+                node_origin=commission.period.node.code
+            )
         return Response(ClientCommissionSerializer(commission).data)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
+    @action(detail=False, methods=['get'], permission_classes=[IsHeadquarters])  # BUG-705 : siège uniquement
     def payroll_listing(self, request):
         """Return unpaid commissions for a given period (for the pay register)."""
         period_id = request.query_params.get('period')

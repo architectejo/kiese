@@ -6,6 +6,8 @@ JWT utilisateur, sauf `/api/sync/conflicts/` qui reste une route siège
 classique (JWT + IsHeadquarters).
 """
 
+import hashlib
+import json
 import random
 import time
 import uuid
@@ -104,21 +106,40 @@ class PushView(APIView):
 
     def _post_once(self, request):
         node = request.auth.node
-        batch_id_raw = request.data.get('batch_id')
+        data = request.data
+        if not isinstance(data, dict):
+            return Response({'detail': "Corps de requête invalide : un objet JSON est attendu."}, status=status.HTTP_400_BAD_REQUEST)
+        batch_id_raw = data.get('batch_id')
+        if not isinstance(batch_id_raw, str):
+            return Response({'detail': "batch_id manquant ou invalide (UUID attendu)."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            batch_id = uuid.UUID(str(batch_id_raw))
+            batch_id = uuid.UUID(batch_id_raw)
         except (TypeError, ValueError):
             return Response({'detail': "batch_id manquant ou invalide (UUID attendu)."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Idempotence de lot (SYNC.md §3.3/§3.6) : un batch_id déjà traité
-        # renvoie le résultat archivé sans ré-exécuter la logique métier.
-        existing_batch = SyncBatchLog.objects.filter(batch_id=batch_id).first()
-        if existing_batch is not None:
-            return Response({'batch_id': str(batch_id), 'results': existing_batch.result, 'replayed': True})
-
-        records_by_model = request.data.get('records') or {}
+        records_by_model = data.get('records') or {}
         if not isinstance(records_by_model, dict):
             return Response({'detail': "'records' doit être un objet {modèle: [enregistrements]}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # BUG-726 : empreinte du contenu du lot (déterministe).
+        fingerprint = hashlib.sha256(
+            json.dumps(records_by_model, sort_keys=True, default=str, ensure_ascii=False).encode('utf-8')
+        ).hexdigest()
+
+        # Idempotence de lot (SYNC.md §3.3/§3.6) : un batch_id déjà traité PAR
+        # CE NŒUD renvoie le résultat archivé sans ré-exécuter la logique
+        # métier. Le journal est indexé sur (nœud, batch_id) : le lot d'un
+        # autre nœud n'est jamais visible (BUG-726). Même batch_id avec un
+        # contenu différent = conflit explicite, jamais avalé en silence.
+        existing_batch = SyncBatchLog.objects.filter(node=node, batch_id=batch_id).first()
+        if existing_batch is not None:
+            if existing_batch.fingerprint and existing_batch.fingerprint != fingerprint:
+                return Response(
+                    {'detail': "Ce batch_id a déjà été utilisé avec un contenu différent : "
+                               "générez un nouveau batch_id pour ce lot."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            return Response({'batch_id': str(batch_id), 'results': existing_batch.result, 'replayed': True})
 
         results = process_push_batch(node, records_by_model)
 
@@ -129,7 +150,9 @@ class PushView(APIView):
         )
         batch_status = SyncBatchLog.Status.PARTIAL if any_rejected else SyncBatchLog.Status.OK
 
-        SyncBatchLog.objects.create(batch_id=batch_id, node=node, status=batch_status, result=results)
+        SyncBatchLog.objects.create(
+            batch_id=batch_id, node=node, status=batch_status, result=results, fingerprint=fingerprint,
+        )
         Node.objects.filter(pk=node.pk).update(last_sync=timezone.now())
 
         return Response({'batch_id': str(batch_id), 'results': results, 'replayed': False})

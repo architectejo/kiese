@@ -22,6 +22,7 @@ Si le payload ne contient pas de `username` exploitable (requête
 malformée), `LoginAccountRateThrottle` retombe sur l'IP afin que l'endpoint
 reste toujours protégé.
 """
+from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import SimpleRateThrottle
 
 
@@ -31,7 +32,12 @@ class LoginAccountRateThrottle(SimpleRateThrottle):
     scope = 'login'
 
     def get_cache_key(self, request, view):
-        username = (request.data.get('username') or '').strip().lower()
+        data = request.data
+        raw = data.get('username') if hasattr(data, 'get') else None
+        if raw is not None and not isinstance(raw, str):
+            # BUG-702 : liste / nombre / objet -> 400 au lieu d'une erreur 500.
+            raise ValidationError({'detail': "Le champ « username » doit être une chaîne de caractères."})
+        username = (raw or '').strip().lower()
         ident = username or self.get_ident(request)
         return self.cache_format % {'scope': self.scope, 'ident': ident}
 
