@@ -17,6 +17,8 @@ import { ReconciliationPanel, ClosureSummaryCard } from '@/components/production
 import { StockDuJourSection } from '@/components/production/StockDuJourSection';
 import { OpeningConfirmationManualSection } from '@/components/production/OpeningConfirmationManualSection';
 import { TransferDisputeCard } from '@/components/production/TransferDisputeCard';
+import { DirectSendModal } from '@/components/production/DirectSendModal';
+import { DirectSendsOutgoing } from '@/components/production/DirectSendsOutgoing';
 import { BatchInProgressPanel } from '@/components/production/BatchInProgressPanel';
 import { CloseSessionModal } from '@/components/production/CloseSessionModal';
 
@@ -210,6 +212,9 @@ export const Production: React.FC = () => {
   const [tSending, setTSending]   = useState(false);
   const [tSuccess, setTSuccess]   = useState<string | null>(null);
   const [transferNotice, setTransferNotice] = useState<string | null>(null);
+  // BUG-382 : envoi direct de pains (modale) et message de succès persistant.
+  const [showDirectSend, setShowDirectSend] = useState(false);
+  const [directNotice, setDirectNotice] = useState<string | null>(null);
   const [transferActionError, setTransferActionError] = useState<string | null>(null);
   // respondQtys: transferId → { breadPriceId → qty_sent } (B fills when responding)
   const [respondQtys, setRespondQtys] = useState<Record<string, Record<number, number>>>({});
@@ -501,6 +506,9 @@ export const Production: React.FC = () => {
   const respondedToMe    = transfers.filter(t => t.transfer_status === 'RESPONDED' && (!effectiveNode || isNode(t.to_node)));
   const disputedTrans    = transfers.filter(t => t.transfer_status === 'DISPUTED' && (!effectiveNode || isNode(t.from_node) || isNode(t.to_node)));
   const actionCount      = pendingRequests.length + respondedToMe.length;
+  // BUG-382 : mes envois directs encore à valider par la réceptrice (lecture seule).
+  const outgoingDirect    = transfers.filter(t => t.flow === 'DIRECT' && t.transfer_status === 'RESPONDED' && isNode(t.from_node));
+  const canDirectSend     = !!user && user.role !== 'FACTURIER' && user.role !== 'LIVREUR';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '0.85rem' }}>
@@ -880,6 +888,23 @@ export const Production: React.FC = () => {
 
           {/* STEP 1 — A creates request FROM B */}
           <div>
+            {canDirectSend && (
+              <div style={{ marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid hsl(var(--border-color))' }}>
+                <h3 style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '4px', color: 'hsl(var(--text-secondary))' }}>Envoyer des Pains</h3>
+                <p style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '8px' }}>
+                  Envoyez des pains à une autre boulangerie sans attendre sa demande ; elle confirmera la réception.
+                </p>
+                <button type="button" onClick={() => { setDirectNotice(null); setShowDirectSend(true); }} className="btn btn-primary" style={{ width: '100%', minHeight: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.75rem' }}>
+                  <FiArrowRight /> Envoyer des pains
+                </button>
+                {directNotice && (
+                  <div role="status" style={{ marginTop: '8px', fontSize: '0.68rem', fontWeight: 600, color: 'hsl(var(--color-success))', backgroundColor: 'hsl(var(--color-success) / 0.1)', border: '1px solid hsl(var(--color-success) / 0.4)', padding: '6px 8px', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                    <span>✓ {directNotice}</span>
+                    <button type="button" onClick={() => setDirectNotice(null)} aria-label="Fermer le message" style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '0 2px' }}>×</button>
+                  </div>
+                )}
+              </div>
+            )}
             <h3 style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '4px', color: 'hsl(var(--text-secondary))' }}>Faire une Demande de Pains</h3>
             <p style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginBottom: '8px' }}>
               Sélectionnez la boulangerie qui vous enverra les pains et indiquez les quantités souhaitées.
@@ -1009,6 +1034,8 @@ export const Production: React.FC = () => {
               </div>
             )}
 
+            <DirectSendsOutgoing transfers={outgoingDirect} />
+
             {/* STEP 3 — A (to_node) confirms receipt of responded transfers */}
             {respondedToMe.length > 0 && (
               <div>
@@ -1021,12 +1048,19 @@ export const Production: React.FC = () => {
                     <div key={t.id} style={{ backgroundColor: 'hsl(var(--color-info) / 0.05)', border: '1px solid hsl(var(--color-info) / 0.4)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <div style={{ fontSize: '0.72rem' }}>
-                          <span style={{ fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{t.from_node_display || t.from_node}</span>
-                          <FiArrowRight style={{ margin: '0 4px' }} />
-                          <span style={{ fontWeight: 800 }}>{t.to_node_display || t.to_node}</span>
+                          {t.flow === 'DIRECT' ? (
+                            <span style={{ fontWeight: 800, color: 'hsl(var(--accent-color))' }}>Envoi direct de {t.from_node_display || t.from_node}</span>
+                          ) : (
+                            <>
+                              <span style={{ fontWeight: 800, color: 'hsl(var(--accent-color))' }}>{t.from_node_display || t.from_node}</span>
+                              <FiArrowRight style={{ margin: '0 4px' }} />
+                              <span style={{ fontWeight: 800 }}>{t.to_node_display || t.to_node}</span>
+                            </>
+                          )}
                         </div>
-                        <span className="badge badge-info" style={{ fontSize: '0.52rem' }}>RÉCEPTIONNÉ</span>
+                        <span className="badge badge-info" style={{ fontSize: '0.52rem' }}>{t.flow === 'DIRECT' ? 'À CONFIRMER' : 'RÉCEPTIONNÉ'}</span>
                       </div>
+                      {t.flow === 'DIRECT' && <div style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginBottom: '4px' }}>Envoyé spontanément : vous n'aviez pas fait de demande. Vérifiez les quantités reçues.</div>}
                       {t.notes && <div style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginBottom: '6px', fontStyle: 'italic' }}>{t.notes}</div>}
 
                       <div style={{ fontSize: '0.6rem', fontWeight: 700, color: 'hsl(var(--text-muted))', marginBottom: '4px', textTransform: 'uppercase' }}>
@@ -1070,7 +1104,7 @@ export const Production: React.FC = () => {
                         className="btn btn-primary"
                         style={{ width: '100%', padding: '5px', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
                       >
-                        <FiCheckCircle /> Confirmer la Réception
+                        <FiCheckCircle /> {t.flow === 'DIRECT' ? 'Confirmer la réception' : 'Confirmer la Réception'}
                       </button>
                     </div>
                   ))}
@@ -1079,7 +1113,7 @@ export const Production: React.FC = () => {
             )}
 
             {/* Empty state */}
-            {pendingRequests.length === 0 && respondedToMe.length === 0 && disputedTrans.length === 0 && (
+            {pendingRequests.length === 0 && respondedToMe.length === 0 && disputedTrans.length === 0 && outgoingDirect.length === 0 && (
               <div style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-muted))', fontSize: '0.7rem' }}>
                 <FiCheckCircle style={{ fontSize: '1.4rem', opacity: 0.3, display: 'block', margin: '0 auto 5px' }} />
                 Aucune action en attente.
@@ -1115,7 +1149,7 @@ export const Production: React.FC = () => {
                 {transfers.filter(t => t.transfer_status === 'CONFIRMED' && (!effectiveNode || isNode(t.from_node) || isNode(t.to_node))).slice(0, 3).map(t => (
                   <div key={t.id} style={{ fontSize: '0.62rem', color: 'hsl(var(--text-secondary))', display: 'flex', justifyContent: 'space-between', padding: '3px 6px', backgroundColor: 'hsl(var(--color-success) / 0.04)', borderRadius: '3px', marginBottom: '2px' }}>
                     <span>
-                      {t.from_node_display} → {t.to_node_display}
+                      {t.flow === 'DIRECT' ? `Envoi direct de ${t.from_node_display} → ${t.to_node_display}` : `${t.from_node_display} → ${t.to_node_display}`}
                       {(t.lines || []).map(l => <span key={l.bread_price} style={{ marginLeft: '5px' }}>{l.bread_price_display}: {l.quantity_received ?? l.quantity_sent}</span>)}
                     </span>
                     <span style={{ fontWeight: 700, color: 'hsl(var(--color-success))' }}>✓</span>
@@ -1242,6 +1276,16 @@ export const Production: React.FC = () => {
       )}
 
       {/* ═══ MODAL VOIR PLUS — Toutes les fournées ═══ */}
+      <DirectSendModal
+        isOpen={showDirectSend}
+        onClose={() => setShowDirectSend(false)}
+        nodes={nodes}
+        senderNodeId={effectiveNode}
+        breadPrices={breadPrices}
+        breadStocks={breadStocks}
+        onSent={async (msg) => { setDirectNotice(msg); await loadData(); }}
+      />
+
       <Modal
         isOpen={showAllSessionsModal}
         onClose={() => setShowAllSessionsModal(false)}

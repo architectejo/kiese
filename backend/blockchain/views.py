@@ -3,11 +3,13 @@ from datetime import date
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.models import Node
 from core.permissions import IsHeadquarters
+from kiese.node_guard import resolve_node_param
 from treasury.hashing import verify_cashbook_chain, check_cashbook_head
 from .models import TamperAlert, BlockchainSnapshot
 from .serializers import TamperAlertSerializer, BlockchainSnapshotSerializer
@@ -97,7 +99,10 @@ class TamperAlertViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         node_id = self.request.query_params.get('node')
         if node_id:
-            qs = qs.filter(node_id=node_id)
+            node, err = resolve_node_param(node_id)  # BUG-529 : inconnu -> 400
+            if err is not None:
+                raise ValidationError(err.data)
+            qs = qs.filter(node_id=node.pk)
         resolved = self.request.query_params.get('resolved')
         if resolved is not None:
             qs = qs.filter(is_resolved=resolved.lower() == 'true')
@@ -124,7 +129,10 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         qs = super().get_queryset()
         node_id = self.request.query_params.get('node')
         if node_id:
-            qs = qs.filter(node_id=node_id)
+            node, err = resolve_node_param(node_id)  # BUG-529 : inconnu -> 400
+            if err is not None:
+                raise ValidationError(err.data)
+            qs = qs.filter(node_id=node.pk)
         return qs
 
     @action(detail=False, methods=['post'])
@@ -134,7 +142,13 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         Creates a BlockchainSnapshot and TamperAlert records for violations.
         """
         node_id = request.data.get('node') or request.query_params.get('node')
-        nodes = Node.objects.filter(pk=node_id) if node_id else Node.objects.all()
+        if node_id:
+            node, err = resolve_node_param(node_id)  # BUG-529 : inconnu -> 400
+            if err is not None:
+                return err
+            nodes = Node.objects.filter(pk=node.pk)
+        else:
+            nodes = Node.objects.all()
 
         chain_results = _verify_full_chain()
         head_problem, head_node_code = _check_head()

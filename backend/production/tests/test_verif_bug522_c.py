@@ -87,6 +87,7 @@ class ImmutableMatrix(Bug522Base):
             'node_origin': 'ZZ', 'is_synced': True, 'created_at': '2001-01-01T00:00:00Z',
             'updated_at': '2001-01-01T00:00:00Z', 'from_node': self.k3.pk, 'to_node': self.k3.pk,
             'request_status': 'X', 'request_quantity': 5, 'transfer_type': 'GIFT',
+            'flow': 'DIRECT',  # BUG-380 : nouveau champ du modele, lecture seule
             'quantity_gap': 0, 'total_sent': 0, 'lines': [{'bread_price': self.bp.pk, 'quantity_sent': 500}],
         }
         names = {f.name for f in BreadTransfer._meta.concrete_fields}

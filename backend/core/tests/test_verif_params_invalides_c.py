@@ -103,19 +103,15 @@ class ParamsInvalides(IsoBase):
     def test_production_aucun_500(self):
         self.assertEqual(self.sweep('production'), [])
 
-    @expectedFailure  # BUG-526 : sessions ?date_from=abc, flour_history ?month=abc -> 500
     def test_BUG_526_production_dates_mois_illisibles(self):
         self.assertEqual(self.sweep('production_526'), [])
 
-    @expectedFailure  # BUG-527 (A) : sales daily_summary ?date=abc -> 500
     def test_BUG_527_sales_aucun_500(self):
         self.assertEqual(self.sweep('sales'), [])
 
-    @expectedFailure  # BUG-528 (A) : finance summary/doc1_report/doc1_export ?node=ZZZ (siège) -> 500
     def test_BUG_528_finance_aucun_500(self):
         self.assertEqual(self.sweep('finance'), [])
 
-    @expectedFailure  # BUG-529 (A) : blockchain alerts/snapshots/run_check node=ZZZ (siège) -> 500
     def test_BUG_529_blockchain_aucun_500(self):
         self.assertEqual(self.sweep('blockchain'), [])
 

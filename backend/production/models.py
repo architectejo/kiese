@@ -840,6 +840,12 @@ class BreadTransfer(SyncableModel):
         DISPUTED  = 'DISPUTED',  _('Litige (Écart détecté)')
         CANCELLED = 'CANCELLED', _('Annulé')
 
+    class Flow(models.TextChoices):
+        # Demande de A à B, réponse de B, confirmation de A (flux historique).
+        REQUEST = 'REQUEST', _('Demande puis réponse')
+        # Envoi direct de B vers A sans demande préalable (remarque.md §3.3).
+        DIRECT = 'DIRECT', _('Envoi direct')
+
     from_node = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='transfers_out', verbose_name=_("Boulangerie source"))
     to_node   = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='transfers_in',  verbose_name=_("Boulangerie destination"))
     # Legacy single-category fields — kept nullable for backward compat; use lines[] for new transfers
@@ -847,6 +853,7 @@ class BreadTransfer(SyncableModel):
     quantity_sent     = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Quantité envoyée (legacy)"))
     quantity_received = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Quantité reçue"))
     transfer_status   = models.CharField(max_length=15, choices=TransferStatus.choices, default=TransferStatus.PENDING, verbose_name=_("Statut"))
+    flow = models.CharField(max_length=10, choices=Flow.choices, default=Flow.REQUEST, verbose_name=_("Flux"))
     initiated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, related_name='transfers_initiated', verbose_name=_("Initié par")

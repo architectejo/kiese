@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.permissions import IsHeadquarters
+from kiese.node_guard import resolve_node_param
 from treasury.views import _validate_month_year
 from .models import FinancialYear
 from .serializers import FinancialYearSerializer
@@ -227,6 +228,11 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
         year = int(year_param) if year_param is not None else timezone.localdate().year
         node_id = request.query_params.get('node')
+        if node_id:
+            node, err = resolve_node_param(node_id)  # BUG-528 : inconnu -> 400
+            if err is not None:
+                return err
+            node_id = node.pk
         qs = CommissionPeriod.objects.filter(year=year).select_related('node')
         if node_id:
             qs = qs.filter(node_id=node_id)
@@ -277,6 +283,10 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
         error = _validate_month_year(month, year)
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+        node, err = resolve_node_param(node_id)  # BUG-528 : inconnu -> 400
+        if err is not None:
+            return err
+        node_id = node.pk
 
         invoices = (
             Invoice.objects
@@ -354,6 +364,10 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
         error = _validate_month_year(month, year)
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+        node, err = resolve_node_param(node_id)  # BUG-528 : inconnu -> 400
+        if err is not None:
+            return err
+        node_id = node.pk
 
         invoices = (
             Invoice.objects

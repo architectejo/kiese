@@ -431,7 +431,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     { to: '/sales/create', icon: <FiShoppingBag />, label: 'Facturation (Facturier)', roles: ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER'] },
 { to: '/production', icon: <FiLayers />, label: 'Production & Stocks', roles: ['ADMIN', 'DIRECTION', 'GERANT'] },
     { to: '/commissions', icon: <FiTrendingUp />, label: 'Commissions CM', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE'] },
-    { to: '/treasury', icon: <FiDollarSign />, label: 'Clôture & Caisse', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'] },
+    { to: '/treasury', icon: <FiDollarSign />, label: 'Caisse', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'] },
     // BUG-120 (volet frontend) : écran dédié au rapport de clôture journalier consolidé
     // par catégorie de pain (document Excel réel du client), même garde que l'API (IsGerant).
     { to: '/cloture-journaliere', icon: <FiCalendar />, label: 'Clôture Journalière', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'] },
