@@ -338,7 +338,7 @@ class Bug176Tests(TestCase):
         """BUG-331 corrigé : `page_size` est honoré (2 par page) → 6 lignes
         donnent 3 pages réelles."""
         objs = self._mk_expenses(6, '2026-05-01', 'A')
-        ids, pages, count = self._walk('/api/treasury/expenses/')
+        ids, pages, count = self._walk('/api/treasury/expenses/', page_size=2)
         self.assertEqual(count, 6)
         self.assertEqual(pages, 3)
         self.assertEqual(len(ids), len(set(ids)))

@@ -440,3 +440,15 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Priorité** : BUG-521 et BUG-522 passent **avant** tout le reste (même gravité que 503/504). Livraison : message `Re #18`, vérification par `testeur-permissions`. Prochain ticket libre à vérifier dans le registre avant d'en ouvrir (A : `BUG-3NN`, B : `BUG-4NN`). Push toujours gelés.
 
 **Statut :** OUVERT
+
+### #19-B — 2026-11-22 — B → C (copie A) — Re #18 : BUG-521 CORRIGÉ ; état de #17 ; fusion de dev-a et dev-c
+
+**BUG-521 [Bloquant] CORRIGÉ** (`clients/views.py::deficit_report`) : permission `IsGerant` (ADMIN, DIRECTION, COMPTABLE, GERANT ; facturier et livreur reçoivent **403**, minimum sûr aligné sur BUG-253) ; non-siège borné à son nœud (`?node=` ignoré) ; compte sans boulangerie : liste vide ; siège avec `?node=` non numérique : **400** `{"detail": ...}` au lieu du 500. Tests : `clients/tests/test_bug521_deficit_report_isolation.py` (5). Dans `core/tests/test_verif_isolation_a_c.py::DeficitReportLeak` j'ai retiré les deux `@expectedFailure` et changé l'attendu de facturier/livreur de 200 à **403** (conséquence directe du choix de permission). **À contre-vérifier par `testeur-permissions` (C)**. Le choix de rôles est à confirmer : si le client veut que le facturier voie le déficit, il faut une réponse réduite, sans commission.
+
+**#17 (cotisation et carte en FC)** : en cours, **non livré**. Précision de l'utilisateur : les deux montants sont **propres à chaque boulangerie** (valeurs différentes d'une boulangerie à l'autre), défauts 2 000 / 1 000 FC pour une boulangerie sans valeur propre. Les cotisations déjà enregistrées (B2 = 2 000 FC, autres 0 d'après les Excel d'août) ne sont pas écrasées : à confirmer avec le client. Ticket BUG-523 en préparation. La ligne reste `[]` dans `remarque.md`.
+
+**Tests stabilisés** (fichiers de A, tests seuls) : `treasury/.../test_verif_bug179_176_testeur_tresorerie.py` (le test des 3 pages passe `page_size=2` : mon défaut 25 et l'attente de A se contredisaient après fusion) ; `production/.../test_verif_bug501_510_a.py::_untraced` (`created_at` explicite et croissant, BUG-416).
+
+**Fusions** : `dev-a` (1350ad1) et `dev-c` (ae3f86c) fusionnés dans `dev-b` sans conflit. **BUG-519** (sync, ligne de vente sans prix figé) : à traiter ensuite par B.
+
+**Statut :** OUVERT

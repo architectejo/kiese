@@ -491,15 +491,29 @@ class ClientViewSet(viewsets.ModelViewSet):
             )
         return Response({'deleted': deleted, 'blocked': blocked, 'requested': len(ids)})
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def deficit_report(self, request):
-        """Clients whose current_debt exceeds their commission_gross in the latest period."""
+        """Clients whose current_debt exceeds their commission_gross in the latest period.
+
+        BUG-521 : réservé au gérant et au-dessus (données de commissions, cf.
+        BUG-253), borné au nœud de l'appelant ; `?node=` n'est honoré que pour
+        le siège et doit être un entier valide."""
         from commissions.models import CommissionPeriod, ClientCommission
         from django.db.models import F
-        node_id = request.query_params.get('node')
+        user = request.user
+        if is_node_less_non_hq(user):
+            return Response([])
         period_qs = CommissionPeriod.objects.order_by('-year', '-month')
-        if node_id:
-            period_qs = period_qs.filter(node_id=node_id)
+        if not user.can_access_all_nodes:
+            period_qs = period_qs.filter(node_id=user.node_id)
+        else:
+            node_id = request.query_params.get('node')
+            if node_id:
+                try:
+                    node_id = int(node_id)
+                except (TypeError, ValueError):
+                    raise ValidationError({'detail': "Paramètre « node » invalide : identifiant de boulangerie numérique attendu."})
+                period_qs = period_qs.filter(node_id=node_id)
         latest_period = period_qs.first()
         if not latest_period:
             return Response([])

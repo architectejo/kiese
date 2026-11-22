@@ -16838,12 +16838,13 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - Observé : `DELETE` du nœud `SIEGE` par ADMIN -> 204. Attendu : 400 (nœud technique).
 
 ### BUG-521 — [Bloquant] `deficit_report` : clients en déficit de toutes les boulangeries
-- Module : Clients · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c (balayage `?node=`).
+- Module : Clients · backend · Statut : CORRIGÉ (dev-backend B, 2026-11-22) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c (balayage `?node=`).
 - Étapes : K2 a une `CommissionPeriod` avec un `ClientCommission` dont la CM brute < dette du client. Gérant, facturier ou livreur de K1 : `GET /api/clients/clients/deficit_report/` (avec ou sans `?node=<K2>`).
 - Attendu : seuls les clients du nœud de l'appelant (siège : filtre `node` optionnel, validé).
 - Observé : `clients/views.py::deficit_report` ne filtre jamais par `request.user.node` ; renvoie code, nom, dette, CM de clients de K2. `?node=P2` -> `ValueError` non interceptée (500).
 - Piste : filtrer `period_qs` et `commissions` par `user.node` pour un non-siège (garder `is_node_less_non_hq` -> liste vide), `node` entier validé pour le siège. Fichier de B (`clients/`) : à lui transmettre.
 
+- Correction (Dev B) : `clients/views.py::deficit_report` passé de `IsAuthenticated` à `IsGerant` (moindre privilège, aligné BUG-253 : commissions = gérant et au-dessus ; facturier/livreur -> 403, choix à signaler) ; compte sans boulangerie -> `[]` (`is_node_less_non_hq`) ; non-siège borné à `user.node` (`?node=` ignoré) ; siège : `?node=` entier validé, sinon 400 `{"detail": "Paramètre « node » invalide ..."}`. Tests : `clients/tests/test_bug521_deficit_report_isolation.py` (nouveau) ; `core/tests/test_verif_isolation_a_c.py::DeficitReportLeak` (`@expectedFailure` retirés, attente facturier/livreur ajustée de 200 à 403). Impact frontend : `ClientsKpiGrid.tsx` (carte « Déficitaires ») appelle la route sans distinction de rôle ; un facturier/livreur reçoit 403 ignoré (carte « — ») : ticket frontend facultatif pour masquer la carte.
 ### BUG-522 — [Bloquant] Transfert en attente : `from_node` / `to_node` modifiables par PATCH/PUT
 - Module : Production · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c.
 - Étapes : gérant K1 crée une demande K2 -> K1, puis `PATCH /api/production/transfers/<id>/` `{"to_node": <K3>}` ou `{"from_node": <K3>}` (idem PUT).
