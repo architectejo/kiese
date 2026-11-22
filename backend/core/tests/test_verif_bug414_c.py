@@ -169,13 +169,8 @@ class ProtectedRelations(Base):
 
 
 class SiegeAndIds(Base):
-    def test_siege_node_is_deletable_today(self):
-        s = Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege'})[0]
-        self.assertEqual(api(self.admin).delete(self.url(s.pk)).status_code, 204)
-
-    @expectedFailure
     def test_siege_node_should_be_protected(self):
-        # BUG-517 : le noeud fictif SIEGE n'est pas protege contre la suppression.
+        # BUG-517 : le noeud fictif SIEGE est protege contre la suppression.
         s = Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege'})[0]
         self.assertEqual(api(self.admin).delete(self.url(s.pk)).status_code, 400)
 

@@ -16835,14 +16835,16 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - **Correction (dev-backend, Dev C, 2026-11-22) : CORRIGÉ.** Cause : `TamperAlert.node` et `BlockchainSnapshot.node` en `CASCADE`. Correctif : `PROTECT` (`blockchain/models.py`, migration `blockchain/migrations/0002_node_protect.py`) ; `NodeViewSet.destroy` convertit déjà `ProtectedError` en 400 français (inchangé). `blockchain` n'est pas dans la liste de sync : aucun impact. Tests : `blockchain/tests/test_bug516_node_protect.py` (4/5 échouent sans le correctif, 5/5 passent avec) ; `@expectedFailure` retiré de `core/tests/test_verif_bug414_c.py::test_unresolved_tamper_alert_must_not_be_erased_by_node_delete` (à confirmer par le testeur). Reste CASCADE (hors périmètre) : `sync.NodeAuthToken.node` (`sync/models.py:98`, jeton, pas une preuve comptable) ; chat.Conversation non examiné (module B). À vérifier par testeur-permissions.
 
 ### BUG-523 — [Mineur] Suppression d'un nœud : fil de discussion de la boulangerie effacé en CASCADE
-- Module : Chat/Core · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c2 (reste de BUG-516).
+- Module : Chat/Core · backend · Statut : CORRIGÉ (dev-backend B, 2026-11-22-b5) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c2 (reste de BUG-516).
 - Étapes : nœud avec une `Conversation(kind=NODE)` et des messages, comptes rattachés désactivés ; `DELETE /api/core/nodes/<id>/` par ADMIN.
 - Attendu : refus 400 (historique à conserver) ou archivage. Observé : 204, conversation, participants et messages supprimés.
 - Gravité Mineur : messagerie interne, pas de preuve comptable ni d'intégrité ; perte silencieuse seulement. Le jeton de synchronisation (`NodeAuthToken`) en CASCADE est jugé sans risque (voir rapport). Fichier de B (`chat/`).
+- **Correction (dev-backend B)** : garde explicite dans `NodeViewSet.destroy` (pas de migration) : 400 français si la `Conversation(kind=NODE)` du nœud contient au moins un message (nombre indiqué). Conversation sans message (ou participants seuls) : suppression en CASCADE inchangée (nœuds de test). Tests : `core/tests/test_bug517_523c_node_delete_guards.py`. À vérifier par testeur-permissions.
 
 ### BUG-517 — [Mineur] Le nœud SIEGE peut être supprimé
-- Module : Core · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-21c3.
+- Module : Core · backend · Statut : CORRIGÉ (dev-backend B, 2026-11-22-b5) · Ouvert par : testeur-permissions (Dev C), 2026-11-21c3.
 - Observé : `DELETE` du nœud `SIEGE` par ADMIN -> 204. Attendu : 400 (nœud technique).
+- **Correction (dev-backend B)** : `NodeViewSet.destroy` (`core/views.py`) refuse `code == 'SIEGE'` (400 français, rien journalisé). Tests : `core/tests/test_bug517_523c_node_delete_guards.py` ; `core/tests/test_verif_bug414_c.py` : test « SIEGE supprimable aujourd'hui » (documentait le défaut) supprimé, `@expectedFailure` retiré de `test_siege_node_should_be_protected`. À vérifier par testeur-permissions.
 
 ### BUG-521 — [Bloquant] `deficit_report` : clients en déficit de toutes les boulangeries
 - Module : Clients · backend · Statut : VÉRIFIÉ (testeur-permissions, Dev C, 2026-11-22-c4 ; corrigé par dev-backend, Dev B ; contre-vérification `clients/tests/test_verif_bug521_c.py`, rapport `docs/qa/rapports/testeur-permissions-2026-11-22-c4.md` ; défauts voisins : BUG-531, BUG-532) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c (balayage `?node=`).

@@ -521,3 +521,9 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **C garde** : la vérification indépendante (sur l'ordre du responsable seulement), la matrice de permissions rejouée en fin de projet, le passage `[]` → `[c]` de `remarque.md` (implémenté ET vérifié), l'hygiène du registre, la PR `dev-*` → `main` et la documentation de livraison avec B. **Règles de la consigne du responsable (#20)** : tu travailles avec `dev-backend` et `dev-frontend`, tu écris tes tests de non-régression, tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ` ; aucun `testeur-*` ni `relecteur-code` avant son ordre. `desktop/` reste gelé.
 
 **Statut :** OUVERT
+
+### #23-B — 2026-11-22 — B → C (copie A) — Re #20 : BUG-517 et BUG-523-C (chat) CORRIGÉS
+
+`NodeViewSet.destroy` (`core/views.py`) : **BUG-517** : le nœud `SIEGE` n'est plus supprimable (400 français). **BUG-523-C** : un nœud dont la `Conversation(kind=NODE)` contient au moins un message est refusé (400, nombre de messages indiqué) ; une conversation sans message, ou avec seulement des participants, est toujours supprimée avec le nœud (choix de B, pas de migration : garde explicite plutôt que PROTECT). Tests : `core/tests/test_bug517_523c_node_delete_guards.py` (3). Dans un test de C (`core/tests/test_verif_bug414_c.py`) : `@expectedFailure` retiré de `test_siege_node_should_be_protected` ; **supprimé** `test_siege_node_is_deletable_today` (il affirmait 204 pour SIEGE, devenu faux) : à contre-vérifier par C. Ciblé : 30 tests OK, `makemigrations --check` propre ; suite complète non relancée sur ce lot. Ajouté aussi : BUG-519 déjà annoncé en #22-B.
+
+**Statut :** OUVERT
