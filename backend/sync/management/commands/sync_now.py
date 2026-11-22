@@ -182,7 +182,7 @@ def build_outbound_payload(node_code):
     from treasury.models import CashClosure, LocalExpense, FacturierReport, DisbursementVoucher
     from production.models import (
         ProductionSession, ProductionSessionLine, BreadDisposal,
-        ConsumableMovement, BreadTransfer, BreadTransferLine,
+        ConsumableMovement, BreadTransfer, BreadTransferLine, ConsumableInventory,
     )
 
     def _dec(value):
@@ -280,6 +280,26 @@ def build_outbound_payload(node_code):
             'description': m.description, 'node_origin': m.node_origin,
         }
         for m in ConsumableMovement.objects.filter(node_origin=node_code, is_synced=False).select_related('stock')
+    ]
+    # BUG-386 : inventaire physique journalier (en-tête) + ses lignes
+    # (`ConsumableCount` n'a pas `is_synced` : elles remontent avec leur
+    # inventaire tant que celui-ci est `is_synced=False`, rejeu idempotent).
+    inventories_qs = ConsumableInventory.objects.filter(node_origin=node_code, is_synced=False)
+    consumable_inventories = [
+        {
+            'id': str(i.id), 'node': i.node.code, 'inventory_date': i.inventory_date.isoformat(),
+            'comment': i.comment, 'node_origin': i.node_origin,
+        }
+        for i in inventories_qs.select_related('node')
+    ]
+    consumable_counts = [
+        {
+            'node': l.node.code, 'inventory': str(l.inventory_id),
+            'consumable_type': l.consumable_type, 'count_date': l.count_date.isoformat(),
+            'system_quantity': _dec(l.system_quantity), 'physical_quantity': _dec(l.physical_quantity),
+            'gap': _dec(l.gap), 'notes': l.notes,
+        }
+        for i in inventories_qs for l in i.lines.select_related('node')
     ]
     transfers_qs = BreadTransfer.objects.filter(node_origin=node_code, is_synced=False)
     transfers = [
@@ -393,6 +413,8 @@ def build_outbound_payload(node_code):
             'production.ProductionSessionLine': session_lines,
             'production.BreadDisposal': disposals,
             'production.ConsumableMovement': consumable_movements,
+            'production.ConsumableInventory': consumable_inventories,
+            'production.ConsumableCount': consumable_counts,
             'production.BreadTransfer': transfers,
             'production.BreadTransferLine': transfer_lines,
             'treasury.LocalExpense': local_expenses,
