@@ -1,37 +1,35 @@
-# Rapport testeur-permissions (Dev C) — 2026-11-22-c
+# Rapport testeur-permissions, 2026-11-22 (lot c5)
 
-Contre-vérification du lot A : BUG-503, 504, 505, 362 (isolation inter-boulangeries). Aucun code applicatif modifié, aucun commit.
+Base : branche dev-c, 2fcfa0e. Tests : `backend/core/tests/test_verif_c5_routes_noeuds_c.py` (67 tests, 8 `@expectedFailure` référencés). Données fictives. Aucun code applicatif modifié.
 
-## Relecture du diff (commit b8ac762 : treasury/views.py, production/views.py, production/serializers.py, kiese/node_guard.py, core/mixins.py)
-- BUG-503 : `FacturierReportViewSet.create` écrase `node` avant validation pour un non-siège ; `perform_create` force le nœud.
-- BUG-504 : `validate_stock` / `validate_session` (404 si nœud étranger), `perform_create` des mouvements vérifie `stock.node`.
-- BUG-505 : `?node=` honoré seulement pour le siège dans `flour_history`.
-- BUG-362 : `NoNodeGuardMixin` (403 sur écriture) + `.none()` dans les `get_queryset` et `_build_reconciliation_querysets`.
-
-## Étape 1 : `@expectedFailure` de `test_verif_matrice_c.py`
-Déjà retirés par A dans b8ac762 (aucune modification de ma part, `git diff` vide). Il ne reste que BUG-507 (`À CLARIFIER`). Les tests concernés passent.
-
-## Étape 2 : `backend/core/tests/test_verif_isolation_a_c.py` (37 tests + `ReconciliationScope`)
-Classes : TransferIsolation (BreadTransfer tiers, création forgée, rôles, réécriture from/to), ProductionIsolation (EXIT et variantes sur stock étranger, UUID étrangers en GET/PATCH/PUT/DELETE, stock/disposal/count/session avec `node` forgé, `@action` de session sur session étrangère, GET d'actions avec `?node=`), TreasuryIsolation (UUID étrangers, `@action` de clôture/rapport, clôture/dépense/journal/épargne avec `node` forgé, `generate`, bordereaux et cashbook réservés au siège, comptes sans boulangerie), SalesIsolation (facture étrangère et `@action` pour 3 rôles, `node` forgé, exception 5.1 : facturier/livreur cherchent des clients étrangers sans écriture, gérant K1 ne voit pas le client K2), HQNotBroken, SweepNodeParam (balayage de toutes les routes GET sans paramètre avec `?node=<pk|code>` pour gérant, facturier, livreur, comptes sans boulangerie), DeficitReportLeak, ReconciliationScope.
-
-## Étape 3 : résultats
-Labels : `core.tests.test_verif_matrice_c core.tests.test_verif_isolation_a_c core.tests.test_verif_bug503_504_505_362_a production.tests.test_bug503_504_505_fk_node production.tests.test_bug36x_compte_sans_boulangerie treasury.tests.test_bug503_report_forged_node` : 117 tests OK (99 sans le fichier de A), 5 échecs attendus (BUG-507, 521 x2, 522 x2). Aucun succès inattendu.
+## Rejeu de la matrice existante
+`test_verif_matrice_c`, `test_verif_isolation_a_c`, `test_verif_params_invalides_c`, `test_bug517_523c_node_delete_guards`, `test_verif_bug414_c` : 114 tests, OK (1 échec attendu : BUG-507, hors périmètre). L'énumération automatique de la matrice (anonyme + 6 rôles sur toutes les routes `/api/`) couvre déjà les nouvelles routes : aucun 5xx, anonyme 401, hiérarchie respectée.
 
 ## Verdicts
-| Ticket | Verdict |
-|---|---|
-| BUG-503 | VÉRIFIÉ (contre-vérifié testeur-permissions, Dev C) : variantes JSON/form/None/chaîne, PATCH/PUT, UUID étranger, `generate`, facturier/node_origin forgés. |
-| BUG-504 | VÉRIFIÉ : EXIT/ENTRY/ADJUSTMENT sur stock étranger, session étrangère, PATCH/PUT vers stock étranger, DELETE d'un mouvement propre : stock de K2 inchangé. |
-| BUG-505 | VÉRIFIÉ : `?node=` par pk, code, doublons : aucune donnée K2. |
-| BUG-362 | VÉRIFIÉ : listes vides, écritures 403, comptes siège non cassés, balayage sans fuite. |
+| Ticket | Verdict | Remarque |
+|---|---|---|
+| BUG-517 | VÉRIFIÉ | DELETE SIEGE refusé (400) pour ADMIN/DIRECTION, 403 autres rôles, 401 anonyme. Contournement par renommage : BUG-564 |
+| BUG-523 | VÉRIFIÉ | nœud avec message dans le fil NODE : 400, message conservé ; fil vide : 204 ; nœud avec historique : 400 (pas de 500) |
+| BUG-530 | VÉRIFIÉ | `history` : `node`/`months` illisibles, géants, négatifs, 0 -> jamais 500 (7 comptes) ; pas de fuite K2 |
+| BUG-531 | VÉRIFIÉ | `bassins` : gérant K1 avec `node=<K2>` (pk, code, variantes `" 2"`, `+2`) ne voit rien de K2 ; compte sans boulangerie -> vide ; 13 valeurs `node`/`month`/`year` illisibles -> jamais 500 |
+| BUG-532 | VÉRIFIÉ | `deficit_report` : 2**31, 2**63, 30 chiffres, ZZZ, 0, -1, 1e3 -> pas de 500 ; gérant ne choisit pas K2. Balayage de toutes les routes GET avec `node/from_node/to_node/client` géant : seul reste treasury journal/savings (BUG-560) |
+| BUG-526 à 529 | VÉRIFIÉ (déjà VÉRIFIÉ par testeur-production, rejoué avec 33 variantes x 7 comptes) | entiers géants, dates 0000-00-00, `%00`, 2026-02-30 : 400 `{detail}` ; reste : run_check corps liste (BUG-561) |
+| BUG-503/504/505/506/522 | confirmés (déjà VÉRIFIÉS) | rejeu : `node` forgé (pk, code, dict, liste), stock étranger, PATCH d'un mouvement vers un stock étranger, `flour_history?node=`, comptes sans boulangerie (lecture vide, écritures 400/403, création de compte sans nœud refusée, détachement refusé), PATCH/PUT de transferts (10 corps x 2 gérants x 2 méthodes), tiers/facturier/livreur/sans nœud : tous refusés, aucune écriture |
 
-Registre : lignes mises à `VÉRIFIÉ (contre-vérifié testeur-permissions, Dev C, 2026-11-22)`.
+## Extension aux nouvelles routes (BUG-386, versements, envoi direct)
+- `production/consumables/global/` : ADMIN/DIRECTION/COMPTABLE 200 ; gérant, facturier, livreur, comptes sans nœud 403 ; anonyme 401 ; POST/PUT/PATCH/DELETE 403/405.
+- `consumables/dispatch/` : ADMIN/DIRECTION seuls (201) ; tous les autres 403/401 et le stock SIEGE reste intact ; 27 corps invalides -> 400 (NaN, Infinity, négatif, 4 décimales, booléen, liste, dict, doublon, SIEGE, inactif, stock insuffisant, ligne 2 invalide : rien ne bouge) ; 3 envois de 20 sur 50 : 2 acceptés, stock 10. Défauts : BUG-562 (`1e400`), BUG-541 (`node: true`, existant).
+- `inventories` : création = GERANT rattaché uniquement (ADMIN/DIRECTION/COMPTABLE/facturier/livreur/sans nœud 403) ; `node`, `recorded_by`, `inventory_date` forgés ignorés ; liste/détail/PATCH/`node/<ref>` d'un autre nœud -> 404 (pk, code, casse) ; `?node=` ignoré pour gérant ; SIEGE masqué ; PATCH limité à `comment` (400 pour tout autre champ) ; PUT/DELETE 405 ; lignes non modifiables via `counts` ni contournables par un comptage le même jour ; paramètres illisibles (`node/<géant>`, dates) jamais 500.
+- `treasury/closures/versements/` : gérant limité à son nœud, `?node=<K2>` (pk/code/casse) 403, sans nœud : liste vide et 403 sur `?node=`, facturier/livreur 403, écriture 403/405 ; aucune donnée K2 dans les réponses. Défaut : BUG-563 (ligne SIEGE).
+- `production/transfers/send/` : facturier/livreur 403, ADMIN/DIRECTION/COMPTABLE 400 (pas de nœud), `from_node`, `initiated_by`, `transfer_status`, `node` forgés ignorés, stock étranger intact, 28 corps invalides jamais 500. Défaut : BUG-540 (SIEGE / inactif accepté, existant).
 
-## Nouveaux défauts (hors périmètre de A, trouvés par mes tests)
-- **BUG-521 (Bloquant, OUVERT)** : `GET /api/clients/clients/deficit_report/` (IsAuthenticated) ne filtre pas par nœud : clients en déficit d'une autre boulangerie lisibles par tout rôle ; `?node=P2` donne un 500. Fichier de B.
-- **BUG-522 (Bloquant, OUVERT)** : PATCH/PUT d'un transfert en attente modifie `from_node` et `to_node` (le demandeur se fait passer pour une autre boulangerie). Fichier production (A).
+## Tickets ouverts (BUG-560 à 564, tous Mineur, aucune fuite inter-nœuds ni élévation de droits)
+- BUG-560 : treasury journal/savings `?node=` invalide -> 500 ; 2e rapport facturier le même jour -> 500.
+- BUG-561 : `run_check` avec corps liste -> 500.
+- BUG-562 : `dispatch` quantité `1e400` -> 500.
+- BUG-563 : `versements` liste le nœud SIEGE.
+- BUG-564 : SIEGE renommable puis supprimable (contourne BUG-517).
+- Existants confirmés : BUG-540, BUG-541.
 
-## Observations sans ticket
-- `reconciliation` renvoie en écho le `node` demandé alors que les données sont celles du nœud de l'appelant (étiquette trompeuse, données correctes, testé).
-- `/api/chat/users/` liste tous les utilisateurs avec leur nœud (annuaire de messagerie, probablement voulu) : exclu du balayage ; à confirmer par le coordinateur.
-- Journal/épargne : PATCH/DELETE renvoient 405 sur objet étranger (pas de fuite).
+## Registre
+Passés à VÉRIFIÉ : 517, 523, 530, 531, 532 (lignes et fiches). Lignes 503-506, 522, 526-529 déjà VÉRIFIÉES, non modifiées.
