@@ -238,6 +238,19 @@ class ConsumableStockSerializer(serializers.ModelSerializer):
         return _consumable_type_label(obj.consumable_type)
 
 
+def _check_fk_in_user_node(serializer, obj, label):
+    """BUG-504/36x : un non-siège ne peut référencer (stock, session...) que
+    des objets de sa propre boulangerie ; 404 sans fuite d'existence."""
+    from rest_framework.exceptions import NotFound
+    request = serializer.context.get('request')
+    user = getattr(request, 'user', None)
+    if obj is None or user is None or not user.is_authenticated or user.can_access_all_nodes:
+        return obj
+    if getattr(obj, 'node_id', None) != user.node_id:
+        raise NotFound(f"{label} introuvable.")
+    return obj
+
+
 class ConsumableMovementSerializer(serializers.ModelSerializer):
     movement_type_display = serializers.CharField(source='get_movement_type_display', read_only=True)
     node_display = serializers.StringRelatedField(source='node', read_only=True)
@@ -254,6 +267,12 @@ class ConsumableMovementSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+
+    def validate_stock(self, value):
+        return _check_fk_in_user_node(self, value, 'Stock')
+
+    def validate_session(self, value):
+        return _check_fk_in_user_node(self, value, 'Session')
 
 
 class ConsumableCountSerializer(serializers.ModelSerializer):
@@ -337,6 +356,9 @@ class BreadDisposalSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'total_value', 'node_origin', 'is_synced', 'created_at', 'updated_at']
+
+    def validate_session(self, value):
+        return _check_fk_in_user_node(self, value, 'Session')
 
     def validate(self, attrs):
         # BUG-158 : seule une ligne REMAINING (« reste du jour », reflet du
