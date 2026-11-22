@@ -83,6 +83,11 @@ export const ImportClientsModal: React.FC<ImportClientsModalProps> = ({
                   Boulangeries non reconnues dans le fichier (ignorées) : {importPreview.unknown_nodes.join(', ')}
                 </div>
               )}
+              {importPreview.report.some(r => (r.invalid ?? 0) > 0) && (
+                <div style={{ padding: '8px', fontSize: '0.7rem', color: 'hsl(var(--color-warning))' }}>
+                  Noms trop longs (non importés) : {importPreview.report.flatMap(r => r.invalid_names ?? []).join(', ')}
+                </div>
+              )}
               {importPreview.skipped_sheets.length > 0 && (
                 <div style={{ padding: '0 8px 8px', fontSize: '0.7rem', color: 'hsl(var(--text-muted))' }}>
                   Feuilles ignorées (hors périmètre) : {importPreview.skipped_sheets.join(', ')}
