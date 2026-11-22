@@ -134,7 +134,6 @@ class Verif801to802Revenue(Cycle2Base):
         self.adjust(inv, 1, 2, bp=self.bp_mini)
         self.assertEqual(_income_statement_for_year(self.d1.year)['total_revenue'], D('0'))
 
-    @unittest.expectedFailure  # BUG-821
     def test_adjustment_of_regularisation_gives_no_commission_BUG_821(self):
         """BUG-261 : une RG n'ouvre pas droit à CM ; son ajustement (special_code vide) doit suivre."""
         inv = self.sale(self.f1, self.cl, [(self.bp_mini, 10)], 0, 'CREDIT', self.d1, code='RG')
@@ -216,7 +215,6 @@ class Doc1Checks(Cycle2Base):
         rows = self.doc1(self.d1)
         self.assertEqual(rows[0]['qty_500'], 8)   # observé : 12
 
-    @unittest.expectedFailure  # BUG-822
     def test_commission_total_breads_subtracts_a_negative_adjustment_BUG_822(self):
         inv = self.sale(self.f1, self.cl, [(self.bp_grand, 10)], 5000, 'CASH', self.d1)
         self.adjust(inv, -1, 2)
@@ -236,7 +234,6 @@ class Doc1Checks(Cycle2Base):
         self.assertEqual(D(row['invoice_total']), D('1000'))
         self.assertEqual(row['qty_200'] + row['qty_300'] + row['qty_500'] + row['qty_1000'] + row['qty_other'], 4)
 
-    @unittest.expectedFailure  # BUG-824
     def test_adjustment_does_not_move_total_breads_received_BUG_824(self):
         inv = self.sale(self.f1, self.cl, [(self.bp_grand, 10)], 5000, 'CASH', self.d1)
         self.cl.refresh_from_db()

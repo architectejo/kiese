@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, Q, Sum, Count
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from rest_framework import viewsets, status, filters, mixins
 from rest_framework.decorators import action
@@ -1092,6 +1093,14 @@ class InvoiceViewSet(
                         node_origin=original.node.code, invoice=adjustment,
                         note=f"Ajustement {adjustment.receipt_number} de la facture {original.receipt_number}",
                     )
+                # BUG-824 : le compteur de pains livrés suit l'ajustement (signé),
+                # sauf NS (aucun pain n'a été remis). Jamais négatif.
+                if not orig_is_ns:
+                    pains_delta = adjustment_sign * sum(l.quantity for l in adjustment.lines.all())
+                    if pains_delta:
+                        Client.objects.filter(pk=client.pk).update(
+                            total_breads_received=Greatest(F('total_breads_received') + pains_delta, 0)
+                        )
                 client.refresh_from_db()
                 client.refresh_category()
                 client.save(update_fields=['category'])

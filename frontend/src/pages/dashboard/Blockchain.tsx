@@ -127,7 +127,7 @@ export const Blockchain: React.FC = () => {
       <div className="glass-card" style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '16px', flexWrap: 'wrap', gap: '12px',
-        borderLeft: `4px solid hsl(var(--${allIntact ? 'color-success' : 'color-danger'}))`,
+        borderLeft: `4px solid hsl(var(--${tone}))`,
         transition: 'all 0.3s ease'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>

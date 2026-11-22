@@ -66,15 +66,22 @@ def _verify_chain_for_node(node, chain_results=None, head_problem=None) -> dict:
 
     total = 0
     tampered_ids = []
+    repaired = []
     for entry, _expected, is_valid in chain_results:
         if entry.node_id != node.id:
             continue
         total += 1
+        if is_valid and entry.is_tampered:
+            repaired.append(entry.pk)   # BUG-861 : écriture redevenue valide
         if not is_valid:
             tampered_ids.append(str(entry.id))
             if not entry.is_tampered:
                 entry.is_tampered = True
                 entry.save(update_fields=['is_tampered'])
+
+    if repaired:
+        from treasury.models import CashbookEntry
+        CashbookEntry.objects.filter(pk__in=repaired).update(is_tampered=False)
 
     return {
         'node_id':         node.id,

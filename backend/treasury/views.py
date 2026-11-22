@@ -782,6 +782,24 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         except IntegrityError:
             raise ValidationError({'detail': f"Une clôture existe déjà pour {node.code} à la date {target_date}."})
 
+        # BUG-860 : même traçabilité qu'à la création.
+        log_activity(
+            self.request.user, "Resoumission Clôture de Caisse",
+            f"Clôture {closure.node.code} {closure.date} resoumise — Net: {closure.net_cash} FC · "
+            f"Compté: {closure.physical_cash_total} FC · Écart: {closure.cash_gap} FC.",
+            node_origin=closure.node.code,
+        )
+        if closure.cash_gap != 0:
+            create_notification(
+                title=f"Écart de Caisse — {closure.node.code}",
+                message=(
+                    f"Clôture du {closure.date} (resoumise) : écart de {closure.cash_gap:+,.0f} FC "
+                    f"(théorique {closure.net_cash:,.0f} FC, compté {closure.physical_cash_total:,.0f} FC)."
+                ),
+                severity='WARNING' if abs(closure.cash_gap) < 10000 else 'DANGER',
+                node_origin=closure.node.code
+            )
+
     @action(detail=True, methods=['post'], permission_classes=[IsHeadquarters])
     def validate(self, request, pk=None):
         """Comptable DG confirms the closure after physical cash count.
@@ -927,7 +945,10 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         """
         entries = list(CashbookEntry.chain_queryset())
         tampered = []
+        repaired = []
         for i, (entry, _expected, is_valid) in enumerate(verify_cashbook_chain(entries)):
+            if is_valid and entry.is_tampered:
+                repaired.append(entry.pk)   # BUG-861 : écriture redevenue valide
             if not is_valid:
                 tampered.append(str(entry.id))
                 # BUG-842 : une seule notification, à la première détection (GET sans
@@ -940,6 +961,10 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
                         message=f"L'écriture {entry.piece_number} du {entry.date} a été altérée. Bloc {i+1} corrompu.",
                         severity='DANGER', node_origin=entry.node.code
                     )
+        if repaired:
+            # BUG-861 : le drapeau retombe quand l'écriture est de nouveau valide, pour
+            # qu'une nouvelle altération soit de nouveau notifiée (BUG-842 : 1 par altération).
+            CashbookEntry.objects.filter(pk__in=repaired).update(is_tampered=False)
         # BUG-240 : ancre de tête de chaîne (suppression de la dernière écriture).
         head_problem = check_cashbook_head(entries, CashbookHead.objects.first())
         if head_problem and not SystemNotification.objects.filter(  # BUG-842

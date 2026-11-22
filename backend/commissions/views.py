@@ -172,7 +172,10 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             commission_exempt=False,
             # BUG-261 : une régularisation (RG) ou une facture à taux 0 n'ouvre
             # pas droit à CM : exclue de la base (sinon CM au taux du client).
-        ).exclude(special_code='RG').exclude(commission_rate=0).select_related('client').prefetch_related('lines')
+            # BUG-821 : l'ajustement d'une RG (special_code vide) suit l'origine.
+        ).exclude(special_code='RG').exclude(adjusts__special_code='RG').exclude(
+            commission_rate=0,
+        ).select_related('client').prefetch_related('lines')
 
         by_client = {}
         # BUG-267 : un remboursement/dépôt n'est pas une vente (pas de base de CM).
@@ -180,11 +183,16 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         for inv in invoices:
             agg = by_client.setdefault(inv.client_id, {'client': inv.client, 'order_value': 0, 'total_breads': 0})
             agg['order_value']  += inv.order_total
-            agg['total_breads'] += sum(line.quantity for line in inv.lines.all())
+            # BUG-822 : les quantités d'un ajustement sont des magnitudes ; le signe
+            # est porté par `adjustment_sign` (+1 / -1).
+            sign = (inv.adjustment_sign or 1) if inv.is_adjustment else 1
+            agg['total_breads'] += sign * sum(line.quantity for line in inv.lines.all())
 
         # BUG-267 : client épargne (commande = 0, BP créditrice) : aucune commission,
         # son épargne n'est jamais restituée comme net à payer.
         by_client = {cid: a for cid, a in by_client.items() if a['order_value'] > 0}
+        for a in by_client.values():
+            a['total_breads'] = max(0, a['total_breads'])  # champ positif (BUG-822)
 
         config = Config.get_instance()
         for client_id, agg in by_client.items():
@@ -391,13 +399,22 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         """Override net_payable with a manual adjustment (DIRECTION only)."""
         config = Config.get_instance()
         adj = request.data.get('manuel_adjustment')
+        # BUG-749 : au moins un des deux champs doit être fourni (sinon 400, rien n'est effacé).
+        if 'manuel_adjustment' not in request.data and 'manuel_notes' not in request.data:
+            return Response({'detail': 'Champ « manuel_adjustment » requis (null pour effacer l\'ajustement).'},
+                            status=status.HTTP_400_BAD_REQUEST)
         notes = request.data.get('manuel_notes', '')
+        if notes is None:
+            notes = ''  # BUG-750 : null = vide
         with transaction.atomic():
             commission = self._get_locked_object()
             locked = self._locked_response(commission)
             if locked is not None:
                 return locked
-            if adj is None:
+            if 'manuel_adjustment' not in request.data:
+                # BUG-749 : champ absent = ajustement inchangé (seules les notes sont mises à jour).
+                commission.manuel_notes = notes
+            elif adj is None:
                 # Clear the manual override
                 commission.manuel_adjustment = None
                 commission.manuel_notes = ''
@@ -407,10 +424,12 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                         raise InvalidOperation
                     value = Decimal(str(adj))
                     # BUG-745 : valeur finie, 12 chiffres entiers + 2 décimales max.
-                    if not value.is_finite() or abs(value) >= Decimal('10') ** 12:
+                    # BUG-745 (rouvert) : pas d'abs() (decimal.Overflow sur exposants géants).
+                    limit = Decimal('10') ** 12
+                    if not value.is_finite() or value >= limit or value <= -limit:
                         raise InvalidOperation
                     commission.manuel_adjustment = value.quantize(Decimal('0.01'))
-                except (InvalidOperation, ValueError, TypeError):
+                except (InvalidOperation, ValueError, TypeError, ArithmeticError):
                     return Response({'detail': 'Valeur invalide pour manuel_adjustment (nombre fini, 12 chiffres maximum).'},
                                     status=status.HTTP_400_BAD_REQUEST)
                 commission.manuel_notes = notes
