@@ -4,12 +4,17 @@ import { seConnecter } from '../fixtures/helpers';
 
 /**
  * Parcours 7 & 8 — Clôture et Livre de Caisse (CLAUDE.md §2 points 7-8 / §5.5).
+ *
+ * Organisation 2026-11 (remarque.md l.456-458) : /treasury = page « Caisse » (livre de caisse direction,
+ * versements, journal, épargne) ; les options de clôture sont sur /cloture-journaliere (« Clôture Journalière »).
  */
 
 test('la direction consulte le Livre de Caisse, filtre par dates et vérifie l\'intégrité (verte)', async ({ page }) => {
   await seConnecter(page, COMPTES.direction.username, PASSWORD);
   await page.goto('/treasury');
 
+  // La page s'appelle désormais « Caisse » (ex « Clôture & Caisse »).
+  await expect(page.getByRole('heading', { level: 1, name: 'Caisse', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: /livre de caisse direction/i })).toBeVisible();
 
   const dateInputs = page.locator('input[type="date"]');
@@ -42,12 +47,15 @@ test('un rôle non-HQ (gérant) ne voit pas le Livre de Caisse Direction (BUG-02
   // pour un GERANT).
   await seConnecter(page, COMPTES.gerantK1.username, PASSWORD);
   await page.goto('/treasury');
+  await expect(page.getByRole('heading', { level: 1, name: 'Caisse', exact: true })).toBeVisible();
+  // Les options de clôture ne sont plus sur « Caisse » (elles sont sur /cloture-journaliere).
+  await expect(page.getByText(/Saisir le nombre de coupures/)).toHaveCount(0);
   await expect(page.getByRole('heading', { name: /§5\.1\.3.*Livre de Caisse Direction/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /vérifier intégrité sha-256/i })).toHaveCount(0);
 });
 
 test.fixme(
-  'clôture gérant : rapport facturier Niveau 1 (équipes A et B), dépenses, ventilation des billets, écart affiché',
+  'clôture gérant (page « Clôture Journalière », /cloture-journaliere) : rapport facturier Niveau 1 (équipes A et B), dépenses, ventilation des billets, écart affiché',
   async () => {
     // Nécessite un historique de facturation/livraison réel sur la journée en
     // cours pour les deux équipes A et B afin que le rapport Niveau 1 ne soit

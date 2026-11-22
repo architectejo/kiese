@@ -196,6 +196,8 @@ PUSH_MODEL_ORDER = [
     'production.ProductionSessionLine',
     'production.BreadDisposal',
     'production.ConsumableMovement',
+    'production.ConsumableInventory',
+    'production.ConsumableCount',
     'production.BreadTransfer',
     'production.BreadTransferLine',
     'treasury.LocalExpense',
@@ -828,6 +830,190 @@ def _push_consumable_movement(node, record):
     return _record_result(record_id, True)
 
 
+INVENTORY_DUPLICATE_CONFLICT = 'CONSUMABLE_INVENTORY_DUPLICATE'
+INVENTORY_NOT_OWNER_CONFLICT = 'NON_PROPRIETAIRE'
+
+
+def _strict_uuid(value):
+    """UUID strict (chaîne ou UUID) ou None. Refuse tout le reste."""
+    import uuid as _uuid
+    if isinstance(value, _uuid.UUID):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return _uuid.UUID(value.strip())
+    except ValueError:
+        return None
+
+
+def _strict_decimal(value, max_digits=10, decimal_places=3):
+    """
+    Decimal strict pour un champ DecimalField(max_digits, decimal_places).
+    Refuse booléens, NaN/infinis, valeurs illisibles, trop de décimales ou
+    trop de chiffres. Lève ValueError (message français) sinon.
+    """
+    if isinstance(value, bool) or value is None or value == '':
+        raise ValueError("quantité invalide")
+    try:
+        dec = Decimal(str(value))
+    except InvalidOperation:
+        raise ValueError(f"quantité invalide : {value!r}")
+    if not dec.is_finite():
+        raise ValueError(f"quantité invalide : {value!r}")
+    step = Decimal(1).scaleb(-decimal_places)
+    try:
+        quantized = dec.quantize(step)
+    except InvalidOperation:
+        raise ValueError(f"quantité hors plage : {value!r}")
+    if quantized != dec:
+        raise ValueError(f"trop de décimales : {value!r}")
+    dec = quantized
+    if len(dec.as_tuple().digits) > max_digits:
+        raise ValueError(f"quantité hors plage : {value!r}")
+    return dec
+
+
+def _strict_date(value):
+    from datetime import date as _date, datetime as _datetime
+    if isinstance(value, _datetime):
+        return None
+    if isinstance(value, _date):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return _date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+def _push_consumable_inventory(node, record):
+    """
+    BUG-386 : « Inventaire Physique » journalier des consommables
+    (`ConsumableInventory`, en-tête). Mono-nœud : seul le nœud émetteur peut
+    pousser SES inventaires (node == node d'authentification). Unicité
+    (node, inventory_date) : un second inventaire d'un autre id pour le même
+    jour est REJETÉ et inscrit au journal des conflits (règle du module :
+    pas d'écrasement silencieux). Un inventaire existant n'accepte que la
+    mise à jour de `comment` (comme `ConsumableInventory` côté API).
+    """
+    from production.models import ConsumableInventory
+
+    raw_id = record.get('id')
+    inv_id = _strict_uuid(raw_id)
+    if inv_id is None:
+        return _record_result(raw_id, False, "id invalide (UUID attendu)")
+
+    bakery_code = record.get('node') or node.code
+    if bakery_code != node.code:
+        return _record_result(raw_id, False, "inventaire d'une autre boulangerie refusé")
+    origin = record.get('node_origin') or node.code
+    if origin != node.code:
+        return _record_result(raw_id, False, "node_origin différent du nœud authentifié")
+
+    inv_date = _strict_date(record.get('inventory_date'))
+    if inv_date is None:
+        return _record_result(raw_id, False, "inventory_date invalide (AAAA-MM-JJ attendu)")
+    comment = record.get('comment', '')
+    if comment is None:
+        comment = ''
+    if not isinstance(comment, str):
+        return _record_result(raw_id, False, "comment invalide")
+
+    existing = ConsumableInventory.objects.filter(pk=inv_id).first()
+    if existing:
+        if existing.node_id != node.pk:
+            _log_conflict(
+                node, 'production.ConsumableInventory', inv_id, INVENTORY_NOT_OWNER_CONFLICT,
+                f"Le nœud {node.code} a tenté de modifier un inventaire de {existing.node.code}.",
+            )
+            return _record_result(raw_id, False, "nœud non propriétaire de cet inventaire")
+        if existing.inventory_date != inv_date:
+            return _record_result(raw_id, False, "inventory_date non modifiable")
+        if existing.comment != comment:
+            existing.comment = comment
+            existing.save(update_fields=['comment'], _sync_bypass=True)
+        return _record_result(raw_id, True)
+
+    other = ConsumableInventory.objects.filter(node=node, inventory_date=inv_date).first()
+    if other:
+        _log_conflict(
+            node, 'production.ConsumableInventory', inv_id, INVENTORY_DUPLICATE_CONFLICT,
+            f"Inventaire {other.pk} déjà enregistré pour {node.code} le {inv_date} ; "
+            f"celui-ci ({inv_id}) est rejeté (un seul inventaire par jour).",
+        )
+        return _record_result(raw_id, False, "un inventaire existe déjà pour ce nœud et ce jour")
+
+    ConsumableInventory(
+        id=inv_id, node=node, inventory_date=inv_date, comment=comment,
+        node_origin=node.code,
+    ).save(_sync_bypass=True)
+    return _record_result(raw_id, True)
+
+
+def _push_consumable_count(node, record):
+    """
+    BUG-386 : ligne de comptage physique (`ConsumableCount`). PK entière
+    locale (pas un SyncableModel) : identité cross-nœud = clé naturelle
+    (node, consumable_type, count_date, inventory, quantités), jamais la PK.
+    `inventory` (UUID de `ConsumableInventory`) est OPTIONNEL : un payload
+    sans ce champ (comptage historique) reste accepté avec inventory=NULL.
+    """
+    from production.models import ConsumableCount, ConsumableInventory
+
+    rid = record.get('id')
+    bakery_code = record.get('node') or node.code
+    if bakery_code != node.code:
+        return _record_result(rid, False, "comptage d'une autre boulangerie refusé")
+
+    ctype = record.get('consumable_type')
+    if not isinstance(ctype, str) or not ctype.strip() or len(ctype) > 10:
+        return _record_result(rid, False, "consumable_type invalide")
+    count_date = _strict_date(record.get('count_date'))
+    if count_date is None:
+        return _record_result(rid, False, "count_date invalide (AAAA-MM-JJ attendu)")
+    try:
+        system_q = _strict_decimal(record.get('system_quantity'))
+        physical_q = _strict_decimal(record.get('physical_quantity'))
+        gap = _strict_decimal(record.get('gap'))
+    except ValueError as exc:
+        return _record_result(rid, False, str(exc))
+    if gap != physical_q - system_q:
+        return _record_result(rid, False, "écart incohérent (gap ≠ physique − système)")
+    notes = record.get('notes', '')
+    if notes is None:
+        notes = ''
+    if not isinstance(notes, str):
+        return _record_result(rid, False, "notes invalides")
+
+    inventory = None
+    if record.get('inventory') not in (None, ''):
+        inv_id = _strict_uuid(record.get('inventory'))
+        if inv_id is None:
+            return _record_result(rid, False, "inventory invalide (UUID attendu)")
+        inventory = ConsumableInventory.objects.filter(pk=inv_id).first()
+        if inventory is None:
+            return _record_result(rid, False, "dépendance manquante : inventory")
+        if inventory.node_id != node.pk:
+            return _record_result(rid, False, "inventaire d'une autre boulangerie refusé")
+        if inventory.inventory_date != count_date:
+            return _record_result(rid, False, "count_date différente de la date de l'inventaire")
+
+    if ConsumableCount.objects.filter(
+        node=node, consumable_type=ctype, count_date=count_date, inventory=inventory,
+        system_quantity=system_q, physical_quantity=physical_q,
+    ).exists():
+        return _record_result(rid, True)
+
+    ConsumableCount.objects.create(
+        node=node, consumable_type=ctype, count_date=count_date,
+        system_quantity=system_q, physical_quantity=physical_q, gap=gap,
+        notes=notes, inventory=inventory,
+    )
+    return _record_result(rid, True)
+
+
 ORPHAN_EXIT_CONFLICT = 'CONSUMABLE_EXIT_ORPHAN'
 
 
@@ -1323,6 +1509,8 @@ PUSH_HANDLERS = {
     'production.ProductionSessionLine': _push_production_session_line,
     'production.BreadDisposal': _push_bread_disposal,
     'production.ConsumableMovement': _push_consumable_movement,
+    'production.ConsumableInventory': _push_consumable_inventory,
+    'production.ConsumableCount': _push_consumable_count,
     'production.BreadTransfer': _push_bread_transfer,
     'production.BreadTransferLine': _push_bread_transfer_line,
     'treasury.LocalExpense': _push_local_expense,

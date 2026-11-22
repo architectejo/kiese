@@ -44,7 +44,7 @@ test('BUG-282 : vitrine sans debordement a 320/360/768/1440', async ({ page, req
   }
 });
 
-test('BUG-242 : /treasury refuse au facturier et au livreur, ouvert au gerant', async ({ page }) => {
+test('BUG-242 : /treasury (Caisse) et /cloture-journaliere refuses au facturier et au livreur, ouverts au gerant', async ({ page }) => {
   test.setTimeout(600_000);
   for (const u of ['zz_treso_facturier_a', 'zz_treso_livreur']) {
     await page.context().clearCookies();
@@ -54,17 +54,25 @@ test('BUG-242 : /treasury refuse au facturier et au livreur, ouvert au gerant', 
     page.on('request', r => { if (r.url().includes('/api/treasury/')) appels.push(r.url()); });
     await seConnecter(page, u);
     await reporterModale(page);
-    await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
-    await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 60_000 });
-    expect(appels, `appels /api/treasury/ pour ${u}`).toHaveLength(0);
-    expect(await ecart(page)).toBeLessThanOrEqual(1);
+    for (const route of ['/treasury', '/cloture-journaliere']) {
+      await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 240_000 });
+      await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 60_000 });
+      expect(appels, `appels /api/treasury/ pour ${u} sur ${route}`).toHaveLength(0);
+      expect(await ecart(page)).toBeLessThanOrEqual(1);
+    }
     page.removeAllListeners('request');
   }
   await page.goto('/login');
   await page.evaluate(() => localStorage.clear());
   await seConnecter(page, 'zz_clients_gerant');
   await reporterModale(page);
+  // « Caisse » : accessible au gerant, sans les options de clôture.
   await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
+  await expect(page.getByText('Accès refusé')).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: 'Caisse', exact: true })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByText(/Saisir le nombre de coupures/)).toHaveCount(0);
+  // « Clôture Journalière » : billetage visible pour le gerant.
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await expect(page.getByText('Accès refusé')).toHaveCount(0);
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 90_000 });
   expect(await ecart(page)).toBeLessThanOrEqual(1);
@@ -77,7 +85,7 @@ test('BUG-276 : billetage hors borne -> message francais, aucune requete POST', 
   const GER = ['zz_demo_gerant_k2', 'zz_demo_gerant_b1', 'zz_clients_gerant', 'zz_clients_gerant'];
   await seConnecter(page, GER[Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name))]);
   await reporterModale(page);
-  await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 90_000 });
   // la modale « Stock de depart » peut arriver tardivement : la reporter tant qu'elle est la
   const plusTard = page.getByRole('button', { name: /plus tard/i });
@@ -105,6 +113,19 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
   page.on('request', r => { if (r.url().includes('/api/sales/invoices/')) appels.push(r.url()); });
   // Donnee propre au test : une facture PENDING retro-datee (le livreur du parcours 19 vide la file de livraisons).
   const apiReq = await pwRequest.newContext();
+  // Base neuve : `Config.allow_backdated_sales` est desactive (400 sur invoice_date passee). Seuls ADMIN/DIRECTION
+  // peuvent le modifier (BUG-083) : on l'active avec le compte direction de test, puis on restaure la valeur initiale.
+  const lgDir = await apiReq.post(`${API}/api/core/auth/login/`, { data: { username: 'zz_demo_direction', password: 'zz_demo_direction' } });
+  const HD = { Authorization: `Bearer ${(await lgDir.json()).access}` };
+  const reglageAvant = (await (await apiReq.get(`${API}/api/core/config/`, { headers: HD })).json()).allow_backdated_sales as boolean;
+  if (!reglageAvant) {
+    const act = await apiReq.patch(`${API}/api/core/config/`, { headers: HD, data: { allow_backdated_sales: true } });
+    expect(act.status(), await act.text()).toBe(200);
+  }
+  const restaurerReglage = async () => {
+    if (!reglageAvant) await pwRequest.newContext().then(c => c.patch(`${API}/api/core/config/`, { headers: HD, data: { allow_backdated_sales: false } }).finally(() => c.dispose()));
+  };
+  try {
   const lg = await apiReq.post(`${API}/api/core/auth/login/`, { data: { username: 'zz_clients_facturier', password: 'zz_clients_facturier' } });
   const HA = { Authorization: `Bearer ${(await lg.json()).access}` };
   const cl = await (await apiReq.get(`${API}/api/clients/clients/?search=K4-0964`, { headers: HA })).json();
@@ -138,6 +159,9 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
   if (await voirPlus.isVisible().catch(() => false)) await voirPlus.click();
   if (recu) await expect(page.locator('body'), `l'ecran liste ${recu}`).toContainText(recu, { timeout: 10_000 });
   await page.screenshot({ path: `${CAP}/vague5-livraisons-${test.info().project.name}.png` });
+  } finally {
+    await restaurerReglage();
+  }
 });
 
 test('BUG-281 : libelle « Equipe de service de la periode » (necessite un gerant de boulangerie en rotation, K3)', async ({ page }) => {

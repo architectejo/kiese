@@ -8,7 +8,7 @@ import { CAP, login, later, overflow } from '../fixtures/cycle';
 test('Gerant K4 : tresorerie apres cloture, sans debordement', async ({ page }, info) => {
   test.setTimeout(300_000);
   await login(page, 'zz_clients_gerant');
-  await page.goto('/treasury', { waitUntil: 'domcontentloaded' });
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded' });
   await later(page);
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText('CONFIRMÉE').first()).toBeVisible({ timeout: 60_000 });
