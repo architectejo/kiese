@@ -81,7 +81,7 @@ class ClosureDateRejectedWhenBackdatedSalesDisabledTests(TestCase):
         """Non-régression : clôturer la date du jour reste permis, réglage
         désactivé ou pas."""
         resp = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(date.today()),
+            'date': str(date.today()), 'bills_50': 0,
         }, format='json')
         self.assertEqual(resp.status_code, 201, resp.content)
         closure = CashClosure.objects.get(pk=resp.json()['id'])
@@ -159,7 +159,7 @@ class ClosureOnPastDateUsesThatDaysOwnFiguresTests(TestCase):
         )
 
         resp = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(self.past_day),
+            'date': str(self.past_day), 'bills_50': 0,
         }, format='json')
         self.assertEqual(resp.status_code, 201, resp.content)
         closure = CashClosure.objects.get(pk=resp.json()['id'])
@@ -187,7 +187,7 @@ class ClosureUpdateDateValidationTests(TestCase):
 
     def test_patch_cannot_change_date_to_a_future_date(self):
         create = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(date.today()),
+            'date': str(date.today()), 'bills_50': 0,
         }, format='json')
         self.assertEqual(create.status_code, 201, create.content)
         closure = CashClosure.objects.get(pk=create.json()['id'])

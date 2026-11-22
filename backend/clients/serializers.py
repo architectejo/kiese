@@ -114,6 +114,23 @@ class SocialDistributionLineSerializer(serializers.ModelSerializer):
         fields = ['id', 'distribution', 'client', 'client_display', 'indice', 'total_social', 'remise', 'merite', 'total_payer', 'position', 'form']
         read_only_fields = ['id', 'remise', 'total_payer']
 
+    def validate_indice(self, value):
+        # BUG-740 : un indice = nombre de mois cotisés dans l'année (0 à 12).
+        if value < 0 or value > 12:
+            raise serializers.ValidationError("L'indice doit être compris entre 0 et 12 (mois cotisés).")
+        return value
+
+    def validate_merite(self, value):
+        # BUG-740 : le mérite est un bonus, jamais négatif.
+        if value < 0:
+            raise serializers.ValidationError("Le mérite ne peut pas être négatif.")
+        return value
+
+    def validate_total_social(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Le total des cotisations ne peut pas être négatif.")
+        return value
+
     def validate(self, attrs):
         # BUG-254 : `distribution` est désormais exposé ; 400 propre au lieu d'un 500.
         distribution = attrs.get('distribution') or (self.instance.distribution if self.instance else None)
@@ -127,6 +144,21 @@ class SocialDistributionLineSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'distribution': "Cette distribution n'appartient pas à votre boulangerie."})
         if distribution is not None and client is not None and client.node_id != distribution.node_id:
             raise serializers.ValidationError({'client': "Ce client n'appartient pas à la boulangerie de la distribution."})
+        # BUG-747 : les montants calculés (remise, total à recevoir) doivent tenir
+        # dans les colonnes (max_digits=10) : 400 au lieu d'un 500.
+        if distribution is not None:
+            inst = self.instance
+            indice = attrs.get('indice', inst.indice if inst else 0)
+            total_social = attrs.get('total_social', inst.total_social if inst else Decimal('0'))
+            merite = attrs.get('merite', inst.merite if inst else Decimal('0'))
+            limit = Decimal('10') ** 8
+            remise = indice * Decimal(str(distribution.tarif))
+            if remise >= limit:
+                raise serializers.ValidationError(
+                    {'indice': "La remise (indice × tarif) dépasse le maximum autorisé (99 999 999,99 FC)."})
+            if Decimal(str(total_social)) + remise + Decimal(str(merite)) >= limit:
+                raise serializers.ValidationError(
+                    {'detail': "Le total à recevoir (cotisations + remise + mérite) dépasse le maximum autorisé (99 999 999,99 FC)."})
         return attrs
 
     def get_client_display(self, obj):
@@ -149,6 +181,12 @@ class SocialDistributionSerializer(serializers.ModelSerializer):
         # d'une distribution clôturée est figé : il détermine les remises versées.
         if self.instance is not None and self.instance.is_closed and value != self.instance.tarif:
             raise serializers.ValidationError("Distribution clôturée : le tarif ne peut plus être modifié.")
+        # BUG-747 : un nouveau tarif recalcule les lignes existantes, sans dépasser la colonne.
+        if self.instance is not None:
+            for line in self.instance.lines.all():
+                if line.indice * value + line.total_social + line.merite >= Decimal('10') ** 8:
+                    raise serializers.ValidationError(
+                        "Ce tarif ferait dépasser le maximum autorisé (99 999 999,99 FC) sur au moins une ligne.")
         return value
 
     def validate_year(self, value):

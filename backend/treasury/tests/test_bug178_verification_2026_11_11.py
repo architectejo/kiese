@@ -203,7 +203,7 @@ class Scenario6OnlyRg(Base):
         _mk(self.node, self.facA, self.cl, self.bread, 4, CASH, '0', code='RG')
         r = self.api.post('/api/treasury/reports/generate/', {}, format='json')
         self.assertEqual(r.json()['reports'] if isinstance(r.json(), dict) else [], [])
-        c = self.api.post('/api/treasury/closures/', {'date': str(date.today())}, format='json')
+        c = self.api.post('/api/treasury/closures/', {'date': str(date.today()), 'bills_50': 0}, format='json')
         self.assertEqual(c.status_code, 201, c.content)
         self.assertEqual(CashClosure.objects.get().net_cash, Decimal('0'))
 

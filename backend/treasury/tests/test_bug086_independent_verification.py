@@ -162,7 +162,7 @@ class RetroactiveReportFeedsRetroactiveClosureOfSameDayTests(TestCase):
 
         # Clôture le jour A — doit agréger le rapport + dépense du jour A uniquement.
         close_resp = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(self.day_a),
+            'date': str(self.day_a), 'bills_50': 0,
         }, format='json')
         self.assertEqual(close_resp.status_code, 201, close_resp.content)
         closure = CashClosure.objects.get(pk=close_resp.json()['id'])
@@ -206,7 +206,7 @@ class NoRegressionOnBug034_035_036_037WithDateValidationInPlaceTests(TestCase):
 
     def test_bug034_validated_closure_stays_frozen_with_date_validation_in_place(self):
         create = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(date.today()),
+            'date': str(date.today()), 'bills_50': 0,
         }, format='json')
         self.assertEqual(create.status_code, 201, create.content)
         closure_id = create.json()['id']
@@ -222,12 +222,12 @@ class NoRegressionOnBug034_035_036_037WithDateValidationInPlaceTests(TestCase):
 
     def test_bug035_double_closure_same_day_same_node_rejected_cleanly(self):
         first = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(date.today()),
+            'date': str(date.today()), 'bills_50': 0,
         }, format='json')
         self.assertEqual(first.status_code, 201, first.content)
 
         second = self.api_gerant.post('/api/treasury/closures/', {
-            'date': str(date.today()),
+            'date': str(date.today()), 'bills_50': 0,
         }, format='json')
         self.assertEqual(second.status_code, 400, second.content)
         self.assertIn('detail', second.json())

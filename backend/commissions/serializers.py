@@ -51,6 +51,8 @@ class ClientCommissionSerializer(serializers.ModelSerializer):
             'deduction_carte', 'deduction_remise', 'total_deductions',
             'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
+            # BUG-703 : seul set_manuel (ADMIN/DIRECTION, journalisé) écrit l'ajustement manuel.
+            'manuel_adjustment', 'manuel_notes',
             'is_paid', 'paid_at', 'paid_by', 'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
 

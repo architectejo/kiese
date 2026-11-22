@@ -3,7 +3,7 @@ RBAC permissions for ETS. KIESE.
 Enforces role-based and node-scoped access control.
 """
 
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
 class IsAdmin(BasePermission):
@@ -38,6 +38,19 @@ class IsGerant(BasePermission):
                 'ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'
             )
         )
+
+
+class IsGerantWriteNoAccountant(BasePermission):
+    """Lecture : comme IsGerant. Écriture : ADMIN, DIRECTION, GERANT (le COMPTABLE est en lecture seule)."""
+    message = "Le comptable est en lecture seule sur cette ressource."
+
+    def has_permission(self, request, view):
+        if not IsGerant().has_permission(request, view):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        user = request.user
+        return user.is_superuser or user.role in ('ADMIN', 'DIRECTION', 'GERANT')
 
 
 class IsFacturier(BasePermission):

@@ -11,6 +11,8 @@ export const Blockchain: React.FC = () => {
     open_alerts: number;
     nodes_checked: number;
     all_intact: boolean;
+    never_checked?: boolean;
+    unchecked_nodes?: string[];
     node_snapshots: BlockchainSnapshot[];
   } | null>(null);
   const [alerts, setAlerts] = useState<TamperAlert[]>([]);
@@ -56,7 +58,14 @@ export const Blockchain: React.FC = () => {
     }
   };
 
-  const allIntact = globalStatus?.all_intact ?? true;
+  // BUG-846 : « jamais vérifié » (ou vérification partielle sans altération) n'est pas « compromis ».
+  const neverChecked = globalStatus?.never_checked === true;
+  const tampered = (globalStatus?.node_snapshots ?? []).some(s => !s.is_intact);
+  const partial = !neverChecked && !tampered && globalStatus?.all_intact === false;
+  const neutral = neverChecked || partial;
+  const allIntact = neutral ? false : (globalStatus?.all_intact ?? true);
+  const tone = neutral ? 'color-warning' : allIntact ? 'color-success' : 'color-danger';
+  const statusLabel = neverChecked ? 'JAMAIS VÉRIFIÉ' : partial ? 'VÉRIFICATION PARTIELLE' : allIntact ? 'INTÈGRE' : 'COMPROMIS';
   const openAlerts = globalStatus?.open_alerts ?? 0;
 
   return (
@@ -84,13 +93,13 @@ export const Blockchain: React.FC = () => {
       {/* KPI Stats */}
       <div className="kpi-grid" style={{ gap: '14px' }}>
         <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px' }}>
-          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: `hsl(var(--${allIntact ? 'color-success' : 'color-danger'}) / 0.1)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: `hsl(var(--${allIntact ? 'color-success' : 'color-danger'}))` }}>
+          <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: `hsl(var(--${tone}) / 0.1)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: `hsl(var(--${tone}))` }}>
             <FiShield />
           </div>
           <div>
             <div style={{ fontSize: '0.65rem', color: 'hsl(var(--text-secondary))', fontWeight: 700 }}>ÉTAT DE LA CHAÎNE</div>
-            <h3 style={{ fontSize: '1rem', fontWeight: 800, color: allIntact ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-              {allIntact ? 'INTÈGRE' : 'COMPROMIS'}
+            <h3 style={{ fontSize: '1rem', fontWeight: 800, color: `hsl(var(--${tone}))` }}>
+              {statusLabel}
             </h3>
           </div>
         </div>
@@ -118,7 +127,7 @@ export const Blockchain: React.FC = () => {
       <div className="glass-card" style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '16px', flexWrap: 'wrap', gap: '12px',
-        borderLeft: `4px solid hsl(var(--${allIntact ? 'color-success' : 'color-danger'}))`,
+        borderLeft: `4px solid hsl(var(--${tone}))`,
         transition: 'all 0.3s ease'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -126,8 +135,10 @@ export const Blockchain: React.FC = () => {
           <div>
             <strong style={{ fontSize: '0.8rem', color: 'hsl(var(--text-primary))', display: 'block' }}>
               {verifying ? 'Validation cryptographique en cours...' :
-                allIntact ? '✓ Registre Intègre — Aucune Altération Détectée' :
-                  '⚠ Altérations Détectées — Vérifiez les Alertes'}
+                neverChecked ? "Aucune vérification effectuée — lancez la vérification d'intégrité" :
+                  partial ? `Vérification partielle — boulangeries non vérifiées : ${(globalStatus?.unchecked_nodes ?? []).join(', ')}` :
+                    allIntact ? '✓ Registre Intègre — Aucune Altération Détectée' :
+                      '⚠ Altérations Détectées — Vérifiez les Alertes'}
             </strong>
             <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-secondary))' }}>
               {verifying ? 'Calcul des hash SHA-256 de tous les nœuds...' :

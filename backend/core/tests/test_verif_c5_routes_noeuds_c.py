@@ -63,7 +63,6 @@ class NodeDeleteAttack(Base5):
         self.assertEqual(api().delete(f'/api/core/nodes/{self.siege.pk}/').status_code, 401)
         self.assertTrue(Node.objects.filter(pk=self.siege.pk).exists())
 
-    @expectedFailure  # BUG-564
     def test_BUG_564_siege_cannot_be_renamed_then_deleted(self):
         """Contournement : renommer le code SIEGE puis supprimer (la garde teste `code`)."""
         a = api(self.u['ADMIN'])
