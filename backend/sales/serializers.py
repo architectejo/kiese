@@ -28,6 +28,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     node_display         = serializers.StringRelatedField(source='node', read_only=True)
     status_display       = serializers.CharField(source='get_status_display', read_only=True)
     payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
+    # BUG-651b : code boulangerie (K1, B2...) pour le reçu thermique, lecture seule.
+    node_code            = serializers.CharField(source='node.code', read_only=True, default=None)
     # BUG-092 : perte totale de la facture (somme des pertes par ligne),
     # exposée pour le reçu/l'historique client — jamais stockée, toujours
     # recalculée depuis les lignes réelles.
@@ -41,7 +43,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Invoice
         fields = [
-            'id', 'receipt_number', 'node', 'node_display',
+            'id', 'receipt_number', 'node', 'node_display', 'node_code',
             'client', 'client_display', 'client_code', 'client_photo', 'client_current_debt',
             'facturier', 'facturier_display', 'livreur', 'livreur_display',
             'team', 'status', 'status_display', 'payment_type', 'payment_type_display',
@@ -54,7 +56,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'receipt_number', 'node_display', 'client_display',
+            'id', 'receipt_number', 'node_display', 'node_code', 'client_display',
             'client_code', 'client_photo', 'client_current_debt',
             'facturier_display', 'livreur_display', 'status_display', 'payment_type_display',
             'order_total', 'debt_after', 'invoice_date', 'delivered_at', 'total_loss',

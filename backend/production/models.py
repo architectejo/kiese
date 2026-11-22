@@ -823,6 +823,10 @@ class ConsumableCount(models.Model):
         'ConsumableInventory', on_delete=models.CASCADE, null=True, blank=True,
         related_name='lines', verbose_name=_("Inventaire"),
     )
+    # BUG-626 : suivi de synchronisation des comptages HISTORIQUES (sans inventaire),
+    # qui n'ont pas d'en-tête porteur de `is_synced`. Les lignes d'un inventaire
+    # remontent avec leur en-tête ; ce drapeau ne sert qu'aux lignes `inventory=NULL`.
+    is_synced         = models.BooleanField(default=True, verbose_name=_("Synchronisé"))
 
     class Meta:
         verbose_name = _("Comptage Physique")

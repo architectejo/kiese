@@ -1,7 +1,7 @@
 """Verification independante Dev C (testeur-permissions) de BUG-522 :
 immutabilite de from_node / to_node / initiated_by / quantites d'en-tete d'un
 BreadTransfer apres creation. Donnees fictives uniquement."""
-from production.models import BreadTransfer, BreadTransferLine
+from production.models import BreadTransfer, BreadTransferLine, _adjust_bread_stock
 from core.models import Node
 from core.tests.test_permissions_regression_2026_11_19 import cl
 from core.tests.test_verif_isolation_a_c import IsoBase
@@ -238,6 +238,7 @@ class ActionsDoNotRewire(Bug522Base):
                  'transfer_status': 'CANCELLED'}
         # respond (fournisseur K2)
         t, url = self.mk('PENDING')
+        _adjust_bread_stock(self.k2, self.bp, produced=2)  # BUG-652 : stock émettrice requis
         r = cl(self.u2['GERANT']).post(
             url + 'respond_to_request/',
             {'approved': True, 'lines': [{'bread_price': self.bp.pk, 'quantity_sent': 2}], **extra},

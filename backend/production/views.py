@@ -94,7 +94,8 @@ def _strict_int(value, label, minimum=0):
         n = int(value)
     elif isinstance(value, str):
         s = value.strip()
-        if s.lstrip('-').isdigit():
+        # BUG-654 : chiffres ASCII uniquement (« ٣ » arabe-indien refusé, comme _strict_pk).
+        if s.isascii() and s.lstrip('-').isdigit():
             # BUG-322 : chiffres Unicode / chaînes > 4300 chiffres -> ValueError.
             try:
                 n = int(s)
@@ -842,6 +843,10 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
 
         team = serializer.validated_data.get('team')
         date = serializer.validated_data.get('date')
+        # BUG-653 : une fournée ne peut pas être datée du futur (même règle que les ventes
+        # et la clôture de caisse, BUG-083) ; la saisie rétroactive reste permise.
+        if date is not None and date > work_date_for(node):
+            raise ValidationError({'detail': "La date de la fournée ne peut pas être dans le futur."})
         lines_data = serializer.validated_data.get('lines') or []
         flour_add = serializer.validated_data.get('flour_sacks_used')
 
@@ -1734,6 +1739,7 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             counted_by=user,
             system_quantity=system_qty,
             gap=physical_qty - system_qty,
+            is_synced=False,  # BUG-626 : comptage hors inventaire, à remonter au Cloud
         )
 
 
@@ -1909,16 +1915,46 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
                     {'detail': f"Transfert déjà au statut « {locked.get_transfer_status_display()} »."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # BUG-652 : chaque ligne du corps doit correspondre à une ligne de la demande
+            # (400 sinon, sans écriture), comme à la réception (BUG-620).
+            lines_by_bp = {l.bread_price_id: l for l in transfer.lines.select_related('bread_price')}
+            final_qty = {bp_pk: l.quantity_sent for bp_pk, l in lines_by_bp.items()}
             for bp_id, qty_send in parsed:
-                try:
-                    line = transfer.lines.get(bread_price_id=bp_id)
-                except (BreadTransferLine.DoesNotExist, ValueError, TypeError):
-                    continue
-                line.quantity_sent = qty_send  # B confirms/adjusts the quantity they'll send
-                line.save(update_fields=['quantity_sent'])
+                if bp_id not in lines_by_bp:
+                    return Response(
+                        {'detail': f"Catégorie de pain absente de cette demande ({bp_id})."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                final_qty[bp_id] = qty_send  # B confirms/adjusts the quantity they'll send
+            if not any(q > 0 for q in final_qty.values()):
+                return Response(
+                    {'detail': "Une réponse positive doit envoyer au moins un pain ; "
+                               "refusez la demande (approved=false) si rien n'est disponible."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # BUG-652 : même contrôle de stock que `send/`, sous verrou.
+            positive = [bp_pk for bp_pk, q in final_qty.items() if q > 0]
+            for bp_pk in sorted(positive):
+                BreadStock.objects.get_or_create(node=transfer.from_node, bread_price_id=bp_pk)
+            stocks = {
+                s.bread_price_id: s for s in BreadStock.objects.select_for_update()
+                .filter(node=transfer.from_node, bread_price_id__in=positive).order_by('bread_price_id')
+            }
+            for bp_pk in positive:
+                available = stocks[bp_pk].qty_available
+                if final_qty[bp_pk] > available:
+                    return Response({'detail': (
+                        f"Stock insuffisant pour {lines_by_bp[bp_pk].bread_price.label} : "
+                        f"{max(available, 0)} disponible(s) à {transfer.from_node.code}, "
+                        f"{final_qty[bp_pk]} demandé(s)."
+                    )}, status=status.HTTP_400_BAD_REQUEST)
+            for bp_pk, line in lines_by_bp.items():
+                if line.quantity_sent != final_qty[bp_pk]:
+                    line.quantity_sent = final_qty[bp_pk]
+                    line.save(update_fields=['quantity_sent'])
 
             # Deduct B's stock now that bread physically leaves
-            for line in transfer.lines.select_related('bread_price').all():
+            for bp_pk, line in lines_by_bp.items():
                 if line.quantity_sent > 0:
                     _adjust_bread_stock(transfer.from_node, line.bread_price, sent=line.quantity_sent)
 

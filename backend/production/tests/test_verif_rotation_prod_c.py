@@ -24,7 +24,7 @@ from core.testing import make_bread_price, make_client, make_node, make_user
 from production import views as pviews
 from production.models import (
     BreadDisposal, BreadStock, DailyBreadStockSnapshot, DailyOpeningConfirmation,
-    DailyTeamAssignment, ProductionSession,
+    DailyTeamAssignment, ProductionSession, _adjust_bread_stock,
 )
 
 J = date(2026, 11, 12)
@@ -391,6 +391,7 @@ class Bug193Tests(_Base):
                             format='json')
             self.assertEqual(c.status_code, 201, c.data)
             tid = c.data['id']
+            _adjust_bread_stock(other, self.bp300, produced=qty)  # BUG-652 : stock émettrice requis
             self.assertEqual(a2.post(f'{TRANSFERS}{tid}/respond_to_request/', {
                 'approved': True, 'lines': [{'bread_price': self.bp300.pk, 'quantity_sent': qty}]},
                 format='json').status_code, 200)

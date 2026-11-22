@@ -191,7 +191,7 @@ def build_outbound_payload(node_code):
     from treasury.models import CashClosure, LocalExpense, FacturierReport, DisbursementVoucher
     from production.models import (
         ProductionSession, ProductionSessionLine, BreadDisposal,
-        ConsumableMovement, BreadTransfer, BreadTransferLine, ConsumableInventory,
+        ConsumableMovement, BreadTransfer, BreadTransferLine, ConsumableInventory, ConsumableCount,
     )
 
     def _dec(value):
@@ -309,6 +309,19 @@ def build_outbound_payload(node_code):
             'gap': _dec(l.gap), 'notes': l.notes,
         }
         for i in inventories_qs for l in i.lines.select_related('node')
+    ]
+    # BUG-626 : comptages historiques (sans inventaire) non encore synchronisés.
+    # `id` = clé locale entière, renvoyée telle quelle par le Cloud pour le marquage.
+    consumable_counts += [
+        {
+            'id': str(l.pk), 'node': l.node.code, 'inventory': None,
+            'consumable_type': l.consumable_type, 'count_date': l.count_date.isoformat(),
+            'system_quantity': _dec(l.system_quantity), 'physical_quantity': _dec(l.physical_quantity),
+            'gap': _dec(l.gap), 'notes': l.notes,
+        }
+        for l in ConsumableCount.objects.filter(
+            node__code=node_code, inventory__isnull=True, is_synced=False,
+        ).select_related('node')
     ]
     transfers_qs = BreadTransfer.objects.filter(node_origin=node_code, is_synced=False)
     transfers = [
@@ -468,6 +481,17 @@ def apply_push_response(response_data):
         except (LookupError, ValueError):
             continue
         if not hasattr(model, 'is_synced'):
+            continue
+        if model_label == 'production.ConsumableCount':
+            # BUG-626 : clé locale entière (comptages historiques sans inventaire).
+            int_ids = [
+                int(r['id']) for r in record_results
+                if isinstance(r, dict) and r.get('status') == 'ACCEPTED' and not r.get('inventory')
+                and isinstance(r.get('id'), str) and r['id'].isascii() and r['id'].isdigit()
+                and len(r['id']) <= 12
+            ]
+            if int_ids:
+                model.objects.filter(pk__in=int_ids, inventory__isnull=True).update(is_synced=True)
             continue
         accepted_ids = []
         for r in record_results:

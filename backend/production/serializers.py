@@ -109,6 +109,9 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
             msg = None
             if raw is None or isinstance(raw, bool) or (isinstance(raw, str) and not raw.strip()):
                 msg = "« flour_sacks_used » : nombre de sacs invalide."
+            elif isinstance(raw, str) and not raw.isascii():
+                # BUG-654 : chiffres Unicode (« ٣ ») refusés, seuls 0-9 ASCII sont acceptés.
+                msg = "« flour_sacks_used » : nombre de sacs invalide (chiffres 0-9 uniquement)."
             else:
                 try:
                     val = Decimal(str(raw).strip())

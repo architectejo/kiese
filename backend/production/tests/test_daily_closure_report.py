@@ -21,7 +21,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from core.testing import make_node, make_user, make_bread_price, make_client
-from production.models import ProductionSession, DailyBreadStockSnapshot
+from production.models import ProductionSession, DailyBreadStockSnapshot, _adjust_bread_stock
 
 
 def _q2(value):
@@ -148,6 +148,7 @@ class DailyClosureReportTests(TestCase):
         self.assertEqual(create_resp.status_code, 201, create_resp.data)
         transfer_id = create_resp.data['id']
 
+        _adjust_bread_stock(self.other_node, self.bp300, produced=15)  # BUG-652 : stock émettrice requis
         respond_resp = self.other_gerant_api.post(
             f'/api/production/transfers/{transfer_id}/respond_to_request/', {
                 'approved': True,
