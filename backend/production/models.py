@@ -817,6 +817,12 @@ class ConsumableCount(models.Model):
     )
     notes             = models.TextField(blank=True, default='', verbose_name=_("Notes"))
     created_at        = models.DateTimeField(auto_now_add=True)
+    # BUG-386 : rattache la ligne à l'inventaire du jour (en-tête) ; NULL pour
+    # les comptages historiques saisis ligne par ligne.
+    inventory         = models.ForeignKey(
+        'ConsumableInventory', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='lines', verbose_name=_("Inventaire"),
+    )
 
     class Meta:
         verbose_name = _("Comptage Physique")
@@ -825,6 +831,33 @@ class ConsumableCount(models.Model):
 
     def __str__(self):
         return f"{self.node.code} | {self.consumable_type} | {self.count_date} | gap={self.gap}"
+
+
+class ConsumableInventory(SyncableModel):
+    """
+    BUG-386 (remarque.md l.472) : « Inventaire Physique » des consommables d'une
+    boulangerie, saisi par le gérant UNE SEULE FOIS par jour. Les lignes sont des
+    `ConsumableCount` (champ `inventory`). Après saisie, seul `comment` reste
+    modifiable ; une nouvelle saisie n'est possible que le lendemain.
+    """
+    node           = models.ForeignKey(Node, on_delete=models.PROTECT, related_name='consumable_inventories', verbose_name=_("Boulangerie"))
+    inventory_date = models.DateField(verbose_name=_("Date de l'inventaire"))
+    comment        = models.TextField(blank=True, default='', verbose_name=_("Commentaire"))
+    recorded_by    = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name='consumable_inventories', verbose_name=_("Saisi par"),
+    )
+
+    class Meta:
+        verbose_name = _("Inventaire Physique")
+        verbose_name_plural = _("Inventaires Physiques")
+        ordering = ['-inventory_date', 'node__code']
+        constraints = [
+            models.UniqueConstraint(fields=['node', 'inventory_date'], name='uniq_consinv_node_date'),
+        ]
+
+    def __str__(self):
+        return f"Inventaire {self.node.code} {self.inventory_date}"
 
 
 class BreadTransfer(SyncableModel):

@@ -3,6 +3,8 @@ import { FiPlus, FiAlertTriangle } from 'react-icons/fi';
 import type { ConsumableStock, ConsumableCount } from '@/api/services';
 import type { UserProfile } from '@/store/authStore';
 import { STOCK_ICONS, displayStock } from './productionHelpers';
+import { GlobalConsumablesSection } from './GlobalConsumablesSection';
+import { PhysicalInventoryForm } from './PhysicalInventoryForm';
 
 export interface IntrantsTabProps {
   stocks: ConsumableStock[];
@@ -20,8 +22,13 @@ export interface IntrantsTabProps {
 }
 
 export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, setShowApproModal, countValues, setCountValues, countError, countSubmitting, lastCounts, user, currentNodeLabel, hasLowStock, handleInventoryCount }) => {
+  const role = user?.role;
+  const isGlobalViewer = role === 'ADMIN' || role === 'DIRECTION' || role === 'COMPTABLE';
+  const isGerant = role === 'GERANT';
   return (
-        <div className="glass-card" style={{ padding: '14px' }}>
+    <>
+      {isGlobalViewer && <GlobalConsumablesSection role={role} />}
+        <div className="glass-card" style={{ padding: '14px', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h2 style={{ fontSize: '0.88rem', fontWeight: 800 }}>
               Intrants — Stocks Consommables (§3.2)
@@ -80,8 +87,12 @@ export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, set
             </div>
           )}
 
+          {/* BUG-387 : inventaire physique du jour (gérant) — remplace l'ancien comptage libre,
+              refusé par le serveur le jour d'un inventaire. */}
+          {isGerant && <PhysicalInventoryForm stocks={stocks} />}
+
           {/* ── Inventaire physique (non-FLOUR) ── */}
-          {stocks.filter(s => s.consumable_type !== 'FLOUR').length > 0 && (
+          {!isGerant && stocks.filter(s => s.consumable_type !== 'FLOUR').length > 0 && (
             <div style={{ marginTop: '14px', borderTop: '1px solid hsl(var(--border-color))', paddingTop: '12px' }}>
               <div style={{ fontSize: '0.7rem', fontWeight: 800, color: 'hsl(var(--text-secondary))', textTransform: 'uppercase', marginBottom: '8px' }}>
                 Inventaire Physique
@@ -129,5 +140,6 @@ export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, set
             </div>
           )}
         </div>
+    </>
   );
 };

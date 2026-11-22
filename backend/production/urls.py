@@ -7,6 +7,9 @@ from .views import (
     DailyClosureReportView, DailyClosureClientsView, DailyOpeningConfirmationView, BreadStockByDateView,
     TeamAssignmentView,
 )
+from .consumables_direction import (
+    GlobalConsumablesView, DispatchConsumablesView, ConsumableInventoryViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'sessions',    ProductionSessionViewSet,  basename='production-session')
@@ -17,6 +20,7 @@ router.register(r'movements',   ConsumableMovementViewSet, basename='consumable-
 router.register(r'counts',      ConsumableCountViewSet,    basename='consumable-count')
 router.register(r'transfers',   BreadTransferViewSet,      basename='bread-transfer')
 router.register(r'disposals',   BreadDisposalViewSet,      basename='bread-disposal')
+router.register(r'inventories', ConsumableInventoryViewSet, basename='consumable-inventory')
 
 urlpatterns = [
     # BUG-120 : rapport de clôture journalier consolidé — avant le routeur
@@ -32,6 +36,9 @@ urlpatterns = [
     # du routeur (DRF router matcherait sinon `by-date` comme une PK invalide
     # avant d'atteindre cette vue si elle était déclarée après `include`).
     # BUG-161 (B2) : désignation de l'équipe de service du jour.
+    # BUG-386 : vue globale des consommables (direction), envoi direction -> boulangeries.
+    path('consumables/global/', GlobalConsumablesView.as_view(), name='consumables-global'),
+    path('consumables/dispatch/', DispatchConsumablesView.as_view(), name='consumables-dispatch'),
     path('team-assignment/', TeamAssignmentView.as_view(), name='team-assignment'),
     path('bread-stocks/by-date/', BreadStockByDateView.as_view(), name='bread-stock-by-date'),
     path('', include(router.urls)),

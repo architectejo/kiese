@@ -1,5 +1,9 @@
 import { apiClient } from './client';
 import { useWorkDateStore } from '@/store/workDateStore';
+import type {
+  GlobalConsumables, ConsumableDispatchPayload, ConsumableDispatchResult,
+  ConsumableInventory, InventoryToday, InventoryCreatePayload, NodeInventoryDetail,
+} from './consumablesDirection';
 
 // BUG-161 (F3) : la « date de travail » vient du serveur. Chaque réponse qui la porte alimente
 // le petit store partagé (aucun appel ni minuteur supplémentaire) ; le navigateur ne calcule
@@ -1667,6 +1671,21 @@ export const productionApi = {
       getList<ConsumableCount>('/api/production/counts/', params),
     create: (data: Partial<ConsumableCount> & { node?: string }) =>
       apiClient.post<ConsumableCount>('/api/production/counts/', data),
+  },
+  // BUG-387 : vue globale consommables (direction) + inventaire physique (gérant).
+  consumablesGlobal: {
+    get: () => apiClient.get<GlobalConsumables>('/api/production/consumables/global/'),
+    dispatch: (data: ConsumableDispatchPayload) =>
+      apiClient.post<ConsumableDispatchResult>('/api/production/consumables/dispatch/', data),
+  },
+  inventories: {
+    today: () => apiClient.get<InventoryToday>('/api/production/inventories/today/'),
+    create: (data: InventoryCreatePayload) =>
+      apiClient.post<ConsumableInventory>('/api/production/inventories/', data),
+    updateComment: (id: string, comment: string) =>
+      apiClient.patch<ConsumableInventory>(`/api/production/inventories/${id}/`, { comment }),
+    forNode: (node: number | string, date?: string) =>
+      apiClient.get<NodeInventoryDetail>(`/api/production/inventories/node/${node}/`, { params: date ? { date } : undefined }),
   },
   disposals: {
     list: (params?: Record<string, string>) =>

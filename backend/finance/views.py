@@ -62,7 +62,9 @@ def _income_statement_for_year(year: int) -> dict:
     # régression de performance (BUG-064/066/070).
     from production.models import ConsumableMovement
     _line_cost = ExpressionWrapper(F('quantity') * F('unit_price'), output_field=DjDecimalField(max_digits=14, decimal_places=2))
-    exit_qs = ConsumableMovement.objects.filter(created_at__year=year, movement_type='EXIT').annotate(line_cost=_line_cost)
+    # BUG-386 : les sorties du stock direction (nœud SIEGE, envoi vers les boulangeries)
+    # sont des transferts internes, pas une consommation : exclues du coût.
+    exit_qs = ConsumableMovement.objects.filter(created_at__year=year, movement_type='EXIT').exclude(node__code='SIEGE').annotate(line_cost=_line_cost)
     cost_agg = exit_qs.aggregate(
         cost_flour=Sum('line_cost', filter=Q(stock__consumable_type='FLOUR')),
         cost_yeast=Sum('line_cost', filter=Q(stock__consumable_type='YEAST')),

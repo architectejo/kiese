@@ -1637,6 +1637,19 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
+    def _refuse_if_inventory_line(self, instance):
+        # BUG-386 : les lignes d'un Inventaire Physique ne sont plus modifiables.
+        if instance.inventory_id:
+            raise ValidationError({'detail': "Cette ligne appartient à un inventaire physique : elle n'est plus modifiable."})
+
+    def perform_update(self, serializer):
+        self._refuse_if_inventory_line(serializer.instance)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._refuse_if_inventory_line(instance)
+        instance.delete()
+
     def perform_create(self, serializer):
         user = self.request.user
         node = user.node
@@ -1655,6 +1668,11 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
 
         consumable_type = serializer.validated_data['consumable_type']
         physical_qty   = serializer.validated_data['physical_quantity']
+        # BUG-386 : l'inventaire du jour (une saisie par jour) n'est pas contournable
+        # par un comptage ligne par ligne à la même date.
+        from .models import ConsumableInventory
+        if ConsumableInventory.objects.filter(node=node, inventory_date=timezone.localdate()).exists():
+            raise ValidationError({'detail': "L'inventaire physique du jour a déjà été saisi : il n'est plus modifiable aujourd'hui."})
 
         stock = ConsumableStock.objects.filter(node=node, consumable_type=consumable_type).first()
         system_qty = stock.quantity if stock else 0
