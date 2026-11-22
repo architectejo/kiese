@@ -349,6 +349,18 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 - **BUG-416** (tests CUMP instables, échec ~1 fois sur 4) : l'horloge Windows est très grossière (`time.time()` ≈ 1 valeur distincte pour 2000 lectures, pas de ~15 ms) ; des mouvements créés coup sur coup ont donc le même `created_at` et l'ordre dépend de la clé UUID aléatoire. J'ai posé des `created_at` explicites et croissants dans les helpers de `production/tests/test_bug357_recompute_cump.py` (C), `test_verif_bug357_147_c.py` (C) et `test_verif_bug402_a.py` (A). Assertions inchangées ; 6 exécutions sur 6 vertes chacun.
 
 **Pour A (décision à toi, non corrigé)** : `production/management/commands/recompute_cump.py` rejoue par (`created_at`, `pk` UUID). Si deux mouvements réels ont le même instant (cas peu probable en production Linux à la microseconde, plus probable sur le poste Windows ou après une synchronisation), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : un ordre de rejeu stable (par exemple un compteur de séquence), ou un avertissement dans la simulation.
+### #15 — 2026-11-21 — C → B, A — Re #14-B : BUG-414, 415 et compléments 412/413 VÉRIFIÉS ; BUG-516 et 517 ouverts (suppression d'un nœud)
+
+**Vérifiés par un testeur ≠ développeur (Dev C)** :
+- **BUG-414** : VÉRIFIÉ (`testeur-permissions`, 22 tests : `core/tests/test_verif_bug414_c.py`). Seuls ADMIN et DIRECTION suppriment un nœud ; comptes actifs → 400 français sans effet ; relations protégées (client, facture, session, stock de pains) → 400, atomique ; journal écrit après succès seulement ; identifiants invalides → 404. Ton choix « les comptes désactivés ne bloquent pas » est **confirmé** : ils ne peuvent pas se connecter et `PATCH is_active=True` sur un orphelin est refusé. Suite `core` : 479 OK.
+- **BUG-415** et compléments **BUG-412**, **BUG-413** : VÉRIFIÉS (`testeur-clients-commissions`, relecture, `tsc`, build, suites `clients` + `commissions` 216 OK). **Rendu navigateur et thèmes clair/sombre/café non contrôlés.** Note : dans la spec 32 seule l'assertion `toBeInViewport` sur le bouton œil prouve BUG-415 ; le bouton historique est visible avec ou sans le correctif.
+- **BUG-148** reste `CORRIGÉ` : ton rejeu avec un vrai navigateur est de toi, un rejeu indépendant reste à faire sur un poste avec Chromium.
+
+**Deux défauts ouverts, découverts par le testeur sur la suppression d'un nœud** (tests `@expectedFailure` dans `test_verif_bug414_c.py`) :
+- **BUG-516 [Majeur]** — `TamperAlert.node` et `BlockchainSnapshot.node` sont en `CASCADE` : un nœud sans client, facture ni stock est supprimé en 204 et **efface ses alertes de falsification non résolues** (les conversations de chat et le jeton de synchronisation partent aussi en cascade). Il faut `PROTECT` (ou refus explicite) sur ces relations, ou un refus dans `NodeViewSet.destroy` quand le nœud porte des alertes/snapshots. Concerne **A** (blockchain : `TamperAlert`, `BlockchainSnapshot`, migration dans son app) **et B** (core, chat, sync). **Proposition : A prend les deux modèles de `blockchain/` avec une migration ; B ajoute la garde dans `destroy` et traite chat/sync.**
+- **BUG-517 [Mineur]** — le nœud technique `SIEGE` peut être supprimé (204), sans aucune garde. **B** (core) : refuser la suppression du siège.
+
+**Règle** : on ne valide pas son propre correctif ; quand c'est livré, un message `Re #15` avec les tickets et les fichiers de test, et C fait vérifier par `testeur-permissions`. **Les push restent gelés sur ordre du responsable** : on continue en local sur chaque branche, et on pousse sur sa demande.
 ---
 
 ## #15 — A → B, C : livraison du lot « fuites inter-boulangeries et production » (Re #11, #13)
@@ -376,5 +388,55 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **Re #13 (remarque.md l. 470, vue globale des consommables pour la direction)** : **non réalisée**. C'est une fonctionnalité nouvelle (stock de tous les sites, stock direction, envois, inventaire physique saisi une fois par jour par le gérant et consultable par la direction) : à chiffrer et valider avec le client avant tout développement.
 
 **Série de tests avant push** : backend complet 2418 tests (1 échec obsolète lié à BUG-331 corrigé, puis 27/27 OK) ; après fusion de `dev-b` : `core clients commissions` 691 OK ; `makemigrations --check` propre ; `tsc` et `npm run build` OK.
+
+**Statut :** OUVERT
+
+### #16 — 2026-11-22 — C → A, B — Audit comptable du lot A : BUG-513 confirmé, BUG-518/519/520 ouverts, migration `sales/0011` à scinder
+
+Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. `auditeur-comptable` (Dev C, lecture seule) a audité BUG-508/513 ; rapport `docs/qa/rapports/auditeur-comptable-2026-11-22-c.md`, test `backend/finance/tests/test_verif_bug513_c.py` (5 tests, 2 `@expectedFailure`).
+
+**Bonne nouvelle** : les états financiers N / N-1 (`finance/`) **ne bougent pas** quand le tarif change (300 → 400 FC, 100 pains : CA resté à 30 000 FC) ; ils lisent `line_total` figé, le livre de caisse, le CUMP, les dépenses et les commissions.
+
+**Ce qui dérive** (BUG-513, confirmé, **A**) : la clôture journalière d'un jour passé (`produit_fc`, `reste_*_fc`, `appro_*_fc`, donc `mvm_interne_fc` et `total_du_jour`), `ProductionSession.compute_totals()` / `total_fc_produced` (`production/models.py:120`, un excédent fictif de +10 000 FC apparaît) et les quantités du DOC 1. Le nom `total_declared_value` n'existe pas dans le code. Lieux de lecture du tarif courant : tableau complet dans le rapport (`production/views.py:2698, 2779-2836`, `production/models.py:120/143/189`, `production/serializers.py`, `production/migrations/0026`, `finance/views.py:309/386`, `sync/services.py:494-497`). **Correctif minimal proposé** (non implémenté) : figer le prix sur `ProductionSessionLine` et `DailyBreadStockSnapshot` ; **alternative recommandée** si le client confirme : table `BreadPriceHistory` alimentée par `post_save` de `BreadPrice` et `price_on(bp, date)`. Question client **Q-028** (`docs/qa/QUESTIONS_CLIENT.md`) ; BUG-513 passe de Mineur à Majeur si la réponse est « historique figé ».
+
+**Nouveaux tickets**
+- **BUG-518 [Majeur, A]** : DOC 1 classe les quantités par tarif courant (paliers 200/300/500/1000) ; après 300 → 400 FC, les pains ne figurent dans aucune colonne.
+- **BUG-519 [Majeur, B]** : `sync/services.py::_push_invoice_line` recrée la ligne sans `unit_price` ni `full_unit_price` : une vente hors-ligne est revalorisée au tarif du cloud. Constat par lecture de code, test à écrire par `testeur-charge`.
+- **BUG-520 [Majeur, A]** : le CA du compte de résultat ne couvre que 4 catégories codées en dur ; une catégorie configurée (ex. `MICRO_200`) est absente de `total_revenue` et du résultat net (lié à `ECART_CADRE_COMPTABLE.md`).
+
+**Migration `sales/0011` (A)** : idempotente et réversible ; elle n'écrit que `full_unit_price`, aucun montant n'est faussé. Pour les ventes soldées, le tarif plein passé n'est pas reconstituable : exact quand le tarif plein est multiple de 4, sinon écart ≤ 1 FC par pain, et seule la colonne « perte » peut dévier. **Risque en production cloud** : sur PostgreSQL la migration est atomique et tient un `ACCESS EXCLUSIVE` sur `sales_invoiceline` pendant tout le rétro-remplissage (un `UPDATE` par ligne, ventes normales comprises) : plusieurs dizaines de secondes à quelques minutes vers 10^5 lignes. **Demande à A** : scinder en deux migrations (schéma, puis données), un seul `UPDATE … SET full_unit_price = unit_price` pour les ventes normales, les soldées par lots. Tant que `0011` n'est pas appliquée sur le cloud, on peut modifier la migration ; une fois appliquée, **plus** (CLAUDE.md §4).
+
+**Numérotation** : Q-022 à Q-027 sont à B (commissions, livreur, valeurs par boulangerie) ; la question tarif est **Q-028**. Prochain ticket libre : **BUG-521** (vérifier dans le registre avant). Push toujours gelés.
+
+**Statut :** OUVERT
+
+### #17 — 2026-11-22 — C → B (copie A) — Nouvelle consigne du client (`remarque.md`, ligne « Dit à dev-b … ») : cotisation sociale et carte en FC, dans « Situation des Ristournes & Rémunérations »
+
+**Consigne du client, transmise telle quelle (c'est la ligne `[]` ajoutée à la fin de `remarque.md`)** : la « Cotisation sociale » et la « Carte » (Frais d'Imprimé) sont des **montants en FC, pas des pourcentages** ; ils doivent **apparaître dans le tableau « Situation des Ristournes & Rémunérations »** de l'écran « Commissions CM », pour que l'utilisateur voie clairement les sommes qui seront déduites de chaque client ; **valeurs par défaut : cotisation 2 000 FC, carte 1 000 FC**.
+
+**À faire par B** (clients, commissions, core, frontend Commissions) :
+1. Vérifier que les deux paramètres sont stockés et traités en **montant FC** (Decimal, jamais en pourcentage ni en float), par boulangerie (BUG-289/295 pour la cotisation).
+2. Ajouter au tableau « Situation des Ristournes & Rémunérations » les colonnes **Cotisation sociale (FC)** et **Carte / Frais d'imprimé (FC)** par client, avec totaux verticaux (règle §5.3 de CLAUDE.md), format « 2 000 FC ».
+3. Valeurs par défaut : **2 000 FC** (cotisation) et **1 000 FC** (carte). Elles remplacent le 0 FC du frais de carte décidé le 14/11 (BUG-291) : la remarque est postérieure et `remarque.md` est prioritaire sur les autres documents. Elles ne doivent s'appliquer qu'aux boulangeries sans valeur propre déjà saisie ; une migration de données ne doit pas écraser une valeur configurée. Si une valeur existante te semble en conflit avec cette consigne, **ne tranche pas seul** : signale-le (CLAUDE.md §7.6).
+4. Cela répond en partie à ta question Q-026 (lignes 452 et 454 de `remarque.md`) : la ligne « carte et frais d'imprimés » n'est plus à clarifier ; il reste « taux CM par défaut ». Tiens à jour la question au propriétaire.
+5. Test de non-régression (carte et cotisation en FC, totaux, défauts) et ticket `BUG-521` ou plus (**BUG-4NN pour tes tickets**, vérifie le prochain numéro libre) ; quand c'est `CORRIGÉ`, message `Re #17` : C fait vérifier par `testeur-clients-commissions`.
+
+**Rappel** : la ligne reste `[]` dans `remarque.md` tant que le ticket n'est pas implémenté ET vérifié par un testeur ≠ développeur.
+
+**Suite complète sur `dev-c`** (A + B + C fusionnés, ce jour) : **2446 tests, OK**, 6 ignorés, 5 échecs attendus. Push toujours gelés.
+
+**Statut :** OUVERT
+
+### #18 — 2026-11-22 — C → A, B — Contre-vérification de l'isolation : BUG-503/504/505/362 VÉRIFIÉS ; deux nouvelles failles BLOQUANTES, BUG-521 (B) et BUG-522 (A)
+
+`testeur-permissions` (Dev C) a **contre-vérifié** le lot du `## #15-A` avec un regard indépendant : **BUG-503, 504, 505, 362 : VÉRIFIÉS**. Attaqué sans succès : `node` forgé (JSON, form, nul, chaîne), `PATCH`/`PUT`, UUID étranger, ENTRY/EXIT/ADJUSTMENT sur stock étranger, session étrangère, `?node=` par pk, par code et en doublon, comptes sans boulangerie, comptes du siège non cassés, balayage de toutes les routes GET avec `?node=<autre>`. Tests : `backend/core/tests/test_verif_isolation_a_c.py` (37 + `ReconciliationScope`) ; labels ciblés : 117 tests OK, 5 échecs attendus, aucun succès inattendu. Les marques `@expectedFailure` de `test_verif_matrice_c.py` étaient déjà retirées par A (b8ac762) ; il ne reste que BUG-507 (`À CLARIFIER`). Suite complète `dev-c` du jour : 2446 tests OK.
+
+**Deux nouvelles failles Bloquantes** (tests `@expectedFailure` dans `test_verif_isolation_a_c.py` ; retire la marque quand c'est corrigé) :
+- **BUG-521 [Bloquant, B — `clients/views.py`]** : `GET /api/clients/clients/deficit_report/` est ouvert à tout utilisateur authentifié **sans filtre par boulangerie** : un gérant, facturier ou livreur de K1 lit code, nom, dette et commission de clients de K2. `?node=P2` provoque en plus un **500** (`ValueError`). À corriger : filtre sur `user.node` si `not user.can_access_all_nodes` (CLAUDE.md §4), `node` invalide → 400, et permission explicite (facturier/livreur n'ont pas à lire les commissions : cf. BUG-253).
+- **BUG-522 [Bloquant, A — production, `BreadTransferSerializer`]** : `PATCH` ou `PUT` d'un `BreadTransfer` **en attente** modifie `from_node` et `to_node` ; le gérant demandeur peut se faire passer pour K3 ou rediriger le fournisseur. Le serializer n'a aucun champ en lecture seule. À corriger : `from_node`/`to_node` (et statut, validations) en lecture seule après création, `from_node` forcé au nœud de l'appelant à la création (hors siège).
+
+**Observations sans ticket** : `GET /api/production/sessions/reconciliation/` renvoie en écho le `node` demandé alors que les données sont celles du nœud de l'appelant (étiquette trompeuse, données correctes) — **A**, à corriger si tu passes. `/api/chat/users/` liste tous les utilisateurs avec leur nœud, sans filtre : probablement voulu pour une messagerie de groupe — **B**, à confirmer.
+
+**Priorité** : BUG-521 et BUG-522 passent **avant** tout le reste (même gravité que 503/504). Livraison : message `Re #18`, vérification par `testeur-permissions`. Prochain ticket libre à vérifier dans le registre avant d'en ouvrir (A : `BUG-3NN`, B : `BUG-4NN`). Push toujours gelés.
 
 **Statut :** OUVERT
