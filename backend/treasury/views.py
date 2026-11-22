@@ -16,7 +16,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from django_filters.rest_framework import DjangoFilterBackend
 
-from core.models import Node, Config
+from core.models import Node, Config, SystemNotification
 from core.permissions import IsGerant, IsHeadquarters
 from core.utils import log_activity, create_notification, validate_requested_date
 from core.workday import work_date_for
@@ -369,8 +369,16 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         inst = serializer.instance
         new_date = serializer.validated_data.get('date', inst.date)
         new_node = serializer.validated_data.get('node', inst.node)
+        # BUG-810 : `node` bool/flottant/illisible du corps (siège) -> 400.
+        if self.request.user.can_access_all_nodes and hasattr(self.request.data, 'get')                 and 'node' in self.request.data:
+            _body_node(self.request.data.get('node'), None)
         _refuse_if_closure_confirmed(inst.node, inst.date, 'rapports')
         _refuse_if_closure_confirmed(new_node, new_date, 'rapports')
+        # BUG-841 : l'unicité (node, facturier, team, date) n'est plus validée par DRF.
+        if FacturierReport.objects.filter(node=new_node, facturier=inst.facturier, team=inst.team,
+                                          date=new_date).exclude(pk=inst.pk).exists():
+            raise ValidationError({'detail': (
+                f"Un rapport existe déjà pour {new_node.code}, équipe {inst.team}, à la date {new_date}.")})
         serializer.save()
 
     def destroy(self, request, *args, **kwargs):
@@ -379,7 +387,12 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             return Response({'detail': "Rapport déjà validé : suppression impossible."},
                             status=status.HTTP_403_FORBIDDEN)
         _refuse_if_closure_confirmed(report.node, report.date, 'rapports')  # BUG-830
-        return super().destroy(request, *args, **kwargs)
+        label = f"Rapport Éq.{report.team} {report.node.code} {report.date} : {report.total_cash_sales} FC"
+        node_code = report.node.code
+        response = super().destroy(request, *args, **kwargs)
+        log_activity(request.user, "Suppression Rapport Facturier",  # BUG-844
+                     f"Rapport supprimé : {label}.", node_origin=node_code)
+        return response
 
     def create(self, request, *args, **kwargs):
         # BUG-810 : `node` du corps (siège) illisible, booléen ou flottant -> 400.
@@ -484,6 +497,9 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
 
         if not node:
             return Response({'detail': 'Aucune boulangerie assignée. Sélectionnez une succursale dans le filtre.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # BUG-840 : jour de clôture confirmée figé (le net confirmé ne doit plus bouger).
+        _refuse_if_closure_confirmed(node, target_date, 'rapports')
 
         created_reports = regenerate_facturier_reports(node, target_date)
         if not created_reports:
@@ -913,17 +929,21 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         tampered = []
         for i, (entry, _expected, is_valid) in enumerate(verify_cashbook_chain(entries)):
             if not is_valid:
-                entry.is_tampered = True
-                entry.save(update_fields=['is_tampered'])
                 tampered.append(str(entry.id))
-                create_notification(
-                    title="Alerte Blockchain — Intégrité compromise",
-                    message=f"L'écriture {entry.piece_number} du {entry.date} a été altérée. Bloc {i+1} corrompu.",
-                    severity='DANGER', node_origin=entry.node.code
-                )
+                # BUG-842 : une seule notification, à la première détection (GET sans
+                # effet de bord répété).
+                if not entry.is_tampered:
+                    entry.is_tampered = True
+                    entry.save(update_fields=['is_tampered'])
+                    create_notification(
+                        title="Alerte Blockchain — Intégrité compromise",
+                        message=f"L'écriture {entry.piece_number} du {entry.date} a été altérée. Bloc {i+1} corrompu.",
+                        severity='DANGER', node_origin=entry.node.code
+                    )
         # BUG-240 : ancre de tête de chaîne (suppression de la dernière écriture).
         head_problem = check_cashbook_head(entries, CashbookHead.objects.first())
-        if head_problem:
+        if head_problem and not SystemNotification.objects.filter(  # BUG-842
+                title="Alerte Blockchain — Livre de Caisse amputé", message=head_problem).exists():
             create_notification(
                 title="Alerte Blockchain — Livre de Caisse amputé",
                 message=head_problem, severity='DANGER', node_origin='CLOUD',
@@ -1268,6 +1288,8 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
             else:
                 month_carried, base = predecessor.running_balance, predecessor.running_balance
             running_balance = base + entry_amount - exit_amount
+            if abs(running_balance) > _MAX_MONEY:  # BUG-847
+                raise ValidationError({'detail': "Solde progressif hors limites autorisées."})
             entry = serializer.save(
                 node=node,
                 recorded_by=user,
@@ -1286,6 +1308,8 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
                 if (e.date.year, e.date.month) != (prev_date.year, prev_date.month):
                     carried = bal
                 bal = bal + e.entry_amount - e.exit_amount
+                if abs(bal) > _MAX_MONEY:  # BUG-847 : annule toute la transaction
+                    raise ValidationError({'detail': "Solde progressif hors limites autorisées."})
                 e.month_carried, e.running_balance = carried, bal
                 prev_date = e.date
             if later:
@@ -1303,6 +1327,12 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
                         "non rapproché — aucune CashClosure pour ce (nœud, date)."
                     )
                 ),
+                node_origin=node.code,
+            )
+        else:
+            log_activity(  # BUG-844
+                user, 'JOURNAL_ENTRY',
+                f"Journal {node.code} {target_date} — {imput} : entrée {entry_amount} FC, sortie {exit_amount} FC.",
                 node_origin=node.code,
             )
         return entry
@@ -1495,6 +1525,12 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         )
         # Bind the instance so DRF serializes the response correctly
         serializer.instance = obj
+        log_activity(  # BUG-844
+            user, "Épargne Journalière",
+            f"Épargne {node.code} {date} : revenu {daily_revenue} FC, taux {savings_rate}, "
+            f"montant {savings_amount} FC ({'créée' if created else 'mise à jour'}).",
+            node_origin=node.code,
+        )
 
     def perform_update(self, serializer):
         # BUG-815 : `validators = []` retire le contrôle d'unicité (node, date) du serializer.
@@ -1512,6 +1548,12 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         savings_rate   = instance.savings_rate
         instance.savings_amount = (daily_revenue * savings_rate).quantize(Decimal('0.01'))
         instance.save(update_fields=['savings_amount'])
+        log_activity(  # BUG-844
+            self.request.user, "Modification Épargne",
+            f"Épargne {instance.node.code} {instance.date} : revenu {daily_revenue} FC, "
+            f"taux {savings_rate}, montant {instance.savings_amount} FC.",
+            node_origin=instance.node.code,
+        )
 
     @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def monthly_total(self, request):

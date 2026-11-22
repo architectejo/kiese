@@ -257,21 +257,28 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def global_status(self, request):
         """Summary of latest snapshot per node."""
-        from django.db.models import Max
+        from django.db.models import Max, OuterRef, Subquery
 
-        latest_dates = BlockchainSnapshot.objects.values('node').annotate(latest=Max('snapshot_date'))
-        summaries = []
-        for row in latest_dates:
-            snap = BlockchainSnapshot.objects.filter(node_id=row['node'], snapshot_date=row['latest']).first()
-            if snap:
-                summaries.append(BlockchainSnapshotSerializer(snap).data)
+        # BUG-845 : une seule requête (dernier snapshot de chaque nœud, nœud en select_related).
+        latest = (BlockchainSnapshot.objects.filter(node=OuterRef('node'))
+                  .order_by('-snapshot_date').values('snapshot_date')[:1])
+        snaps, seen = [], set()
+        for snap in (BlockchainSnapshot.objects.select_related('node')
+                     .filter(snapshot_date=Subquery(latest)).order_by('node_id', '-created_at')):
+            if snap.node_id not in seen:
+                seen.add(snap.node_id)
+                snaps.append(snap)
+        summaries = BlockchainSnapshotSerializer(snaps, many=True).data
 
         open_alerts = TamperAlert.objects.filter(is_resolved=False).count()
+        # BUG-843 : « intact » seulement si TOUTES les boulangeries ont été vérifiées.
+        unchecked = list(Node.objects.exclude(pk__in=seen).order_by('code').values_list('code', flat=True))
         return Response({
             'open_alerts':      open_alerts,
             'nodes_checked':    len(summaries),
             # BUG-836 (c) : aucune vérification effectuée = pas « intact » (all([]) est vrai).
-            'all_intact':       bool(summaries) and all(s['is_intact'] for s in summaries),
+            'all_intact':       bool(summaries) and not unchecked and all(s['is_intact'] for s in summaries),
+            'unchecked_nodes':  unchecked,
             'never_checked':    not summaries,
             'node_snapshots':   summaries,
         })

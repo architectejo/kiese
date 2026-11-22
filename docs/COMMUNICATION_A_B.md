@@ -617,3 +617,23 @@ L'audit comptable (cycle 2) a vérifié BUG-800/801/802/803/806/807 (`VÉRIFIÉ`
 Chaque ticket a son test `@expectedFailure` dans `backend/finance/tests/test_audit_c_cycle2_c.py` : retirez la marque quand vous corrigez (le fichier est à C ; dites-le moi, ou retirez-la vous-même et signalez-le dans votre message). Numérotation : A BUG-6NN, B BUG-7NN, C BUG-8NN.
 
 **Statut :** INFO
+
+### #31-C — 2026-11-22 — C → B (copie A) — Arrêt de C : B poursuit les cycles de la partie C (ordre du responsable)
+
+**Décision du responsable : à mon prochain push je m'arrête ; B poursuit mes tests (partie C : trésorerie, blockchain, finance).** Rien d'autre ne change : plan `docs/PLAN_TESTS_CORRECTIONS_A_B_C.md` (§2 le cycle, critère d'arrêt : deux cycles consécutifs sans nouveau ticket), règles de `docs/PASSATION_DEV_C.md` §2, testeurs autorisés. Mes numéros de tickets : BUG-8NN (derniers utilisés : 847 ; 850-854).
+
+**État à la reprise (dev-c)**
+- Cycles faits sur ma partie : 1 à 3 (testeur-tresorerie + auditeur-comptable, correcteur `dev-backend`). Rapports : `docs/qa/rapports/testeur-tresorerie-2026-11-22-c*.md` (c, c2, c3, c4), `auditeur-comptable-2026-11-22-c.md` (sections cycle 1 à 3), `dev-backend-2026-11-22-c4.md` à `c10.md`.
+- **VÉRIFIÉ** : 560, 561, 563, 800 à 803, 806, 807, 810 (sauf PATCH rapport, corrigé ensuite), 812 à 819 (voir registre), 820, 822 (DOC 1), 823, 830 à 839, 381, 383, 533, 519 etc.
+- **CORRIGÉ, à faire vérifier au prochain cycle (testeur d'origine ≠ dev)** : BUG-850 à 854 (finance, auditeur-comptable) ; BUG-810 (PATCH rapport), 840 à 847 (trésorerie, testeur-tresorerie ; 846 = frontend `Blockchain.tsx`, « JAMAIS VÉRIFIÉ / VÉRIFICATION PARTIELLE »).
+- **À CLARIFIER (client)** : BUG-811 (b) (billetage modifiable sans trace, et comptage Direction sans coupure), 804, 805, 808, 809, 513/518/520. Questions Q-040 à Q-042 dans `docs/qa/QUESTIONS_CLIENT.md`.
+- **Transmis à A/B (#30)** : BUG-821, 822 (partie commissions), 824 ; migration `production/0029` (BUG-803) signalée à A (#29).
+- Suite : `treasury blockchain finance` était en cours de rejeu au moment du push (résultat : 670 tests OK, 6 échecs attendus) ; tests `*_c.py` : retirer une marque `@expectedFailure` seulement quand le test passe.
+
+**À faire par B, dans l'ordre**
+1. Lancer `testeur-tresorerie` (vérifier 810/840 à 847 + nouveaux angles : 2e passe sur la page Caisse/Clôture, notifications, snapshots) et `auditeur-comptable` (vérifier 850 à 854 + cycle suivant).
+2. `dev-backend`/`dev-frontend` corrigent les tickets ouverts ; retirer les marques des tests attaquants quand ils passent ; relancer jusqu'à deux cycles sans nouveau ticket.
+3. Puis le reste du plan §5 : fusion de `dev-a`/`dev-b`, série complète, mise à jour de `docs/PR_dev-c_vers_main.md` ; la PR `dev-c` → `main` seulement sur l'ordre du responsable. `remarque.md` : ligne « consommables direction » (BUG-386/387/388) à passer `[c]` quand A aura vérifié 388.
+4. Non faisable ici : e2e et rendu 360/768/1440 px (poste avec navigateur : B en dispose).
+
+**Statut :** INFO
