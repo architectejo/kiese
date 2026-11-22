@@ -432,14 +432,45 @@ def apply_push_response(response_data):
     """Marque `is_synced=True` tout enregistrement ACCEPTED par le Cloud."""
     from django.apps import apps
 
-    results = response_data.get('results', {})
+    from sync.services import _strict_uuid
+
+    # BUG-733 : une réponse Cloud tronquée, ancienne ou hostile ne doit jamais
+    # interrompre le cycle : entrées invalides ignorées, rien marqué à tort.
+    results = response_data.get('results') if isinstance(response_data, dict) else None
+    if not isinstance(results, dict):
+        return
+
+    # BUG-731 : un inventaire dont au moins une ligne a été REJETÉE n'est pas
+    # marqué synchronisé : la ligne rejetée doit rester renvoyable.
+    blocked_inventories = set()
+    count_results = results.get('production.ConsumableCount')
+    if isinstance(count_results, list):
+        for r in count_results:
+            if isinstance(r, dict) and r.get('status') != 'ACCEPTED':
+                inv = _strict_uuid(r.get('inventory'))
+                if inv is not None:
+                    blocked_inventories.add(inv)
+
     for model_label, record_results in results.items():
+        if not isinstance(record_results, list):
+            continue
         try:
             model = apps.get_model(model_label)
-        except LookupError:
+        except (LookupError, ValueError):
             continue
-        accepted_ids = [r['id'] for r in record_results if r.get('status') == 'ACCEPTED']
-        if accepted_ids and hasattr(model, 'is_synced'):
+        if not hasattr(model, 'is_synced'):
+            continue
+        accepted_ids = []
+        for r in record_results:
+            if not isinstance(r, dict) or r.get('status') != 'ACCEPTED':
+                continue
+            rid = _strict_uuid(r.get('id'))
+            if rid is None:
+                continue
+            if model_label == 'production.ConsumableInventory' and rid in blocked_inventories:
+                continue
+            accepted_ids.append(rid)
+        if accepted_ids:
             model.objects.filter(pk__in=accepted_ids).update(is_synced=True)
 
 

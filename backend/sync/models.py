@@ -219,7 +219,12 @@ class SyncBatchLog(models.Model):
         PARTIAL = 'PARTIAL', _('Traité partiellement (rejets)')
         ERROR   = 'ERROR',   _('Erreur')
 
-    batch_id = models.UUIDField(unique=True, verbose_name=_("Identifiant du lot"))
+    # BUG-726 : l'unicité porte sur (nœud, batch_id) et non sur batch_id seul :
+    # le lot d'un nœud ne doit jamais masquer ni renvoyer celui d'un autre.
+    batch_id = models.UUIDField(db_index=True, verbose_name=_("Identifiant du lot"))
+    # BUG-726 : empreinte SHA-256 du contenu (`records`). Vide pour les lots
+    # archivés avant ce correctif (rejeu accepté sans contrôle de contenu).
+    fingerprint = models.CharField(max_length=64, blank=True, default='', verbose_name=_("Empreinte du contenu"))
     node = models.ForeignKey(
         Node, on_delete=models.PROTECT, related_name='sync_batches', verbose_name=_("Nœud émetteur")
     )
@@ -231,6 +236,7 @@ class SyncBatchLog(models.Model):
         verbose_name = _("Journal de lot de synchronisation")
         verbose_name_plural = _("Journaux de lots de synchronisation")
         ordering = ['-received_at']
+        unique_together = [['node', 'batch_id']]
 
     def __str__(self):
         return f"{self.node.code} | {self.batch_id} | {self.status}"
@@ -257,6 +263,9 @@ class SyncConflictLog(models.Model):
         verbose_name=_("Résolu par")
     )
     resolution_note = models.TextField(blank=True, default='', verbose_name=_("Note de résolution"))
+    # BUG-723 : nombre de re-détections (rejeux) du même conflit ; une seule
+    # ligne non résolue par (nœud, modèle, objet, type).
+    occurrences = models.PositiveIntegerField(default=1, verbose_name=_("Occurrences"))
 
     class Meta:
         verbose_name = _("Conflit de synchronisation")

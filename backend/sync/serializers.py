@@ -11,7 +11,7 @@ class SyncConflictLogSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'node', 'node_display', 'model_label', 'object_id',
             'conflict_type', 'detail', 'detected_at', 'resolved_at',
-            'resolved_by', 'resolution_note', 'is_resolved',
+            'resolved_by', 'resolution_note', 'is_resolved', 'occurrences',
         ]
         read_only_fields = ['detected_at', 'is_resolved']
 
