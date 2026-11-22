@@ -339,16 +339,6 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 
 **Statut :** OUVERT
 
-### #15 — 2026-11-22 — B → A, C — Série complète de tests sur `dev-b` : verte ; j'ai touché 6 fichiers de tests de A/C (stabilisation, alignement)
-
-**Résultat** (`dev-b`, Python 3.12, SQLite, sans `--parallel`) : `core` + `clients` + `commissions` + `sync` + `chat` **821 tests OK** ; `sales` + `treasury` + `finance` + `blockchain` **692 tests** ; `production` **831 tests** ; frontend `tsc --noEmit` 0 erreur, `npm run build` OK. Les `@expectedFailure` restants sont ceux de C (BUG-501/502, 503/504/505, 508/509/510, garde `node_id` vide) : volontaires, rien à faire de mon côté.
-
-**Modifications dans vos fichiers de tests (uniquement des tests, pas d'application) — à fusionner sans conflit** :
-- **A, `sales/tests/test_verif_bug323_324_testeur_ventes.py`** : retrait des 2 `@expectedFailure` de BUG-331/332 (corrigés et vérifiés côté B, tu l'avais annoncé en #06-A ; même changement, la fusion doit être transparente).
-- **A, `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py`** : retrait de l'`@expectedFailure` de `test_bug331_page_size_param_is_honored` (BUG-333 corrigé) et `_walk(page_size=2)` → `25` (avec `page_size` enfin honoré, le test voyait 30 pages au lieu de 3 ; le jeu de 60 lignes donne bien 3 pages réelles). Dans le test de livre de caisse (5 lignes), il n'y a plus de pagination multiple : c'est la garantie de tri (`-pk`) qui est testée, pas le nombre de pages.
-- **BUG-416** (tests CUMP instables, échec ~1 fois sur 4) : l'horloge Windows est très grossière (`time.time()` ≈ 1 valeur distincte pour 2000 lectures, pas de ~15 ms) ; des mouvements créés coup sur coup ont donc le même `created_at` et l'ordre dépend de la clé UUID aléatoire. J'ai posé des `created_at` explicites et croissants dans les helpers de `production/tests/test_bug357_recompute_cump.py` (C), `test_verif_bug357_147_c.py` (C) et `test_verif_bug402_a.py` (A). Assertions inchangées ; 6 exécutions sur 6 vertes chacun.
-
-**Pour A (décision à toi, non corrigé)** : `production/management/commands/recompute_cump.py` rejoue par (`created_at`, `pk` UUID). Si deux mouvements réels ont le même instant (cas peu probable en production Linux à la microseconde, plus probable sur le poste Windows ou après une synchronisation), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : un ordre de rejeu stable (par exemple un compteur de séquence), ou un avertissement dans la simulation.
 ### #15 — 2026-11-21 — C → B, A — Re #14-B : BUG-414, 415 et compléments 412/413 VÉRIFIÉS ; BUG-516 et 517 ouverts (suppression d'un nœud)
 
 **Vérifiés par un testeur ≠ développeur (Dev C)** :
@@ -361,6 +351,16 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 - **BUG-517 [Mineur]** — le nœud technique `SIEGE` peut être supprimé (204), sans aucune garde. **B** (core) : refuser la suppression du siège.
 
 **Règle** : on ne valide pas son propre correctif ; quand c'est livré, un message `Re #15` avec les tickets et les fichiers de test, et C fait vérifier par `testeur-permissions`. **Les push restent gelés sur ordre du responsable** : on continue en local sur chaque branche, et on pousse sur sa demande.
+### #15 — 2026-11-22 — B → A, C — Série complète de tests sur `dev-b` : verte ; j'ai touché 6 fichiers de tests de A/C (stabilisation, alignement)
+
+**Résultat** (`dev-b`, Python 3.12, SQLite, sans `--parallel`) : `core` + `clients` + `commissions` + `sync` + `chat` **821 tests OK** ; `sales` + `treasury` + `finance` + `blockchain` **692 tests** ; `production` **831 tests** ; frontend `tsc --noEmit` 0 erreur, `npm run build` OK. Les `@expectedFailure` restants sont ceux de C (BUG-501/502, 503/504/505, 508/509/510, garde `node_id` vide) : volontaires, rien à faire de mon côté.
+
+**Modifications dans vos fichiers de tests (uniquement des tests, pas d'application) — à fusionner sans conflit** :
+- **A, `sales/tests/test_verif_bug323_324_testeur_ventes.py`** : retrait des 2 `@expectedFailure` de BUG-331/332 (corrigés et vérifiés côté B, tu l'avais annoncé en #06-A ; même changement, la fusion doit être transparente).
+- **A, `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py`** : retrait de l'`@expectedFailure` de `test_bug331_page_size_param_is_honored` (BUG-333 corrigé) et `_walk(page_size=2)` → `25` (avec `page_size` enfin honoré, le test voyait 30 pages au lieu de 3 ; le jeu de 60 lignes donne bien 3 pages réelles). Dans le test de livre de caisse (5 lignes), il n'y a plus de pagination multiple : c'est la garantie de tri (`-pk`) qui est testée, pas le nombre de pages.
+- **BUG-416** (tests CUMP instables, échec ~1 fois sur 4) : l'horloge Windows est très grossière (`time.time()` ≈ 1 valeur distincte pour 2000 lectures, pas de ~15 ms) ; des mouvements créés coup sur coup ont donc le même `created_at` et l'ordre dépend de la clé UUID aléatoire. J'ai posé des `created_at` explicites et croissants dans les helpers de `production/tests/test_bug357_recompute_cump.py` (C), `test_verif_bug357_147_c.py` (C) et `test_verif_bug402_a.py` (A). Assertions inchangées ; 6 exécutions sur 6 vertes chacun.
+
+**Pour A (décision à toi, non corrigé)** : `production/management/commands/recompute_cump.py` rejoue par (`created_at`, `pk` UUID). Si deux mouvements réels ont le même instant (cas peu probable en production Linux à la microseconde, plus probable sur le poste Windows ou après une synchronisation), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : un ordre de rejeu stable (par exemple un compteur de séquence), ou un avertissement dans la simulation.
 ---
 
 ## #15 — A → B, C : livraison du lot « fuites inter-boulangeries et production » (Re #11, #13)
@@ -441,6 +441,20 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 
 **Statut :** OUVERT
 
+### #19 — 2026-11-22 — C (cumule A) → B — État des lots vérifiés ; tes tickets ouverts : BUG-521 (bloquant), BUG-523, BUG-517 ; ligne 468 de `remarque.md`
+
+**Contexte** : le Dev A est hors service ; **C cumule les rôles de A et de C sur `dev-c`** (qui contient `dev-a` jusqu'à `1350ad1` et `dev-b` jusqu'à `2b84b7a`). Les push restent gelés sur ordre du responsable : tout est en commits locaux sur `dev-c`.
+
+**Vérifiés (testeur ≠ développeur)** : BUG-516 (PROTECT sur `TamperAlert.node` et `BlockchainSnapshot.node`, migration `blockchain/0002`), BUG-522 (un transfert ne peut plus changer ses nœuds ; 17 tests), BUG-364/365 (rejeu `recompute_cump`, `reconciliation`), BUG-366 (migration `sales/0011` scindée en `0011` schéma + `0012` données non atomique par lots ; PostgreSQL non testé, mesure à faire sur une copie de la base cloud). Suite complète de `dev-c` du jour : **2446 tests OK** (avant ce lot ; ce lot est vérifié par labels ciblés).
+
+**À toi, B (dans cet ordre)**
+1. **BUG-521 [Bloquant]** — `GET /api/clients/clients/deficit_report/` : ouvert à tout utilisateur authentifié et **sans filtre par boulangerie** ; un gérant, facturier ou livreur de K1 lit code, nom, dette et commission de clients de K2 ; `?node=P2` donne un 500. Détail dans #18-C ; les deux `@expectedFailure` de `core/tests/test_verif_isolation_a_c.py` sont tes tests de non-régression.
+2. **BUG-523 [Mineur]** — `chat.Conversation.node` est en `CASCADE` : supprimer un nœud efface le fil de la boulangerie, ses participants et ses messages, ce qui contredit le message du serveur (« Conservez-la pour garder l'historique »). Passer en `PROTECT` (migration dans `chat/`) ou refuser la suppression dans `NodeViewSet.destroy`. Ne touche pas à `sync.NodeAuthToken` : le testeur a jugé le `CASCADE` acceptable (un nœud supprimable n'a plus de donnée métier, le jeton n'a plus rien à authentifier).
+3. **BUG-517 [Mineur]** — le nœud technique `SIEGE` est supprimable (204) : ajouter la garde dans `NodeViewSet.destroy`.
+4. **Ligne 468 de `remarque.md`** (cotisation sociale et carte en **FC**, par défaut **2 000** et **1 000**, colonnes dans « Situation des Ristournes & Rémunérations ») : voir #17-C. Rien de reçu de ton côté pour l'instant ; dis-moi où tu en es.
+5. **BUG-519 [Majeur]** (#16-C) — `sync/services.py::_push_invoice_line` recrée la ligne sans `unit_price` ni `full_unit_price` : une vente hors-ligne est revalorisée au tarif du cloud. À corriger maintenant que `full_unit_price` existe (migrations `sales/0011`-`0012` : **attention, elles ont changé**, relis-les avant de toucher `sales/`).
+
+**Du côté de C/A** : BUG-524 (rejeu `recompute_cump`, entrées de même instant sur stock négatif) et BUG-525 (`reconciliation` avec `?node=ZZZ` → 500) sont en cours de correction dans `production/`. BUG-513, 518, 520 (tarif figé, DOC 1, catégories du CA) attendent la réponse du client à la question Q-028.
 ### #19-B — 2026-11-22 — B → C (copie A) — Re #18 : BUG-521 CORRIGÉ ; état de #17 ; fusion de dev-a et dev-c
 
 **BUG-521 [Bloquant] CORRIGÉ** (`clients/views.py::deficit_report`) : permission `IsGerant` (ADMIN, DIRECTION, COMPTABLE, GERANT ; facturier et livreur reçoivent **403**, minimum sûr aligné sur BUG-253) ; non-siège borné à son nœud (`?node=` ignoré) ; compte sans boulangerie : liste vide ; siège avec `?node=` non numérique : **400** `{"detail": ...}` au lieu du 500. Tests : `clients/tests/test_bug521_deficit_report_isolation.py` (5). Dans `core/tests/test_verif_isolation_a_c.py::DeficitReportLeak` j'ai retiré les deux `@expectedFailure` et changé l'attendu de facturier/livreur de 200 à **403** (conséquence directe du choix de permission). **À contre-vérifier par `testeur-permissions` (C)**. Le choix de rôles est à confirmer : si le client veut que le facturier voie le déficit, il faut une réponse réduite, sans commission.
@@ -450,5 +464,33 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Tests stabilisés** (fichiers de A, tests seuls) : `treasury/.../test_verif_bug179_176_testeur_tresorerie.py` (le test des 3 pages passe `page_size=2` : mon défaut 25 et l'attente de A se contredisaient après fusion) ; `production/.../test_verif_bug501_510_a.py::_untraced` (`created_at` explicite et croissant, BUG-416).
 
 **Fusions** : `dev-a` (1350ad1) et `dev-c` (ae3f86c) fusionnés dans `dev-b` sans conflit. **BUG-519** (sync, ligne de vente sans prix figé) : à traiter ensuite par B.
+
+**Statut :** OUVERT
+
+### #20 — 2026-11-22 — C (cumule A) → A, B — Consigne du responsable : finir les travaux restants avec les agents développeurs ; les testeurs interviendront à la fin, sur son ordre
+
+**Consigne du responsable (2026-11-22)** : une fois `dev-c` et `dev-a` poussées (`865cf0d` sur les deux), **A, B et C poursuivent les restes des travaux avec les agents `dev-backend` et `dev-frontend`, jusqu'à la fin. Les agents testeurs n'interviennent qu'à la fin, sur son ordre** : d'ici là, on ne lance plus de `testeur-*`, de `relecteur-code` ni d'`auditeur-comptable`. Chaque développeur reste tenu d'écrire ses propres tests de non-régression (CLAUDE.md §7.4) et de passer ses tickets à `CORRIGÉ`, jamais à `VÉRIFIÉ` ; la vérification indépendante et le passage `[]` → `[c]` de `remarque.md` (seulement pour les lignes implémentées ET vérifiées) viennent après l'ordre du responsable.
+
+**État de `dev-c` / `dev-a` (identiques, `865cf0d`)** : vérifiés par un testeur indépendant avant la consigne : BUG-503/504/505/362, 516, 522, 364/365/366, 524/525, 414, 415, 412/413, 511, 506, etc. **En attente de vérification** : BUG-521 (B, `deficit_report`, un testeur déjà lancé finit), BUG-526 à 529 (A, en cours de correction, 500 → 400 sur paramètres invalides).
+
+**Reste à faire — A** (modules production, ventes, trésorerie, finance, blockchain ; fait par C en son nom) : BUG-526 à 529 (en cours) ; lignes de `remarque.md` à `[]` implémentables sans réponse du client : transferts sans demande préalable (envoi direct, second flux à côté de « demande puis réponse »), « Versement » visible de la direction centrale, options de clôture déplacées dans « Clôture Journalière » avec la page « Clôture & Caisse » renommée « Caisse ». **En attente du client** (ne pas coder) : BUG-513/518/520 (Q-028, tarif figé et catégories du CA), rotation 24 h (BUG-161/278), régularisation d'un « Non servi » (BUG-356 b), vue globale des consommables pour la direction (à chiffrer).
+
+**Reste à faire — B** (clients, commissions, core, sync, chat, frontend de ses pages) : **ligne 468 de `remarque.md`** (cotisation sociale et carte en **FC**, par défaut 2 000 et 1 000, colonnes dans « Situation des Ristournes & Rémunérations » ; #17-C) ; BUG-530 (`commissions/periods/history/?node=ZZZ` ou `?months=abc` → 500, à passer en 400) ; BUG-523 (chat `CASCADE`), BUG-517 (siège supprimable) ; BUG-519 (sync : `_push_invoice_line` sans `unit_price` ni `full_unit_price`) ; BUG-411 (routes sans `isAllowed`, en attente du client pour le livreur) ; B-5 (e2e : rejeu de `05-production` et spec 32 sur un poste avec navigateur) ; B-7 (documentation, sans guide d'installation desktop). `desktop/` reste gelé.
+
+**Règles inchangées** : on cite l'expéditeur (#NN-A / -B / -C) ; messages de livraison `Re #20` avec tickets et fichiers de test ; numérotation A `BUG-3NN`, B `BUG-4NN`, C `BUG-5NN` (lire le registre avant d'en ouvrir). Autorisation de push du responsable : `dev-a` et `dev-c` poussées par C dès qu'un lot est prêt ; `dev-b` reste poussée par B.
+
+**Statut :** OUVERT
+
+### #21 — 2026-11-22 — C → B (copie A) — BUG-521 VÉRIFIÉ ; nouvelle faille BLOQUANTE BUG-531 (`ClientViewSet.bassins`) à corriger en priorité ; BUG-532
+
+`testeur-permissions` (lancé avant la consigne « testeurs à la fin ») a vérifié ton correctif : **BUG-521 : VÉRIFIÉ** (`backend/clients/tests/test_verif_bug521_c.py`, 13 tests ; labels ciblés : 62 OK). `deficit_report` est bien isolé (gérant borné à son nœud, `?node=` ignoré pour lui, 400 pour le siège sur valeur invalide, 403 pour facturier et livreur) et les chiffres légitimes du gérant sont inchangés.
+
+**Deux nouveaux tickets pour toi (tests `@expectedFailure` dans `clients/tests/test_verif_bug521_c.py`, à retirer quand c'est corrigé)** :
+- **BUG-531 [Bloquant, B — `clients/views.py`, action `bassins`, ≈ ligne 317]** : `bassins` ne compare jamais `node` à `user.node`. Un gérant K1 lit code, nom, commande, BP, CM et net à payer des clients de K2 avec `?node=<K2>&month=10&year=2026` ; un gérant sans boulangerie lit aussi K2 ; `?node=ZZZ` donne un **500** (`ValueError`) pour le gérant comme pour le siège. À corriger comme `deficit_report` : non-siège borné à `user.node_id`, compte sans boulangerie → liste vide, `node` invalide → 400 français. Vérifie aussi les autres `@action` de `ClientViewSet` qui lisent `node` sans le contrôler (le `get_permissions()` de `ClientViewSet` renvoie `IsGerant` par défaut et prime sur le `permission_classes` des `@action` : `bassins`, `risk_alerts`, `best_clients`, `active_last_month` sont donc bien en `IsGerant`).
+- **BUG-532 [Mineur]** : `deficit_report?node=` suivi de 40 chiffres → 500 (`OverflowError` SQLite) pour le siège ; même défaut probable sur tous les `?node=` entiers (cf. BUG-526 à 530) : borne la valeur avant la requête.
+
+**Point d'information** : `deficit_report` étant en `IsGerant`, la carte « Déficitaires » de `ClientsKpiGrid.tsx` reçoit un 403 ignoré chez un facturier ou un livreur et affiche « — » : comportement acceptable, à confirmer côté UX.
+
+**Rappel de la consigne du responsable (#20)** : plus de testeurs avant son ordre ; tu corriges avec `dev-backend`/`dev-frontend` et passes à `CORRIGÉ` avec tes propres tests. Reste pour B : **BUG-531 (bloquant)**, BUG-530, 532, 523, 517, 519, ligne 468 de `remarque.md` (cotisation et carte en FC), B-5, B-7.
 
 **Statut :** OUVERT

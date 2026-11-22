@@ -12,7 +12,10 @@ Usage :
     python manage.py recompute_cump --node K1    # limite à une boulangerie
 
 Convention de rejeu identique à la migration 0018 : départ à quantité 0 et
-CUMP 0, ordre `created_at, pk`. La quantité du stock n'est JAMAIS modifiée ;
+CUMP 0, ordre `created_at, movement_type, pk` (BUG-364 : à instant égal,
+les ENTRY précèdent les EXIT de façon déterministe ; si un même instant mélange
+entrées et sorties, l'ordre réel est invérifiable : avertissement en simulation
+et stock IGNORÉ par `--apply` sauf `--force`). La quantité du stock n'est JAMAIS modifiée ;
 si le rejeu ne retombe pas sur la quantité en base (stock initial saisi sans
 mouvement), un avertissement est affiché : le CUMP de la part non tracée
 ne peut pas être reconstitué ; dans ce cas `--apply` IGNORE le stock (BUG-501)
@@ -57,6 +60,37 @@ def replay_stock(movements):
     return avg.quantize(_Q_AVG), qty, exit_prices
 
 
+def count_ambiguous_movements(movements):
+    """
+    BUG-364 : nombre de mouvements partageant EXACTEMENT le même `created_at`
+    qu'un mouvement de type différent (entrée/sortie). Leur ordre réel n'est
+    pas reconstituable (aucune séquence en base) : le rejeu peut donc différer
+    du CUMP calculé en ligne.
+    """
+    groups = {}
+    for mv in movements:
+        groups.setdefault(mv.created_at, []).append(mv)
+    entry = ConsumableMovement.MovementType.ENTRY
+    ambiguous = set()
+    qty = ZERO
+    for ts in sorted(groups):
+        group = groups[ts]
+        types = {mv.movement_type for mv in group}
+        if len(types) > 1:
+            ambiguous.add(ts)
+        elif entry in types and len(group) > 1 and qty < 0:
+            # BUG-524 : plusieurs ENTRÉES de même instant sur un stock rejoué
+            # NÉGATIF : `max(old_qty, 0)` (BUG-402) rend le CUMP dépendant de
+            # l'ordre (pk UUID, aléatoire) dès que les prix diffèrent. Avec un
+            # stock >= 0 la moyenne pondérée est commutative : pas d'ambiguïté.
+            if len({Decimal(str(mv.unit_price or '0')) for mv in group}) > 1:
+                ambiguous.add(ts)
+        for mv in group:
+            mq = Decimal(str(mv.quantity))
+            qty += mq if mv.movement_type == entry else -mq
+    return sum(len(groups[ts]) for ts in ambiguous)
+
+
 class Command(BaseCommand):
     help = ("Recalcule le CUMP des stocks de consommables avec la formule corrigée (BUG-402). "
             "Simulation par défaut ; --apply pour écrire.")
@@ -65,7 +99,7 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true', help="Écrit les corrections en base.")
         parser.add_argument('--dry-run', action='store_true', help="Simulation (comportement par défaut).")
         parser.add_argument('--force', action='store_true',
-                            help="Applique aussi aux stocks dont le rejeu ne retombe pas sur la quantité en base.")
+                            help="Applique aussi aux stocks dont le rejeu est douteux (quantité non tracée, instants ambigus).")
         parser.add_argument('--node', default=None, help="Code d'une boulangerie (ex. K1).")
 
     def handle(self, *args, **opts):
@@ -86,7 +120,9 @@ class Command(BaseCommand):
                 stock = ConsumableStock.objects.select_for_update().select_related('node').get(pk=pk)
                 movements = list(
                     ConsumableMovement.objects.select_for_update()
-                    .filter(stock=stock).order_by('created_at', 'pk')
+                    # BUG-524 : à instant égal, départage par contenu (prix, quantité)
+                    # avant le pk UUID aléatoire : rejeu reproductible, indépendant des pk.
+                    .filter(stock=stock).order_by('created_at', 'movement_type', 'unit_price', 'quantity', 'pk')
                 )
                 new_avg, replay_qty, exit_prices = replay_stock(movements)
                 old_avg = Decimal(str(stock.average_unit_cost)).quantize(_Q_AVG)
@@ -104,6 +140,20 @@ class Command(BaseCommand):
                         f"  {label} : CUMP {old_avg} -> {new_avg} (écart {new_avg - old_avg:+}) ; "
                         f"{len(exits_to_fix)} sortie(s) à revaloriser"
                     )
+                ambiguous = count_ambiguous_movements(movements)
+                if ambiguous:
+                    self.stdout.write(self.style.WARNING(
+                        f"    attention : {ambiguous} mouvement(s) partagent le même instant "
+                        f"(entrée/sortie, ou entrées de prix différents sur stock négatif : "
+                        f"ordre réel invérifiable ; rejeu : entrées d'abord)."
+                    ))
+                    if apply and not opts['force'] and (new_avg != old_avg or exits_to_fix):
+                        self.stdout.write(self.style.WARNING(
+                            "    stock IGNORÉ : ordre des mouvements ambigu (BUG-364) ; "
+                            "--force pour appliquer malgré tout."
+                        ))
+                        changed -= 1
+                        continue
                 untraced = Decimal(str(stock.quantity)) != replay_qty
                 if untraced:
                     self.stdout.write(self.style.WARNING(

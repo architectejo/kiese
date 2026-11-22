@@ -1028,14 +1028,27 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
             if raw and _safe_parse_date(raw) is None:
                 return Response({'detail': _INVALID_DATE_DETAIL}, status=status.HTTP_400_BAD_REQUEST)
 
+        # BUG-525 : `?node=` (siège uniquement, ignoré sinon) : pk ou code ;
+        # valeur illisible ou inconnue -> 400 au lieu d'un 500 / de zéros muets.
+        if node_id and request.user.can_access_all_nodes:
+            node_id, err = _resolve_hq_node_param(node_id)
+            if err is not None:
+                return err
+
         sessions_qs, disposals_qs, invoices_qs = _build_reconciliation_querysets(
             user=request.user, node_id=node_id, date=date, date_from=date_from, date_to=date_to,
         )
         result = _compute_reconciliation(sessions_qs, disposals_qs, invoices_qs)
 
         user = request.user
+        # BUG-365 : `node` = nœud RÉELLEMENT utilisé (celui de l'appelant hors
+        # siège), jamais l'écho du paramètre de requête.
+        if not user.can_access_all_nodes:
+            effective_node = user.node_id  # None pour un compte sans boulangerie
+        else:
+            effective_node = node_id or (user.node_id if user.node_id else None)
         return Response({
-            'node': node_id or (user.node.pk if user.node_id else None),
+            'node': effective_node,
             'date': date, 'date_from': date_from, 'date_to': date_to,
             **result,
         })
@@ -1569,6 +1582,10 @@ class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vi
         elif is_node_less_non_hq(request.user):
             qs = qs.none()
         elif node_id:
+            # BUG-525 (même défaut) : pk ou code ; inconnu -> 400, jamais 500.
+            node_id, err = _resolve_hq_node_param(node_id)
+            if err is not None:
+                return err
             qs = qs.filter(node_id=node_id)
         if month:
             qs = qs.filter(created_at__month=month)
@@ -1619,11 +1636,14 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
                     node = Node.objects.get(pk=node_id)
                 except Node.DoesNotExist:
                     pass
+                except (ValueError, TypeError):
+                    # BUG-525 (même défaut) : pk non numérique -> 400, pas 500.
+                    raise ValidationError({'detail': "Boulangerie invalide : identifiant numérique attendu."})
         if not node:
             raise ValidationError({'node': 'Boulangerie requise.'})
 
         consumable_type = serializer.validated_data['consumable_type']
-        physical_qty    = serializer.validated_data['physical_quantity']
+        physical_qty   = serializer.validated_data['physical_quantity']
 
         stock = ConsumableStock.objects.filter(node=node, consumable_type=consumable_type).first()
         system_qty = stock.quantity if stock else 0
@@ -2379,6 +2399,18 @@ def _resolve_node(node_param):
     except (TypeError, ValueError):
         pass
     return Node.objects.filter(code__iexact=str(node_param)).first()
+
+
+def _resolve_hq_node_param(node_param):
+    """BUG-525 : résout `?node=` (pk ou code) pour le siège. Retourne
+    (pk, None) ou (None, Response 400 `{"detail": ...}` en français)."""
+    node = _resolve_node(node_param)
+    if node is None:
+        return None, Response(
+            {'detail': f"Boulangerie « {node_param} » introuvable."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return node.pk, None
 
 
 def _full_price_from_frozen_soldee(line):

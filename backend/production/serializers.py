@@ -338,6 +338,24 @@ class BreadTransferSerializer(serializers.ModelSerializer):
             'to_node': {'required': False},
         }
 
+    # BUG-522 : champs figés après création (identité des boulangeries
+    # concernées, auteur, quantités d'en-tête). Les changements d'état passent
+    # exclusivement par les actions dédiées du viewset.
+    IMMUTABLE_ON_UPDATE = ('from_node', 'to_node', 'initiated_by', 'quantity_sent', 'quantity_received')
+
+    def validate(self, attrs):
+        if self.instance is not None:
+            for name in self.IMMUTABLE_ON_UPDATE:
+                if name not in attrs:
+                    continue
+                if attrs[name] != getattr(self.instance, name):
+                    raise serializers.ValidationError({'detail': (
+                        "Les boulangeries (source, destination) et l'auteur d'un transfert "
+                        "ne sont pas modifiables après sa création."
+                    )})
+                attrs.pop(name)  # valeur identique : sans effet
+        return attrs
+
 
 class BreadDisposalSerializer(serializers.ModelSerializer):
     disposal_type_display = serializers.CharField(source='get_disposal_type_display', read_only=True)
