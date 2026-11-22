@@ -5,7 +5,6 @@ contenu, pagination ; + boite noire de `bassins` (meme famille : `node` non vali
 Donnees fictives uniquement.
 """
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from clients.models import Client
 from commissions.models import ClientCommission, CommissionPeriod
@@ -120,7 +119,6 @@ class HQBehaviour(VerifBase):
 
 
 class Overflow(VerifBase):
-    @expectedFailure  # BUG-532
     def test_BUG_532_huge_integer_node_is_not_a_500(self):
         r = cl(self.u['DIRECTION']).get(URL + '?node=' + '9' * 40)
         self.assertLess(r.status_code, 500)
@@ -164,7 +162,6 @@ class Bassins(VerifBase):
     def q(self, node):
         return f'?node={node}&month=10&year=2026'
 
-    @expectedFailure  # BUG-531
     def test_BUG_531_node_param_garbage_not_500(self):
         for role in ('GERANT', 'DIRECTION'):
             for bad in ('ZZZ', 'P2'):
@@ -176,7 +173,6 @@ class Bassins(VerifBase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual({x['client_code'] for x in r.data['rows']}, {self.c1.code, self.c1b.code})
 
-    @expectedFailure  # BUG-531
     def test_BUG_531_gerant_k1_cannot_read_k2_bassins(self):
         r = cl(self.u['GERANT']).get(self.B + self.q(self.k2.pk))
         leaked = {x['client_code'] for x in r.data.get('rows', [])}
@@ -188,7 +184,6 @@ class Bassins(VerifBase):
             r = cl(self.u[role]).get(self.B + self.q(self.k1.pk))
             self.assertEqual(r.status_code, 403, role)
 
-    @expectedFailure  # BUG-531
     def test_BUG_531_node_less_gerant_gets_nothing(self):
         r = cl(mk('v521_orph_bas', 'GERANT', None)).get(self.B + self.q(self.k2.pk))
         self.assertEqual(list(r.data.get('rows', [])), [])

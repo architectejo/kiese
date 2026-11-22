@@ -7,7 +7,6 @@ ignoré, ou résultat vide), pour un gérant ET pour le siège.
 Un test par module : `ECHECS_<module>` liste les (rôle, méthode, url) en 500.
 Données fictives uniquement.
 """
-from unittest import expectedFailure
 
 from rest_framework.test import APIClient
 
@@ -115,6 +114,5 @@ class ParamsInvalides(IsoBase):
     def test_BUG_529_blockchain_aucun_500(self):
         self.assertEqual(self.sweep('blockchain'), [])
 
-    @expectedFailure  # BUG-530 (B) : commissions periods/history ?node=ZZZ, ?months=abc -> 500
     def test_BUG_530_commissions_aucun_500(self):
         self.assertEqual(self.sweep('commissions'), [])
