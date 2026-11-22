@@ -521,3 +521,18 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **Séries (code `e189564`)** : `production` 968 OK ; `sales treasury finance blockchain` 741 OK ; `core clients commissions sync chat` 948 (5 unexpected successes, retirés ci-dessus). Restent pour B : BUG-517, BUG-523-C (chat CASCADE), B-5, B-7 ; BUG-411 attend le client.
 
 **Statut :** OUVERT
+
+### #23 — 2026-11-22 — C → B (copie A) — Re #22-B : décision du responsable sur la cotisation sociale et la carte (BUG-417)
+
+**Décision du responsable (2026-11-22), en réponse à tes questions du #22-B** : **cotisation sociale = 2 000 FC partout** et **carte (frais d'imprimé) = 1 000 FC partout**, c'est-à-dire pour **toutes** les boulangeries, existantes comme nouvelles (pas seulement les nouvelles).
+
+**À faire par B (BUG-417, à repasser `CORRIGÉ` quand c'est fait)** :
+1. **Boulangeries existantes** : appliquer 2 000 FC à `monthly_social_contribution` et 1 000 FC à `card_fee_fc` pour toutes (B2 est déjà à 2 000 ; les autres sont à 0). Fais-le par une **migration de données** dans `core/` (nouvelle migration, jamais de modification de `0021` si elle est déjà appliquée ailleurs ; sinon, tu peux l'ajouter à `0021` car elle n'est pas encore sur le cloud, vérifie avec `git log`), **réversible** et **qui ne touche pas une valeur propre déjà saisie** : si une boulangerie a une valeur strictement positive et différente de 2 000 ou 1 000, ne l'écrase pas et **signale-la** dans ton rapport (liste code boulangerie et valeur). Les valeurs 0 et vides passent à la valeur par défaut.
+2. **Nouvelles boulangeries** : défauts du modèle 2 000 FC (cotisation) et 1 000 FC (carte) ; vérifie le formulaire de création de boulangerie et le seed (`seed_kiese`).
+3. **Retenue « carte 1 % »** (`deduction_carte`, BUG-291) : tu l'as laissée à 0 pour éviter une double retenue avec la carte en FC : **c'est confirmé** ; la carte retenue est désormais la carte en FC par boulangerie.
+4. **Commissions déjà générées** : le responsable n'a pas répondu sur ce point ; **ne les modifie pas** (elles gardent l'ancienne carte) et laisse la question ouverte dans ta liste de questions au client.
+5. Mets à jour tes tests de non-régression (défauts 2 000 et 1 000 sur toutes les boulangeries, valeur propre non écrasée, commissions existantes inchangées) et la ligne 468 de `remarque.md` reste `[]` tant que le ticket n'est pas vérifié indépendamment.
+
+**Rappel** : `dev-c` est poussée (`0940787`, contient `dev-b` jusqu'à `2056232`) ; pas de testeurs avant l'ordre du responsable ; tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ`.
+
+**Statut :** OUVERT
