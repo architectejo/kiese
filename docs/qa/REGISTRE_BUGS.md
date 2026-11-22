@@ -16848,7 +16848,7 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - Observé : `DELETE` du nœud `SIEGE` par ADMIN -> 204. Attendu : 400 (nœud technique).
 
 ### BUG-521 — [Bloquant] `deficit_report` : clients en déficit de toutes les boulangeries
-- Module : Clients · backend · Statut : CORRIGÉ (dev-backend B, 2026-11-22) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c (balayage `?node=`).
+- Module : Clients · backend · Statut : VÉRIFIÉ (testeur-permissions, Dev C, 2026-11-22-c4 ; corrigé par dev-backend, Dev B ; contre-vérification `clients/tests/test_verif_bug521_c.py`, rapport `docs/qa/rapports/testeur-permissions-2026-11-22-c4.md` ; défauts voisins : BUG-531, BUG-532) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c (balayage `?node=`).
 - Étapes : K2 a une `CommissionPeriod` avec un `ClientCommission` dont la CM brute < dette du client. Gérant, facturier ou livreur de K1 : `GET /api/clients/clients/deficit_report/` (avec ou sans `?node=<K2>`).
 - Attendu : seuls les clients du nœud de l'appelant (siège : filtre `node` optionnel, validé).
 - Observé : `clients/views.py::deficit_report` ne filtre jamais par `request.user.node` ; renvoie code, nom, dette, CM de clients de K2. `?node=P2` -> `ValueError` non interceptée (500).
@@ -16929,3 +16929,14 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 ### BUG-530 — [Mineur] Commissions : `periods/history` -> 500
 - Module : Commissions · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev C), 2026-11-22c4 · à B.
 - Étapes (siège) : `GET /api/commissions/periods/history/?node=ZZZ` -> 500 ; `?months=abc` -> 500 (`int(request.query_params.get('months', 12))`, `commissions/views.py` l.57-58). Les autres routes commissions sondées (`periods/?node=ZZZ`, `commissions/?node=ZZZ`, `?period=abc`) : OK. Test : `test_BUG_530_...` (`@expectedFailure`).
+
+### BUG-531 — [Bloquant] Clients : `bassins` sans isolation par nœud, `node` non validé (500)
+- Module : Clients · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c4 · à B (`clients/`).
+- Étapes : `GET /api/clients/clients/bassins/?node=<K2>&month=10&year=2026` avec le gérant K1 ; idem avec un gérant sans boulangerie ; `?node=ZZZ` (gérant ou siège).
+- Attendu : gérant limité à son nœud (`node` ignoré/refusé comme pour `deficit_report`), compte sans boulangerie -> vide, `node` non entier -> 400 `{"detail"}`.
+- Observé : `clients/views.py::bassins` (l.312-369) filtre `CommissionPeriod.objects.get(node_id=node_id, ...)` sans comparer à `user.node` : le gérant K1 reçoit code, nom, commande, BP, CM, net à payer des clients de K2 (fuite inter-nœuds). `?node=ZZZ` -> `ValueError` (500). Facturier/livreur : 403 (le `get_permissions()` de `ClientViewSet` prime sur le `permission_classes` des `@action`, donc `IsGerant`).
+- Piste : reprendre le schéma de `deficit_report` (non-siège -> `user.node_id`, siège -> `int(node)` validé, `is_node_less_non_hq` -> vide). Tests : `clients/tests/test_verif_bug521_c.py::Bassins::test_BUG_531_*` (3, `@expectedFailure`).
+
+### BUG-532 — [Mineur] Clients : `deficit_report?node=<entier géant>` -> 500 (siège)
+- Module : Clients · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c4 · à B.
+- Étapes : siège, `GET /api/clients/clients/deficit_report/?node=` + 40 chiffres. Observé : `OverflowError: Python int too large to convert to SQLite INTEGER` (500). Attendu : 400 ou liste vide. `int()` ne borne pas ; même défaut probable sur les autres `?node=` entiers du projet (BUG-526 à 530). Test : `test_BUG_532_huge_integer_node_is_not_a_500` (`@expectedFailure`).

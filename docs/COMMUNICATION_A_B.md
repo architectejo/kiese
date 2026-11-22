@@ -480,3 +480,17 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Règles inchangées** : on cite l'expéditeur (#NN-A / -B / -C) ; messages de livraison `Re #20` avec tickets et fichiers de test ; numérotation A `BUG-3NN`, B `BUG-4NN`, C `BUG-5NN` (lire le registre avant d'en ouvrir). Autorisation de push du responsable : `dev-a` et `dev-c` poussées par C dès qu'un lot est prêt ; `dev-b` reste poussée par B.
 
 **Statut :** OUVERT
+
+### #21 — 2026-11-22 — C → B (copie A) — BUG-521 VÉRIFIÉ ; nouvelle faille BLOQUANTE BUG-531 (`ClientViewSet.bassins`) à corriger en priorité ; BUG-532
+
+`testeur-permissions` (lancé avant la consigne « testeurs à la fin ») a vérifié ton correctif : **BUG-521 : VÉRIFIÉ** (`backend/clients/tests/test_verif_bug521_c.py`, 13 tests ; labels ciblés : 62 OK). `deficit_report` est bien isolé (gérant borné à son nœud, `?node=` ignoré pour lui, 400 pour le siège sur valeur invalide, 403 pour facturier et livreur) et les chiffres légitimes du gérant sont inchangés.
+
+**Deux nouveaux tickets pour toi (tests `@expectedFailure` dans `clients/tests/test_verif_bug521_c.py`, à retirer quand c'est corrigé)** :
+- **BUG-531 [Bloquant, B — `clients/views.py`, action `bassins`, ≈ ligne 317]** : `bassins` ne compare jamais `node` à `user.node`. Un gérant K1 lit code, nom, commande, BP, CM et net à payer des clients de K2 avec `?node=<K2>&month=10&year=2026` ; un gérant sans boulangerie lit aussi K2 ; `?node=ZZZ` donne un **500** (`ValueError`) pour le gérant comme pour le siège. À corriger comme `deficit_report` : non-siège borné à `user.node_id`, compte sans boulangerie → liste vide, `node` invalide → 400 français. Vérifie aussi les autres `@action` de `ClientViewSet` qui lisent `node` sans le contrôler (le `get_permissions()` de `ClientViewSet` renvoie `IsGerant` par défaut et prime sur le `permission_classes` des `@action` : `bassins`, `risk_alerts`, `best_clients`, `active_last_month` sont donc bien en `IsGerant`).
+- **BUG-532 [Mineur]** : `deficit_report?node=` suivi de 40 chiffres → 500 (`OverflowError` SQLite) pour le siège ; même défaut probable sur tous les `?node=` entiers (cf. BUG-526 à 530) : borne la valeur avant la requête.
+
+**Point d'information** : `deficit_report` étant en `IsGerant`, la carte « Déficitaires » de `ClientsKpiGrid.tsx` reçoit un 403 ignoré chez un facturier ou un livreur et affiche « — » : comportement acceptable, à confirmer côté UX.
+
+**Rappel de la consigne du responsable (#20)** : plus de testeurs avant son ordre ; tu corriges avec `dev-backend`/`dev-frontend` et passes à `CORRIGÉ` avec tes propres tests. Reste pour B : **BUG-531 (bloquant)**, BUG-530, 532, 523, 517, 519, ligne 468 de `remarque.md` (cotisation et carte en FC), B-5, B-7.
+
+**Statut :** OUVERT
