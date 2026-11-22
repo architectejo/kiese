@@ -14,6 +14,8 @@ export interface BakeryNode {
   address: string;
   sac_value_fc: string | null;
   monthly_social_contribution?: string;
+  /** BUG-417 : carte / frais d'imprimé (FC), propre à la boulangerie. */
+  card_fee_fc?: string;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
@@ -66,7 +68,8 @@ export const Nodes: React.FC = () => {
     name: '',
     address: '',
     sac_value_fc: '',
-    monthly_social_contribution: '0',
+    monthly_social_contribution: '2000',
+    card_fee_fc: '1000',
     is_active: true,
     team_a_start_time: '',
     team_a_end_time: '',
@@ -103,6 +106,7 @@ export const Nodes: React.FC = () => {
         address: node.address || '',
         sac_value_fc: node.sac_value_fc ?? '',
         monthly_social_contribution: node.monthly_social_contribution ?? '0',
+        card_fee_fc: node.card_fee_fc ?? '1000',
         is_active: node.is_active,
         team_a_start_time: toTimeInputValue(node.team_a_start_time),
         team_a_end_time: toTimeInputValue(node.team_a_end_time),
@@ -118,7 +122,8 @@ export const Nodes: React.FC = () => {
         name: '',
         address: '',
         sac_value_fc: '',
-        monthly_social_contribution: '0',
+        monthly_social_contribution: '2000',
+        card_fee_fc: '1000',
         is_active: true,
         team_a_start_time: '',
         team_a_end_time: '',
@@ -145,10 +150,19 @@ export const Nodes: React.FC = () => {
       setFormErrors(p => ({ ...p, code: 'Le code ne doit pas dépasser 5 caractères (ex: K1, B2).' }));
       return;
     }
+    // BUG-417 : cotisation et carte en FC, >= 0 (le serveur revalide).
+    for (const key of ['monthly_social_contribution', 'card_fee_fc'] as const) {
+      const v = formData[key].trim();
+      if (v !== '' && (!Number.isFinite(Number(v)) || Number(v) < 0)) {
+        setFormErrors(p => ({ ...p, [key]: 'Le montant doit être un nombre positif ou nul (FC).' }));
+        return;
+      }
+    }
     const payload = {
       ...formData,
       sac_value_fc: formData.sac_value_fc !== '' ? formData.sac_value_fc : null,
       monthly_social_contribution: formData.monthly_social_contribution !== '' ? formData.monthly_social_contribution : '0',
+      card_fee_fc: formData.card_fee_fc !== '' ? formData.card_fee_fc : '0',
       team_a_start_time: fromTimeInputValue(formData.team_a_start_time),
       team_a_end_time: fromTimeInputValue(formData.team_a_end_time),
       team_b_start_time: fromTimeInputValue(formData.team_b_start_time),
@@ -419,8 +433,32 @@ export const Nodes: React.FC = () => {
                   placeholder="0"
                 />
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                  0 = aucune cotisation (cas général). Chaque client peut avoir sa propre valeur ; sinon celle-ci s'applique.
+                  {Number(formData.monthly_social_contribution || 0).toLocaleString('fr-FR')} FC par client et par mois. 0 = aucune cotisation. Chaque client peut avoir sa propre valeur ; sinon celle-ci s'applique.
                 </span>
+                {formErrors.monthly_social_contribution && (
+                  <span role="alert" style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', display: 'block', marginTop: '2px' }}>{formErrors.monthly_social_contribution}</span>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="node-card-fee" style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px' }}>Carte / frais d'imprimé (FC)</label>
+                <input
+                  id="node-card-fee"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formData.card_fee_fc}
+                  onChange={(e) => setFormData({...formData, card_fee_fc: e.target.value})}
+                  className="form-input"
+                  style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                  placeholder="1000"
+                />
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
+                  {Number(formData.card_fee_fc || 0).toLocaleString('fr-FR')} FC retenus par client sur la commission du mois (propre à cette boulangerie).
+                </span>
+                {formErrors.card_fee_fc && (
+                  <span role="alert" style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', display: 'block', marginTop: '2px' }}>{formErrors.card_fee_fc}</span>
+                )}
               </div>
 
               <div style={{ border: '1px solid hsl(var(--border-color))', borderRadius: 'var(--radius-sm)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>

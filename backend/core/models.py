@@ -116,10 +116,16 @@ class Node(models.Model):
         help_text=_("Valeur FC attendue par sac 50 kg pour cette boulangerie")
     )
     monthly_social_contribution = models.DecimalField(
-        max_digits=10, decimal_places=2, default='0.00', db_default=Decimal('0.00'),
+        max_digits=10, decimal_places=2, default=Decimal('2000.00'), db_default=Decimal('2000.00'),
         verbose_name=_("Cotisation sociale mensuelle (FC)"),
-        help_text=_("Montant retenu par client et par mois dans cette boulangerie "
-                    "(adaptes.md [3.3] : 0 par défaut, ex. 2 000 FC à B2)")
+        help_text=_("Montant FC retenu par client et par mois dans cette boulangerie "
+                    "(remarque.md : défaut 2 000 FC pour une nouvelle boulangerie)")
+    )
+    card_fee_fc = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('1000.00'), db_default=Decimal('1000.00'),
+        verbose_name=_("Carte / frais d'imprimé (FC)"),
+        help_text=_("Montant FC de la carte retenu par client dans cette boulangerie "
+                    "(remarque.md : défaut 1 000 FC)")
     )
     is_active = models.BooleanField(
         default=True,

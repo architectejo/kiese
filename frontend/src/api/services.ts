@@ -58,6 +58,8 @@ export interface BakeryNode {
   sac_value_fc: string | null;
   /** BUG-289 : cotisation sociale mensuelle par défaut des clients de la boulangerie (0 = aucune). */
   monthly_social_contribution?: string;
+  /** BUG-417 : carte / frais d'imprimé en FC, propre à la boulangerie (défaut serveur 1 000). */
+  card_fee_fc?: string;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
@@ -812,6 +814,10 @@ export interface ClientCommission {
   deduction_other: string;
   deduction_carte: string;
   deduction_remise: string;
+  /** BUG-417 : cotisation sociale retenue (FC), égale à `deduction_social`. */
+  cotisation_sociale_fc?: string;
+  /** BUG-417 : carte / frais d'imprimé retenu (FC), égal à `deduction_prints`. */
+  carte_fc?: string;
   /** BUG-124 : report automatique du net à payer négatif de la période précédente (jamais remis à zéro), lecture seule. */
   carried_debt_in: string;
   total_deductions: string;
@@ -1077,6 +1083,22 @@ export interface CmHistoryRow {
   total_net: string;
   total_paid: string;
   total_payments: string;
+  /** BUG-417 : totaux des retenues de la période (FC). */
+  total_cotisation?: string;
+  total_carte?: string;
+}
+
+/** BUG-417 : totaux verticaux de `GET /api/commissions/commissions/summary/` (chaînes Decimal FC). */
+export interface CommissionSummary {
+  total_orders: string;
+  total_cm: string;
+  total_debt: string;
+  total_cotisation: string;
+  total_carte: string;
+  total_other: string;
+  total_deductions: string;
+  total_net: string;
+  count: number;
 }
 
 export interface IncomeStatement {
@@ -1645,6 +1667,9 @@ export const commissionsApi = {
       getList<ClientCommission>('/api/commissions/commissions/', params),
     page: (params?: Record<string, string>) =>
       getPage<ClientCommission>('/api/commissions/commissions/', params),
+    /** BUG-417 : mêmes filtres que la liste (period__node, period__month, period__year, client). */
+    summary: (params?: Record<string, string>) =>
+      apiClient.get<CommissionSummary>('/api/commissions/commissions/summary/', { params }),
     markPaid: (id: string) =>
       apiClient.post(`/api/commissions/commissions/${id}/mark_paid/`),
     setManuel: (id: string, data: { manuel_adjustment: string | null; manuel_notes?: string }) =>
