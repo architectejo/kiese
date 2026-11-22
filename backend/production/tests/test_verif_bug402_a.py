@@ -9,8 +9,9 @@ Règle vérifiée : un stock négatif n'a aucune valeur. Le CUMP vaut
 `(max(ancien,0) x ancien_CUMP + qté x prix) / (max(ancien,0) + qté)`, arrondi à
 4 décimales ; la quantité du stock reste `ancien + qté`.
 """
+import itertools
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest import expectedFailure, mock
 
@@ -24,6 +25,8 @@ from production.models import (
 )
 
 D = Decimal
+_BASE = timezone.now()
+_SEQ = itertools.count(1)
 
 
 class Base(TestCase):
@@ -38,10 +41,14 @@ class Base(TestCase):
 
     def move(self, kind, qty, price='0', stock=None):
         stock = stock or self.stock
-        ConsumableMovement.objects.create(
+        mv = ConsumableMovement.objects.create(
             node=self.node, stock=stock, movement_type=kind,
             quantity=D(qty), unit_price=D(price),
         )
+        # BUG-416 : horloge grossière sous Windows -> created_at identiques ;
+        # ordre strictement croissant imposé (les tests relisent par created_at).
+        ConsumableMovement.objects.filter(pk=mv.pk).update(
+            created_at=_BASE + timedelta(seconds=next(_SEQ)))
         self.stock.refresh_from_db()
         return self.stock
 

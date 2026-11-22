@@ -4,7 +4,7 @@ Testeur ventes, 2026-11-21. Appelle directement `sync.services._push_invoice` / 
 """
 from datetime import datetime, timezone as dt_tz
 from decimal import Decimal
-from unittest import expectedFailure
+from unittest import expectedFailure  # noqa: F401 (BUG-331/332 corriges : marques retirees)
 
 from django.test import TestCase
 from django.utils import timezone

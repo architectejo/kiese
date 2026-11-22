@@ -300,7 +300,7 @@ class Bug176Tests(TestCase):
         self.admin = make_user(role='ADMIN', node=None, username='adm176')
         self.api = _api(self.admin)
 
-    def _walk(self, url, page_size=2):
+    def _walk(self, url, page_size=25):
         ids, page, pages = [], 1, 0
         while True:
             r = self.api.get(url, {'page': page, 'page_size': page_size})

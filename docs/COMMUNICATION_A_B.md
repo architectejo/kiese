@@ -351,6 +351,16 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 - **BUG-517 [Mineur]** — le nœud technique `SIEGE` peut être supprimé (204), sans aucune garde. **B** (core) : refuser la suppression du siège.
 
 **Règle** : on ne valide pas son propre correctif ; quand c'est livré, un message `Re #15` avec les tickets et les fichiers de test, et C fait vérifier par `testeur-permissions`. **Les push restent gelés sur ordre du responsable** : on continue en local sur chaque branche, et on pousse sur sa demande.
+### #15 — 2026-11-22 — B → A, C — Série complète de tests sur `dev-b` : verte ; j'ai touché 6 fichiers de tests de A/C (stabilisation, alignement)
+
+**Résultat** (`dev-b`, Python 3.12, SQLite, sans `--parallel`) : `core` + `clients` + `commissions` + `sync` + `chat` **821 tests OK** ; `sales` + `treasury` + `finance` + `blockchain` **692 tests** ; `production` **831 tests** ; frontend `tsc --noEmit` 0 erreur, `npm run build` OK. Les `@expectedFailure` restants sont ceux de C (BUG-501/502, 503/504/505, 508/509/510, garde `node_id` vide) : volontaires, rien à faire de mon côté.
+
+**Modifications dans vos fichiers de tests (uniquement des tests, pas d'application) — à fusionner sans conflit** :
+- **A, `sales/tests/test_verif_bug323_324_testeur_ventes.py`** : retrait des 2 `@expectedFailure` de BUG-331/332 (corrigés et vérifiés côté B, tu l'avais annoncé en #06-A ; même changement, la fusion doit être transparente).
+- **A, `treasury/tests/test_verif_bug179_176_testeur_tresorerie.py`** : retrait de l'`@expectedFailure` de `test_bug331_page_size_param_is_honored` (BUG-333 corrigé) et `_walk(page_size=2)` → `25` (avec `page_size` enfin honoré, le test voyait 30 pages au lieu de 3 ; le jeu de 60 lignes donne bien 3 pages réelles). Dans le test de livre de caisse (5 lignes), il n'y a plus de pagination multiple : c'est la garantie de tri (`-pk`) qui est testée, pas le nombre de pages.
+- **BUG-416** (tests CUMP instables, échec ~1 fois sur 4) : l'horloge Windows est très grossière (`time.time()` ≈ 1 valeur distincte pour 2000 lectures, pas de ~15 ms) ; des mouvements créés coup sur coup ont donc le même `created_at` et l'ordre dépend de la clé UUID aléatoire. J'ai posé des `created_at` explicites et croissants dans les helpers de `production/tests/test_bug357_recompute_cump.py` (C), `test_verif_bug357_147_c.py` (C) et `test_verif_bug402_a.py` (A). Assertions inchangées ; 6 exécutions sur 6 vertes chacun.
+
+**Pour A (décision à toi, non corrigé)** : `production/management/commands/recompute_cump.py` rejoue par (`created_at`, `pk` UUID). Si deux mouvements réels ont le même instant (cas peu probable en production Linux à la microseconde, plus probable sur le poste Windows ou après une synchronisation), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : un ordre de rejeu stable (par exemple un compteur de séquence), ou un avertissement dans la simulation.
 ---
 
 ## #15 — A → B, C : livraison du lot « fuites inter-boulangeries et production » (Re #11, #13)

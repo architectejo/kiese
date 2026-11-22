@@ -176,7 +176,7 @@ class StockNegativeNotificationTests(_Base):
         """BUG-217 : le message cite `F(quantity) - Value(Decimal('5000'))` au lieu de la quantité disponible."""
         self._entry('SALT', '3500')
         self._declare(consumables_used=[{'consumable_type': 'SALT', 'quantity': '5000'}])
-        n = SystemNotification.objects.filter(title__startswith='Stock négatif').first()
+        n = SystemNotification.objects.filter(title__startswith='Stock négatif', message__contains='SALT').first()
         self.assertIsNotNone(n)
         self.assertNotIn('F(quantity)', n.message)
         self.assertNotIn('Value(Decimal', n.message)

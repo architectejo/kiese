@@ -5,9 +5,13 @@ Vérification indépendante (testeur-production, Dev C, 2026-11-21c) de :
   - BUG-129 : format `{'detail': ...}` (backend) + realignements de tests
 Données fictives uniquement.
 """
+import itertools
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 from unittest import expectedFailure, mock
+
+from django.utils import timezone
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -32,11 +36,21 @@ def _run(*args):
     return out.getvalue()
 
 
+_BASE = timezone.now()
+_SEQ = itertools.count(1)
+
+
 def _mv(stock, kind, qty, price='0.00'):
-    return ConsumableMovement.objects.create(
+    mv = ConsumableMovement.objects.create(
         node=stock.node, stock=stock, movement_type=kind,
         quantity=D(qty), unit_price=D(price),
     )
+    # BUG-416 : horloge grossière sous Windows -> created_at identiques ;
+    # ordre strictement croissant imposé pour un rejeu déterministe.
+    ConsumableMovement.objects.filter(pk=mv.pk).update(
+        created_at=_BASE + timedelta(seconds=next(_SEQ)))
+    mv.refresh_from_db()
+    return mv
 
 
 def _inflate(stock, avg, **exit_prices):
