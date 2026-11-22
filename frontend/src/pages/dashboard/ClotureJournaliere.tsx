@@ -376,18 +376,8 @@ export const ClotureJournaliere: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            <ul style={{ fontSize: '0.66rem', color: 'hsl(var(--text-secondary))', marginTop: '10px', paddingLeft: '16px', lineHeight: 1.5 }}>
-              <li><strong>Régularisation</strong> : {REGULARISATION_HELP.replace(/^Régularisation : /, '')}</li>
-              <li><strong>Non Servi</strong> : {NON_SERVI_HELP.replace(/^Non Servi : /, '')}</li>
-            </ul>
-            <p style={{ fontSize: '0.7rem', fontWeight: 700, marginTop: '8px' }} title={NON_SERVI_INCLUT_HELP}>
+            <p style={{ fontSize: '0.7rem', fontWeight: 700, marginTop: '10px' }} title={NON_SERVI_INCLUT_HELP}>
               Total Non servi (code NS + factures déclarées Non servi) : {formatFC(nonServiTotalFc(report))}
-              <span style={{ fontWeight: 400, color: 'hsl(var(--text-secondary))' }}> — {NON_SERVI_INCLUT_HELP}</span>
-            </p>
-            <p style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginTop: '8px' }}>
-              Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel
-              (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir
-              docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md.
             </p>
           </div>
         </>
