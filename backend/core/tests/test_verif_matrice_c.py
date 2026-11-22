@@ -325,7 +325,11 @@ ENV_DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 'ye
 if ENV_DEBUG:
     PUBLIC |= {('GET', '/api/schema/'), ('GET', '/api/docs/swagger/'), ('GET', '/api/docs/redoc/')}
 # Constats connus (comportement par conception, voir rapport) : ADMIN sans noeud => 403 sur le fil de son noeud.
-HIER_ALLOW = {('GET', '/api/chat/conversations/node/')}
+HIER_ALLOW = {('GET', '/api/chat/conversations/node/'),
+              # BUG-386 : inventaire physique reserve au GERANT rattache a un noeud (ADMIN sans noeud => 403, voulu)
+              ('GET', '/api/production/inventories/today/'),
+              ('PATCH', '/api/production/inventories/{pk}/'),
+              ('POST', '/api/production/inventories/')}
 # Endpoints a jeton de noeud (pas JWT humain) : authentification propre (sync)
 NODE_TOKEN_PREFIX = '/api/sync/'
 SKIP_ROLE_LOOP = {'/api/core/auth/login/', '/api/core/auth/login/refresh/'}

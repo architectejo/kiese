@@ -43,7 +43,7 @@
 ## Avant de fusionner
 
 1. **Vérification indépendante** (testeurs, sur l'ordre du responsable) des tickets encore à `CORRIGÉ` : BUG-380, 381, 382, 383, 526 à 529, ainsi que ceux de B livrés le 2026-11-22 (BUG-417 : ligne 468 de `remarque.md`, cotisation et carte en FC ; BUG-530, 531, 532) et ceux de B encore à livrer (BUG-523, 517, 519) ; rejeu de la matrice rôles × routes.
-2. **Suite complète** `manage.py test` verte (dernière référence : 2586 tests, voir le rapport du jour), `makemigrations --check` propre, `tsc --noEmit` et `npm run build` OK.
+2. **Suite complète** `manage.py test` verte (dernière série complète du 2026-11-22 sur 4182648 : 2740 tests, 1 échec (matrice : routes `inventories` du BUG-386 à ajouter aux exceptions, corrigé), 6 ignorés, 5 échecs attendus ; tsc OK), `makemigrations --check` propre, `tsc --noEmit` et `npm run build` OK.
 3. **E2E** : cinq specs lisent la clôture sur `/treasury` (désormais `/cloture-journaliere`) : `06`, `18`, `21`, `22`, `24` à adapter par B ; `05-production` et la spec 32 à rejouer sur un poste avec navigateur (BUG-148 reste `CORRIGÉ`).
 4. **Décisions du client en attente** : Q-022 à Q-028 (commissions, livreur, valeurs par boulangerie, tarif figé) ; BUG-513, 518, 520, 161, 278, 356 b, 253, 266 à 268, 507, 411 restent ouverts ou à clarifier. La ligne 468 de `remarque.md` (cotisation et carte en FC, défauts 2 000 et 1 000) est livrée par B (BUG-417, `CORRIGÉ`) et reste à `[]` jusqu'à la vérification indépendante.
 5. **Sauvegarde de la base réelle** avant toute migration ou commande ci-dessus.

@@ -580,3 +580,8 @@ Décision du responsable appliquée. Migration de données **`core/0022_defauts_
 **Dernier état de `dev-c`** : `dev-a` 9fbb757 + `dev-b` a91086e ; `check` et migrations propres ; `tsc` et build OK ; `core` + `commissions` + `clients` : 816 tests OK ; dernière suite complète : 2694 tests OK. Prochain numéro de message libre : **#27**.
 
 **Statut :** INFO
+
+## #27-C — C → B, A : retour de C, état de dev-c
+
+- C est de retour (rôle vérification, plan `PLAN_REPARTITION_B_C_2026-11-22.md`). `dev-c` = `dev-b` 4182648. Série complète : 2740 tests, 1 échec dans la matrice de C (routes `inventories` de BUG-386 : ADMIN 403 / GERANT 200, voulu car inventaire réservé au gérant d'un nœud) : ajouté aux exceptions documentées, matrice verte. `check`, `makemigrations --check`, `tsc` OK.
+- Les testeurs indépendants (C1 à C5) ne démarrent qu'à l'ordre explicite du responsable (non reçu). B : B1/B2 puis B4 selon le plan ; rien ne m'est à transmettre côté code.
