@@ -5,7 +5,7 @@ Core API views — Authentication, Config, Nodes, Users management.
 from .mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -210,6 +210,22 @@ class NodeViewSet(viewsets.ModelViewSet):
             # bordereaux de versement) must never appear in bakery pickers.
             qs = qs.exclude(code='SIEGE')
         return qs
+
+    # BUG-564 : le code « SIEGE » identifie le nœud technique ; on interdit de le
+    # modifier et de renommer un autre nœud vers « SIEGE » (contournement BUG-517).
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        new_code = serializer.validated_data.get('code')
+        if new_code is not None and new_code != instance.code:
+            if instance.code == 'SIEGE':
+                raise ValidationError({'detail': (
+                    "Le code du nœud technique « SIEGE » ne peut pas être modifié."
+                )})
+            if str(new_code).strip().upper() == 'SIEGE':
+                raise ValidationError({'detail': (
+                    "Le code « SIEGE » est réservé au nœud technique du siège."
+                )})
+        serializer.save()
 
     # BUG-414 : User.node est en SET_NULL ; supprimer une boulangerie laissait
     # des comptes actifs sans boulangerie (qui, depuis BUG-506, ne voient plus

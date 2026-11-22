@@ -1,5 +1,6 @@
 import React from 'react';
 import { FiAlertTriangle, FiDollarSign, FiPackage, FiPercent, FiRefreshCw, FiSave } from 'react-icons/fi';
+import { Link } from 'react-router-dom';
 import { SiteConfig } from '@/api/services';
 
 interface ConfigFormProps {
@@ -56,17 +57,10 @@ export const ConfigForm: React.FC<ConfigFormProps> = ({ form, set, isSaving, onS
                 </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px', textTransform: 'uppercase' }}>
-                  Frais d'Imprimés (FC)
-                </label>
-                <input
-                  type="number"
-                  value={form.print_fee ?? ''}
-                  onChange={e => set('print_fee', e.target.value)}
-                  className="form-input"
-                  style={{ height: '34px', fontSize: '0.8rem', padding: '0 10px' }}
-                />
+              <div style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', lineHeight: 1.5 }}>
+                La carte / frais d'imprimé se règle par boulangerie dans{' '}
+                <Link to="/admin/nodes" style={{ color: 'hsl(var(--accent-color))', fontWeight: 700 }}>Boulangeries</Link>
+                {' '}(champ « Carte / frais d'imprimé (FC) »).
               </div>
             </div>
           </div>
