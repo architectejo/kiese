@@ -181,6 +181,9 @@ export interface ClientImportReportRow {
   total_in_file: number;
   to_import: number;
   already_existing: number;
+  /** BUG-746 : noms trop longs, non importés. */
+  invalid?: number;
+  invalid_names?: string[];
 }
 
 export interface ClientImportResult {
