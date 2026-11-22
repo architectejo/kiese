@@ -5,6 +5,7 @@ import { getErrorDetail } from '@/api/errors';
 import { formatIsoDate, formatQty, parseDecimalInput, unitLabel } from './consumableFormat';
 import { STOCK_ICONS, displayStock } from './productionHelpers';
 import { NodeInventoryModal } from './NodeInventoryModal';
+import { DirectionSupplyForm } from './DirectionSupplyForm';
 
 interface Props {
   role: 'ADMIN' | 'DIRECTION' | 'COMPTABLE';
@@ -193,6 +194,8 @@ export const GlobalConsumablesSection: React.FC<Props> = ({ role }) => {
               </button>
             </form>
           )}
+
+          {canDispatch && <DirectionSupplyForm types={types} direction={data.direction} onDone={load} />}
         </>
       )}
 
