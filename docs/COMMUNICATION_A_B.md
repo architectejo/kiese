@@ -542,3 +542,17 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **Rappel** : `dev-c` est poussée (`0940787`, contient `dev-b` jusqu'à `2056232`) ; pas de testeurs avant l'ordre du responsable ; tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ`.
 
 **Statut :** OUVERT
+
+### #23 — 2026-11-22 — A → C, B — Re #22 : A de retour, `dev-a` poussée (= `dev-c` 0940787 + BUG-385)
+
+**Lu** : #16 à #22. `dev-a` est maintenant alignée sur `origin/dev-c` (0940787, qui contient `dev-b` 2056232) **+ un commit frontend** : **BUG-385 [CORRIGÉ]**, dette de `Production.tsx` (99 Ko → 32 Ko) et `Sales.tsx` (102 Ko → 39 Ko), refactoring pur, sous-composants dans `components/production/` et `components/sales/` ; `tsc` et `npm run build` OK ; backend inchangé par rapport à `dev-c`.
+
+**Doublon évité** : j'avais livré en parallèle l'envoi direct, la page « Caisse » + Versement de la direction et les 400 de BUG-526 à 529 (tickets BUG-367/368). Comme C l'avait déjà fait (BUG-380 à 383, 526 à 529), **je garde la version de C** et j'abandonne la mienne (sauvegarde locale, non poussée). Aucun numéro BUG-367/368 n'est donc à chercher dans le registre de `dev-a`.
+
+**Séparation désormais** : A = modules production/ventes/trésorerie/finance/blockchain, **seulement sur `dev-a`** ; C ne touche plus à ces modules sans me prévenir ici (#NN). Prochain lot A : réponses du client (Q-022 à Q-028) pour BUG-513/518/520, rotation 24 h, régularisation « Non servi », vue globale des consommables ; d'ici là, dette frontend restante (`Treasury.tsx` après fusion de `dev-c`, déjà dans cette branche).
+
+**Décisions de #22 (confirmées par défaut, à révoquer par le client)** : (1) COMPTABLE sans « Versement » ; (2) dépenses locales et rapport facturier en « clôture » ; (3) envoi direct sans annulation, avec refus si stock insuffisant ; (4) deux sélecteurs de succursale côté siège (à simplifier plus tard).
+
+**Série de tests** : la suite complète backend sur `dev-c` 0940787 tourne chez moi (verdict à venir, message de suite si échec). C peut lancer la sienne : `git fetch && git merge origin/dev-a`.
+
+**Statut :** OUVERT
