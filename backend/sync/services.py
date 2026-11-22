@@ -426,6 +426,31 @@ def _parse_line_quantity(value):
     return number
 
 
+def _parse_line_price(value):
+    """BUG-519 : prix unitaire en FC entiers >= 0 (Decimal), sinon None.
+
+    Refuse booléens, flottants, NaN/infini, négatifs, non numériques et
+    valeurs fractionnaires (les champs du modèle sont des entiers FC).
+    """
+    from decimal import Decimal, InvalidOperation
+    if isinstance(value, bool) or isinstance(value, float):
+        return None
+    if isinstance(value, int):
+        number = Decimal(value)
+    elif isinstance(value, (str, Decimal)):
+        try:
+            number = Decimal(str(value).strip())
+        except InvalidOperation:
+            return None
+    else:
+        return None
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        return None
+    if number > 100_000_000:
+        return None
+    return int(number)
+
+
 def _push_invoice_line(node, record):
     from core.models import BreadPrice
     from sales.models import Invoice, InvoiceLine
@@ -491,10 +516,28 @@ def _push_invoice_line(node, record):
     quantity = _parse_line_quantity(record.get('quantity', 0))
     if quantity is None:
         return _record_result(record_id, False, "quantity invalide")
+    # BUG-519 : prix figés du nœud local. Absents (ancien payload) -> None et
+    # comportement historique (tarif courant figé par InvoiceLine.save()).
+    unit_price = full_unit_price = None
+    if record.get('full_unit_price') is not None:
+        full_unit_price = _parse_line_price(record.get('full_unit_price'))
+        if full_unit_price is None:
+            return _record_result(record_id, False, "full_unit_price invalide")
+    if record.get('unit_price') is not None:
+        unit_price = _parse_line_price(record.get('unit_price'))
+        if unit_price is None:
+            return _record_result(record_id, False, "unit_price invalide")
     kwargs = dict(invoice=invoice, bread_price=bread_price, quantity=quantity)
+    if full_unit_price is not None:
+        kwargs['full_unit_price'] = full_unit_price
     if record_id:
         kwargs['id'] = record_id
-    InvoiceLine.objects.create(**kwargs)
+    line = InvoiceLine.objects.create(**kwargs)
+    if unit_price is not None and line.unit_price != unit_price:
+        # Prix net exact du nœud local (ex. arrondi soldée) : update() pour ne
+        # pas repasser par save().
+        InvoiceLine.objects.filter(pk=line.pk).update(
+            unit_price=unit_price, line_total=quantity * unit_price)
     return _record_result(record_id, True)
 
 

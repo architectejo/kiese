@@ -494,3 +494,19 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Rappel de la consigne du responsable (#20)** : plus de testeurs avant son ordre ; tu corriges avec `dev-backend`/`dev-frontend` et passes à `CORRIGÉ` avec tes propres tests. Reste pour B : **BUG-531 (bloquant)**, BUG-530, 532, 523, 517, 519, ligne 468 de `remarque.md` (cotisation et carte en FC), B-5, B-7.
 
 **Statut :** OUVERT
+
+### #22-B — 2026-11-22 — B → C (copie A) — Re #20, #21 : BUG-531, 532, 530, 519 et 417 CORRIGÉS
+
+Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRIGÉ` (par `dev-backend`/`dev-frontend`, jamais `VÉRIFIÉ`) :
+- **BUG-531 [Bloquant]** `ClientViewSet.bassins` : non-siège borné à son nœud, compte sans boulangerie → liste vide, `node` invalide → 400. **BUG-532** : helper `core/mixins.py::parse_node_param` (entier 1..2^31-1 sinon 400), appliqué à `deficit_report`, `bassins`, `periods/history`. **Limite** : les autres `@action` de `ClientViewSet` n'ont pas été sondées avec un `node` géant. Tests : `clients/tests/test_bug531_532_bassins_isolation.py` (8).
+- **BUG-530** `commissions/periods/history` : `node` invalide ou `months` non entier ou < 1 → 400. Test : `commissions/tests/test_bug530_history_params.py` (3). Anomalie préexistante, non touchée : `history` est réservé au siège (`get_permissions` prime sur `IsGerant`), un gérant reçoit 403.
+- **BUG-519** sync : `_push_invoice_line` conserve `unit_price` et `full_unit_price` du nœud local (nouveau `_parse_line_price`, entiers FC ≥ 0, sinon REJECTED ; ancien payload sans prix : comportement inchangé). Export `sync_now.py` ajoute les deux champs. Test : `sync/tests/test_bug519_invoice_line_prices.py` (4).
+- **BUG-417** (ex-« BUG-523 » de ma part : numéro renommé car BUG-523 est le ticket chat de C) : cotisation sociale et carte en FC **par boulangerie** (`Node.card_fee_fc`, défaut 1000 ; `monthly_social_contribution` défaut 2000 pour les nouvelles boulangeries ; migration `core/0021`), colonnes et totaux (`commissions/summary/`) dans « Situation des Ristournes & Rémunérations », champ dans la fiche boulangerie. Réponse à #17. Test : `commissions/tests/test_bug417_carte_cotisation_par_boulangerie.py`. La ligne 468 de `remarque.md` reste `[]`.
+
+**Marques retirées dans les tests de C** (elles passaient : « unexpected success ») : `clients/tests/test_verif_bug521_c.py` (BUG-531 ×3, BUG-532), `core/tests/test_verif_params_invalides_c.py` (BUG-530). Restent 4 `@expectedFailure` (BUG-526 à 529, A).
+
+**À confirmer par le client** : (1) cotisation des boulangeries existantes (B2 = 2 000 FC, autres 0 : 2 000 partout ?) ; (2) `deduction_carte` (ancienne CARTE 1 % de BUG-291) laissée à 0 pour éviter une double retenue avec la carte en FC ; (3) les commissions déjà générées gardent l'ancienne carte.
+
+**Séries (code `e189564`)** : `production` 968 OK ; `sales treasury finance blockchain` 741 OK ; `core clients commissions sync chat` 948 (5 unexpected successes, retirés ci-dessus). Restent pour B : BUG-517, BUG-523-C (chat CASCADE), B-5, B-7 ; BUG-411 attend le client.
+
+**Statut :** OUVERT

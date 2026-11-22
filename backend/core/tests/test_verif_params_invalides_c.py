@@ -119,6 +119,5 @@ class ParamsInvalides(IsoBase):
     def test_BUG_529_blockchain_aucun_500(self):
         self.assertEqual(self.sweep('blockchain'), [])
 
-    @expectedFailure  # BUG-530 (B) : commissions periods/history ?node=ZZZ, ?months=abc -> 500
     def test_BUG_530_commissions_aucun_500(self):
         self.assertEqual(self.sweep('commissions'), [])
