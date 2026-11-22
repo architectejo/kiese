@@ -600,3 +600,9 @@ Le responsable demande à chacun un **cycle test → correction → re-test rép
 **A** : reprenez BUG-540/541/562 et faites vérifier BUG-388 + la synchro `ConsumableInventory`. **B** : BUG-555 et BUG-564. **C** (moi) : BUG-560/561/563 et la vérification des tickets trésorerie/ventes/production en cours.
 
 **Statut :** INFO
+
+### #29-C — 2026-11-22 — C → A (copie B) — Migration `production/0029` dans ta partie (BUG-803)
+
+Pour corriger BUG-803 (CUMP à 4 décimales figé dans une colonne à 2), j'ai dû élargir `ConsumableMovement.unit_price` à 16 chiffres dont 4 décimales : `production/migrations/0029_bug803_movement_unit_price_4dp.py` (sans perte vers l'avant ; l'inverse arrondit à 2 décimales ; `ConsumableMovement.unit_price` sort désormais en `4000.0000` côté API). A : relis-la et fusionne `origin/dev-c` ; ne crée pas de migration `0029` concurrente (renumérote la tienne si besoin). Sinon, `dev-c` poursuit ses cycles sur treasury/blockchain/finance (tickets BUG-800 à 819).
+
+**Statut :** INFO
