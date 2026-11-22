@@ -657,7 +657,7 @@ class ConsumableMovement(SyncableModel):
 
     movement_type   = models.CharField(max_length=10, choices=MovementType.choices, verbose_name=_("Type de mouvement"))
     quantity        = models.DecimalField(max_digits=10, decimal_places=3, verbose_name=_("Quantité"))
-    unit_price      = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', blank=True, verbose_name=_("Prix d'achat unitaire (FC)"))
+    unit_price      = models.DecimalField(max_digits=16, decimal_places=4, default='0.0000', blank=True, verbose_name=_("Prix d'achat unitaire (FC)"), help_text=_("Entrée : prix d'achat ; sortie : CUMP figé (4 décimales, BUG-803)"))
     supplier        = models.CharField(max_length=10, choices=SUPPLIER_CHOICES, blank=True, default='', verbose_name=_("Fournisseur"))
     description     = models.CharField(max_length=255, blank=True, default='', verbose_name=_("Description"))
     recorded_by     = models.ForeignKey(

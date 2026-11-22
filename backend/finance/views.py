@@ -1,7 +1,10 @@
 import csv
 import datetime
-from decimal import Decimal
-from django.db.models import Sum, Count, Q, F, ExpressionWrapper, DecimalField as DjDecimalField
+from decimal import Decimal, ROUND_HALF_UP
+from django.db.models import (
+    Sum, Count, Q, F, ExpressionWrapper, Case, When, Value, IntegerField,
+    DecimalField as DjDecimalField,
+)
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -14,6 +17,27 @@ from kiese.node_guard import resolve_node_param
 from treasury.views import _validate_month_year
 from .models import FinancialYear
 from .serializers import FinancialYearSerializer
+
+
+_CENT = Decimal('0.01')
+
+
+def _money(value) -> Decimal:
+    """BUG-806 : arrondi comptable explicite (2 décimales, demi vers le haut)."""
+    return Decimal(value).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def _money_json(data):
+    """BUG-807 : montants rendus en chaînes décimales (comme `summary`), jamais en float JSON.
+
+    Récursif (`previous_year`) ; les entiers (année) et le pourcentage de croissance
+    (ratio, pas un montant) sont laissés tels quels.
+    """
+    if isinstance(data, dict):
+        return {k: _money_json(v) for k, v in data.items()}
+    if isinstance(data, Decimal):
+        return str(_money(data))
+    return data
 
 
 def _income_statement_for_year(year: int) -> dict:
@@ -34,15 +58,28 @@ def _income_statement_for_year(year: int) -> dict:
     from treasury.models import LocalExpense, CashbookEntry
 
     # Revenue by bread category — une seule requête (4 Sum conditionnels)
+    # BUG-802 : une régularisation (RG), ou l'ajustement d'une RG, n'est pas une vente
+    # (BUG-178, CLAUDE.md 5.1).
+    # BUG-801 : les lignes d'une facture d'ajustement portent la MAGNITUDE (quantités
+    # positives) ; le signe est celui de `invoice.adjustment_sign` (BUG-097).
+    _signed_total = ExpressionWrapper(
+        F('line_total') * Case(
+            When(invoice__is_adjustment=True, invoice__adjustment_sign=-1, then=Value(-1)),
+            default=Value(1), output_field=IntegerField(),
+        ),
+        output_field=DjDecimalField(max_digits=16, decimal_places=2),
+    )
     lines_qs = InvoiceLine.objects.filter(
         invoice__invoice_date__year=year,
         invoice__status='DELIVERED'
-    )
+    ).exclude(
+        Q(invoice__special_code='RG') | Q(invoice__adjusts__special_code='RG')
+    ).annotate(signed_total=_signed_total)
     revenue_agg = lines_qs.aggregate(
-        revenue_300=Sum('line_total', filter=Q(bread_price__category='MINI')),
-        revenue_400=Sum('line_total', filter=Q(bread_price__category='MOYEN')),
-        revenue_500=Sum('line_total', filter=Q(bread_price__category='GRAND')),
-        revenue_1000=Sum('line_total', filter=Q(bread_price__category='PREMIUM')),
+        revenue_300=Sum('signed_total', filter=Q(bread_price__category='MINI')),
+        revenue_400=Sum('signed_total', filter=Q(bread_price__category='MOYEN')),
+        revenue_500=Sum('signed_total', filter=Q(bread_price__category='GRAND')),
+        revenue_1000=Sum('signed_total', filter=Q(bread_price__category='PREMIUM')),
     )
     revenue_300  = revenue_agg['revenue_300']  or Decimal('0')
     revenue_400  = revenue_agg['revenue_400']  or Decimal('0')
@@ -61,7 +98,7 @@ def _income_statement_for_year(year: int) -> dict:
     # `prod_consmove_type_crea_idx` (movement_type, created_at), donc sans
     # régression de performance (BUG-064/066/070).
     from production.models import ConsumableMovement
-    _line_cost = ExpressionWrapper(F('quantity') * F('unit_price'), output_field=DjDecimalField(max_digits=14, decimal_places=2))
+    _line_cost = ExpressionWrapper(F('quantity') * F('unit_price'), output_field=DjDecimalField(max_digits=20, decimal_places=4))
     # BUG-386 : les sorties du stock direction (nœud SIEGE, envoi vers les boulangeries)
     # sont des transferts internes, pas une consommation : exclues du coût.
     exit_qs = ConsumableMovement.objects.filter(created_at__year=year, movement_type='EXIT').exclude(node__code='SIEGE').annotate(line_cost=_line_cost)
@@ -71,10 +108,12 @@ def _income_statement_for_year(year: int) -> dict:
         cost_salt=Sum('line_cost', filter=Q(stock__consumable_type='SALT')),
         cost_oil=Sum('line_cost', filter=Q(stock__consumable_type='OIL')),
     )
-    cost_flour = cost_agg['cost_flour'] or Decimal('0')
-    cost_yeast = cost_agg['cost_yeast'] or Decimal('0')
-    cost_salt  = cost_agg['cost_salt']  or Decimal('0')
-    cost_oil   = cost_agg['cost_oil']   or Decimal('0')
+    # BUG-806 : coûts matière (CUMP x quantité, 4+ décimales) arrondis à l'écriture
+    # comptable ; les totaux sont calculés sur les lignes arrondies (elles somment).
+    cost_flour = _money(cost_agg['cost_flour'] or Decimal('0'))
+    cost_yeast = _money(cost_agg['cost_yeast'] or Decimal('0'))
+    cost_salt  = _money(cost_agg['cost_salt']  or Decimal('0'))
+    cost_oil   = _money(cost_agg['cost_oil']   or Decimal('0'))
 
     # Local expenses
     expenses = LocalExpense.objects.filter(date__year=year).aggregate(t=Sum('amount'))['t'] or Decimal('0')
@@ -132,13 +171,34 @@ def _balance_sheet_for_year(year: int) -> dict:
     from treasury.models import CashbookEntry
     from production.models import ConsumableStock
 
-    # Receivables (outstanding client debt)
-    total_receivables = Client.objects.filter(is_active=True).aggregate(
-        t=Sum('current_debt')
-    )['t'] or Decimal('0')
+    from sales.models import Invoice
 
-    # Cash position
-    last_entry = CashbookEntry.objects.order_by(*CashbookEntry.chain_order_desc()).first()
+    # BUG-800 : bilan arrêté au 31/12 de l'exercice demandé. Exercice en cours (ou futur) :
+    # situation actuelle ; exercice clos : situation reconstituée à cette date.
+    year_end = datetime.date(year, 12, 31)
+    is_past_year = year < timezone.localdate().year
+
+    # Receivables (outstanding client debt)
+    if is_past_year:
+        # BP à la clôture = `debt_after` de la dernière facture non annulée du client
+        # (BP cumulative, CLAUDE.md 5.2) ; aucune facture -> 0.
+        last_debt = {}
+        rows = (Invoice.objects
+                .filter(invoice_date__lte=year_end, client__is_active=True)
+                .exclude(status__in=['CANCELLED', 'NOT_SERVED'])
+                .order_by('invoice_date', 'created_at')
+                .values_list('client_id', 'debt_after'))
+        for client_id, debt_after in rows.iterator():
+            last_debt[client_id] = debt_after
+        total_receivables = sum(last_debt.values(), Decimal('0'))
+    else:
+        total_receivables = Client.objects.filter(is_active=True).aggregate(
+            t=Sum('current_debt')
+        )['t'] or Decimal('0')
+
+    # Cash position : solde du livre à la dernière écriture datée <= fin d'exercice
+    last_entry = (CashbookEntry.objects.filter(date__lte=year_end)
+                  .order_by(*CashbookEntry.chain_order_desc()).first())
     cash = last_entry.running_balance if last_entry else Decimal('0')
 
     return {
@@ -175,34 +235,34 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             )
         else:
             data['revenue_growth_pct'] = None
-        return Response(data)
+        return Response(_money_json(data))
 
     @action(detail=True, methods=['get'])
     def cashflow(self, request, pk=None):
         fy = self.get_object()
         data = _cashflow_for_year(fy.year)
         data['previous_year'] = _cashflow_for_year(fy.year - 1)
-        return Response(data)
+        return Response(_money_json(data))
 
     @action(detail=True, methods=['get'])
     def balance_sheet(self, request, pk=None):
         fy = self.get_object()
         data = _balance_sheet_for_year(fy.year)
         data['previous_year'] = _balance_sheet_for_year(fy.year - 1)
-        return Response(data)
+        return Response(_money_json(data))
 
     @action(detail=True, methods=['get'])
     def comparative(self, request, pk=None):
         """All four statements for N and N-1 in one call."""
         fy = self.get_object()
-        return Response({
+        return Response(_money_json({
             'income_statement': _income_statement_for_year(fy.year),
             'income_statement_prev': _income_statement_for_year(fy.year - 1),
             'cashflow': _cashflow_for_year(fy.year),
             'cashflow_prev': _cashflow_for_year(fy.year - 1),
             'balance_sheet': _balance_sheet_for_year(fy.year),
             'balance_sheet_prev': _balance_sheet_for_year(fy.year - 1),
-        })
+        }))
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def summary(self, request):

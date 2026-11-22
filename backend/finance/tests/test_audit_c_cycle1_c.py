@@ -247,15 +247,15 @@ class MonthScenarioTests(_Base):
 
     def test_03_cogs_is_real_consumption_at_cump_and_excludes_siege(self):
         d = self.fin('income_statement')
-        self.assertEqual(D(d['cost_flour']), D('21006.8965'))
+        self.assertEqual(D(d['cost_flour']), D('21006.90'))
         self.assertEqual(D(d['cost_yeast']) + D(d['cost_salt']) + D(d['cost_oil']), D('0'))
-        self.assertEqual(D(d['gross_profit']), D('29050') - D('21006.8965'))
+        self.assertEqual(D(d['gross_profit']), D('29050') - D('21006.90'))
 
     def test_04_expenses_and_net_result_chain(self):
         d = self.fin('income_statement')
         self.assertEqual(D(d['operational_expenses']), D('3300'))
         self.assertEqual(D(d['commissions_paid']), D('3950'))
-        self.assertEqual(D(d['net_result']), D('793.1035'))
+        self.assertEqual(D(d['net_result']), D('793.10'))
         # cohérence interne : résultat = CA - coûts matière - commissions - dépenses
         costs = sum(D(d[k]) for k in ('cost_flour', 'cost_yeast', 'cost_salt', 'cost_oil'))
         self.assertEqual(D(d['net_result']), D(d['total_revenue']) - costs - D(d['commissions_paid']) - D(d['operational_expenses']))
@@ -339,7 +339,6 @@ class MonthScenarioTests(_Base):
         self.assertEqual(D(b['total_assets']), D('26600'))
         self.assertEqual(set(b) - {'previous_year'}, {'year', 'receivables', 'cash_position', 'total_assets'})
 
-    @unittest.expectedFailure
     def test_13_BUG_800_balance_sheet_previous_year_is_isolated(self):
         """BUG-800 : le bilan N-1 relit la caisse et les créances ACTUELLES."""
         b = self.fin('balance_sheet')
@@ -348,7 +347,6 @@ class MonthScenarioTests(_Base):
         self.assertEqual(D(prev['receivables']), D('0'))        # aucune dette client fin N-1
         self.assertEqual(D(prev['total_assets']), D('1600'))
 
-    @unittest.expectedFailure
     def test_14_BUG_800_balance_sheet_empty_year_is_zero(self):
         """BUG-800 : un exercice sans aucune donnée (N-2 ici) doit donner un bilan nul."""
         b = self.fin('balance_sheet', year=self.year - 1)
@@ -396,7 +394,6 @@ class MonthScenarioTests(_Base):
                 dec = D(str(val))
                 self.assertEqual(dec, dec.quantize(D('0.0001')), f'{key}={val}')
 
-    @unittest.expectedFailure
     def test_18a_BUG_807_money_in_json_is_a_string_not_a_float(self):
         """BUG-807 : les 3 états sont des `dict` de Decimal rendus par l'encodeur DRF en nombres JSON
         (float) : `12300.0`, contrairement a `summary` (chaînes) et au contrat « argent = Decimal »."""
@@ -406,7 +403,6 @@ class MonthScenarioTests(_Base):
                     continue
                 self.assertIsInstance(val, str, f'{key}={val!r}')
 
-    @unittest.expectedFailure
     def test_18b_BUG_806_income_statement_amounts_are_rounded_to_the_franc_cent(self):
         """BUG-806 : coût matière / résultat renvoyés avec 4 décimales (CUMP x quantité) sans `quantize`
         (CLAUDE.md §4) : 21006.8965 et 793.1035 FC ; la somme des lignes arrondies à 2 décimales
@@ -463,7 +459,6 @@ class RevenueRulesTests(_Base):
     def _rev(self):
         return _income_statement_for_year(self.year)['total_revenue']
 
-    @unittest.expectedFailure
     def test_negative_adjustment_reduces_revenue_BUG_801(self):
         """BUG-801 : une facture d'ajustement (sign -1) porte des lignes POSITIVES ; le CA les additionne."""
         inv = self.sale(self.f1, self.a, [(self.bp_grand, 10)], 5000, 'CASH', self.d1)
@@ -475,7 +470,6 @@ class RevenueRulesTests(_Base):
         self.assertEqual(adj.status_code, 201, adj.data)
         self.assertEqual(self._rev(), D('4000'))   # 5000 - 2 x 500
 
-    @unittest.expectedFailure
     def test_regularisation_is_not_revenue_BUG_802(self):
         """BUG-802 : une RG n'est pas une vente (BUG-178, CLAUDE.md §5.1) ; exclue du cash, comptée au CA."""
         self.sale(self.f1, self.a, [(self.bp_mini, 10)], 0, 'CREDIT', self.d1, code='RG')
@@ -534,7 +528,6 @@ class ConsumableValuationTests(_Base):
         self.stock_move(self.k1, 'SALT', 'ENTRY', 1000, '1.55', self.d1, 'g')
         self.assertEqual(ConsumableStock.objects.get(node=self.k1, consumable_type='SALT').average_unit_cost, D('1.4375'))
 
-    @unittest.expectedFailure
     def test_exit_unit_price_column_keeps_the_cump_precision_BUG_803(self):
         """BUG-803 : le CUMP (4 décimales) est figé dans `ConsumableMovement.unit_price`, colonne a
         2 décimales. SQLite (tests, postes desktop) ne tronque pas, PostgreSQL (cloud) arrondit a
