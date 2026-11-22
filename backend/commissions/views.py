@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param, get_json_object
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -121,9 +121,10 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         Deduction fields (debt/social/prints/other) default to 0 and stay
         editable afterwards — they are not derivable from invoice data alone.
         """
-        node_id = request.data.get('node')
-        month   = request.data.get('month')
-        year    = request.data.get('year')
+        data    = get_json_object(request)  # BUG-762
+        node_id = data.get('node')
+        month   = data.get('month')
+        year    = data.get('year')
         if node_id in (None, '') or month in (None, '') or year in (None, ''):
             return Response({'detail': '`node`, `month` et `year` sont requis.'}, status=status.HTTP_400_BAD_REQUEST)
         # BUG-736 : validation stricte (jamais de 500 sur paramètres invalides).
@@ -371,6 +372,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
 
     @action(detail=True, methods=['post'], permission_classes=[IsDirection])
     def mark_paid(self, request, pk=None):
+        data = get_json_object(request)  # BUG-762
         with transaction.atomic():
             commission = self._get_locked_object()
             if commission.is_paid:
@@ -380,7 +382,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 return Response(
                     {'detail': 'Net à payer négatif : paiement impossible, le solde est reporté comme dette sur la période suivante.'},
                     status=status.HTTP_400_BAD_REQUEST)
-            paid_by = request.data.get('paid_by', request.user.get_full_name())
+            paid_by = data.get('paid_by', request.user.get_full_name())
             # Mise à jour conditionnelle : garde-fou même sans verrou de ligne (SQLite).
             rows = ClientCommission.objects.filter(pk=commission.pk, is_paid=False).update(
                 is_paid=True, paid_at=timezone.now(), paid_by=paid_by)
@@ -397,13 +399,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     @action(detail=True, methods=['patch'], permission_classes=[IsDirection])
     def set_manuel(self, request, pk=None):
         """Override net_payable with a manual adjustment (DIRECTION only)."""
+        data = get_json_object(request)  # BUG-762
         config = Config.get_instance()
-        adj = request.data.get('manuel_adjustment')
-        # BUG-749 : au moins un des deux champs doit être fourni (sinon 400, rien n'est effacé).
-        if 'manuel_adjustment' not in request.data and 'manuel_notes' not in request.data:
-            return Response({'detail': 'Champ « manuel_adjustment » requis (null pour effacer l\'ajustement).'},
-                            status=status.HTTP_400_BAD_REQUEST)
-        notes = request.data.get('manuel_notes', '')
+        adj = data.get('manuel_adjustment')
+        notes = data.get('manuel_notes', '')
         if notes is None:
             notes = ''  # BUG-750 : null = vide
         with transaction.atomic():
@@ -411,7 +410,12 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             locked = self._locked_response(commission)
             if locked is not None:
                 return locked
-            if 'manuel_adjustment' not in request.data:
+            # BUG-749 : au moins un des deux champs doit être fourni (sinon 400, rien n'est effacé).
+            # Contrôle après la recherche de l'objet : une commission inconnue reste un 404.
+            if 'manuel_adjustment' not in data and 'manuel_notes' not in data:
+                return Response({'detail': 'Champ « manuel_adjustment » requis (null pour effacer l\'ajustement).'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if 'manuel_adjustment' not in data:
                 # BUG-749 : champ absent = ajustement inchangé (seules les notes sont mises à jour).
                 commission.manuel_notes = notes
             elif adj is None:

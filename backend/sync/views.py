@@ -175,6 +175,10 @@ def _parse_cursor(request, param_name):
             parsed = timezone.make_aware(parsed)
         except (ValueError, OverflowError):
             raise ParseError(f"Paramètre « {param_name} » invalide : date/heure hors plage.")
+    # BUG-785 : curseur dans le futur (Cloud restauré, horloge déréglée) =
+    # traité comme absent (pull complet), jamais « 0 client à jamais ».
+    if parsed > timezone.now():
+        return None
     return parsed
 
 

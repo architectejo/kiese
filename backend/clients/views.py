@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
 from .search import AccentInsensitiveSearchFilter, fold_expr, fold_term
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param, get_json_object
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -477,8 +477,9 @@ class ClientViewSet(viewsets.ModelViewSet):
     def bulk_move(self, request):
         """Move a set of clients to another bakery (Direction centrale uniquement).
         The code prefix reflects the bakery, so it's regenerated for the new node."""
-        ids = request.data.get('ids') or []
-        node_id = request.data.get('node')
+        data = get_json_object(request)  # BUG-762
+        ids = data.get('ids') or []
+        node_id = data.get('node')
         if not ids or not node_id:
             raise ValidationError({'detail': 'ids et node sont requis.'})
         ids = self._parse_ids(ids)  # BUG-741 : 400 au lieu de 500
@@ -524,7 +525,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         """Delete a set of clients (Direction centrale uniquement). Clients with
         protected relations (factures, commissions, distributions sociales) are
         skipped and reported instead of failing the whole batch."""
-        ids = request.data.get('ids') or []
+        ids = get_json_object(request).get('ids') or []  # BUG-762
         if not ids:
             raise ValidationError({'detail': 'ids requis.'})
         ids = self._parse_ids(ids)  # BUG-741
@@ -631,9 +632,10 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
     @action(detail=False, methods=['post'])
     def bulk_create_month(self, request):
         """Create SocialContribution records for all active clients of a node for a given month/year."""
-        node_id = request.data.get('node')
-        month   = request.data.get('month')
-        year    = request.data.get('year')
+        data    = get_json_object(request)  # BUG-751 / BUG-762
+        node_id = data.get('node')
+        month   = data.get('month')
+        year    = data.get('year')
         user = request.user
         if not user.can_access_all_nodes:
             # BUG-249 : le nœud est imposé pour un non-siège ; un `node`
@@ -656,7 +658,7 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             raise ValidationError({'detail': 'Paramètre « month » invalide : un mois entre 1 et 12 est attendu.'})
         if not 2000 <= year <= 2100:
             raise ValidationError({'detail': 'Paramètre « year » invalide : une année entre 2000 et 2100 est attendue.'})
-        manual_amount = request.data.get('amount')
+        manual_amount = data.get('amount')
         if manual_amount in (None, ''):
             manual_amount = None
         else:
@@ -754,6 +756,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                 line.save(update_fields=['remise', 'total_payer', 'updated_at'])
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic  # BUG-753 : tout ou rien
     def refresh_indices(self, request, pk=None):
         """BUG-295 : recalcule INDICE (= nombre de mois de cotisation payés de
         l'année, boulangerie de la distribution) et TOTAL SOCIAL de chaque ligne
@@ -773,6 +776,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             line.indice = paid_qs.count()
             line.total_social = paid_qs.aggregate(total=Sum('amount'))['total'] or 0
             line.compute()
+            _check_line_columns(line)  # BUG-753
             line.save()
             updated += 1
         distribution.refresh_from_db()
@@ -780,6 +784,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                          'distribution': SocialDistributionSerializer(distribution).data})
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic  # BUG-753 : tout ou rien
     def auto_populate_lines(self, request, pk=None):
         """Auto-create distribution lines for all active cotisation_sociale clients,
         computing indice = count of paid contributions for this year and node."""
@@ -805,6 +810,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             )
             if is_new:
                 line.compute()
+                _check_line_columns(line)  # BUG-753
                 line.save()
                 created += 1
             else:
@@ -812,6 +818,23 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         distribution.refresh_from_db()
         return Response({'created': created, 'skipped': skipped,
                          'distribution': SocialDistributionSerializer(distribution).data})
+
+
+_COLUMN_LIMIT = Decimal('100000000')  # colonnes DecimalField(max_digits=10, decimal_places=2)
+
+
+def _check_line_columns(line):
+    """BUG-753 : 400 français si un montant recalculé dépasse la colonne (au lieu d'un 500)."""
+    if any(Decimal(str(v)) >= _COLUMN_LIMIT for v in (line.total_social, line.remise, line.total_payer)):
+        raise ValidationError({'detail': (
+            f"Montant hors limite pour {line.client.full_name} : total social, remise et total à payer "
+            "doivent rester inférieurs à 100 000 000 FC.")})
+
+
+def _refuse_if_closed(distribution):
+    """BUG-752 : les lignes d'une distribution clôturée sont immuables."""
+    if distribution.is_closed:
+        raise ValidationError({'detail': 'Cette distribution est clôturée : ses lignes ne sont plus modifiables.'})
 
 
 class SocialDistributionLineViewSet(viewsets.ModelViewSet):
@@ -832,11 +855,19 @@ class SocialDistributionLineViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        _refuse_if_closed(serializer.validated_data['distribution'])  # BUG-752
         line = serializer.save()
         line.compute()
         line.save()
 
     def perform_update(self, serializer):
+        _refuse_if_closed(serializer.instance.distribution)  # BUG-752
+        if 'distribution' in serializer.validated_data:
+            _refuse_if_closed(serializer.validated_data['distribution'])
         line = serializer.save()
         line.compute()
         line.save()
+
+    def perform_destroy(self, instance):
+        _refuse_if_closed(instance.distribution)  # BUG-752
+        instance.delete()

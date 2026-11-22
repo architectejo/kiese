@@ -585,7 +585,6 @@ class NewRoutesMatrix(Base5):
             'consumable_type': 'FLOUR', 'allocations': [{'node': self.k1.pk, 'quantity': '1e400'}]}, format='json')
         self.assertLess(r.status_code, 500)
 
-    @expectedFailure  # BUG-541 (existant) : node=true accepte comme pk 1
     def test_BUG_541_dispatch_bool_node_is_not_node_1(self):
         """node=true -> int(True)=1 : ne doit pas designer silencieusement le noeud pk=1."""
         first = Node.objects.order_by('pk').first()

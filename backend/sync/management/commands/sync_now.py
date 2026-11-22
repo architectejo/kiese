@@ -149,7 +149,7 @@ class Command(BaseCommand):
         # redescendre que les clients modifiés depuis.
         from sync.desktop_client import load_pull_cursor, save_pull_cursor
         data_dir = getattr(settings, 'KIESE_DATA_DIR', None)
-        pull_params = load_pull_cursor(data_dir, cloud_url)
+        pull_params = load_pull_cursor(data_dir, cloud_url, node_code)
 
         try:
             pull_response, pull_attempts = _send_with_retry(
@@ -172,7 +172,7 @@ class Command(BaseCommand):
 
         pull_data = pull_response.json()
         apply_pull_response(pull_data)
-        save_pull_cursor(data_dir, cloud_url, pull_data)
+        save_pull_cursor(data_dir, cloud_url, pull_data, node_code)
         self.stdout.write(self.style.SUCCESS("Synchronisation terminée (push + pull)."))
 
 

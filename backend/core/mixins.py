@@ -47,3 +47,14 @@ class NodeImmutableForNonHQMixin:
                 field.read_only = True
                 field.required = False
         return serializer
+
+
+def get_json_object(request):
+    """BUG-762 : renvoie `request.data` si le corps est un objet JSON (ou un
+    formulaire) ; sinon (liste, nombre, chaîne, null) lève une 400 en français
+    au lieu d'un 500 sur `.get(...)`."""
+    from rest_framework.exceptions import ValidationError
+    data = request.data
+    if isinstance(data, dict):  # inclut QueryDict
+        return data
+    raise ValidationError({'detail': "Corps de requête invalide : un objet JSON est attendu."})

@@ -129,11 +129,22 @@ class NodeAuthToken(models.Model):
         (instance, jeton_en_clair). Le jeton en clair n'est renvoyé qu'une
         seule fois : à appeler uniquement depuis l'écran « Nœuds » du siège.
         """
-        cls.objects.filter(node=node, revoked_at__isnull=True).update(revoked_at=timezone.now())
+        # BUG-761 : `node` est un OneToOne -> la ligne existante est REMPLACÉE
+        # (nouveau secret, révocation levée), l'ancien hash n'authentifie plus.
         raw_token = secrets.token_urlsafe(48)
-        instance = cls.objects.create(
-            node=node, token_hash=_hash_token(raw_token), issued_by=issued_by
-        )
+        with transaction.atomic():
+            instance = cls.objects.select_for_update().filter(node=node).first()
+            if instance is None:
+                instance = cls.objects.create(
+                    node=node, token_hash=_hash_token(raw_token), issued_by=issued_by
+                )
+            else:
+                instance.token_hash = _hash_token(raw_token)
+                instance.issued_by = issued_by
+                instance.issued_at = timezone.now()
+                instance.revoked_at = None
+                instance.last_used_at = None
+                instance.save()
         return instance, raw_token
 
     @classmethod

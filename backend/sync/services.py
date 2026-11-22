@@ -74,7 +74,9 @@ def recompute_client_debt(client_id, opening=None):
                     total = total + opening
                 client.current_debt = total
                 client.refresh_category()
-                client.save(update_fields=['current_debt', 'category'])
+                # BUG-787 : `updated_at` doit avancer pour que le pull
+                # incrémental renvoie ce client aux autres postes.
+                client.save(update_fields=['current_debt', 'category', 'updated_at'])
                 return client
         except OperationalError as exc:
             last_exc = exc
@@ -893,6 +895,9 @@ def _push_consumable_movement(node, record):
         bakery = Node.objects.get(code=bakery_code)
     except Node.DoesNotExist:
         return _record_result(record_id, False, f"boulangerie inconnue : {bakery_code}")
+    # BUG-788 : un poste ne modifie que le stock de consommables de sa boulangerie.
+    if bakery.pk != node.pk:
+        return _record_result(record_id, False, "mouvement de consommable d'une autre boulangerie refusé")
 
     consumable_type = record.get('consumable_type')
     if not consumable_type:
@@ -1288,7 +1293,8 @@ def _push_bread_transfer(node, record):
             if new_status in allowed_forward.get(existing.transfer_status, set()):
                 existing.transfer_status = new_status
                 changed_fields.append('transfer_status')
-                if record.get('quantity_received') is not None:
+                # BUG-788 : la quantité reçue ne vient que de la boulangerie réceptrice.
+                if record.get('quantity_received') is not None and node.pk == existing.to_node_id:
                     existing.quantity_received = record['quantity_received']
                     changed_fields.append('quantity_received')
         if changed_fields:
@@ -1302,6 +1308,9 @@ def _push_bread_transfer(node, record):
         to_bakery = Node.objects.get(code=to_code)
     except Node.DoesNotExist:
         return _record_result(record_id, False, "boulangerie inconnue (from_node/to_node)")
+    # BUG-788 : seul un nœud partie au transfert (émetteur ou récepteur) peut le créer.
+    if node.pk not in (from_bakery.pk, to_bakery.pk):
+        return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
 
     bread_price = None
     bp_id = record.get('bread_price')
@@ -1328,8 +1337,13 @@ def _push_bread_transfer_line(node, record):
     if record_id:
         existing = BreadTransferLine.objects.filter(pk=record_id).first()
         if existing:
+            # BUG-788 : contrôle d'appartenance AVANT toute écriture ; la
+            # quantité reçue n'est modifiable que par la boulangerie réceptrice.
+            parent = existing.transfer
+            if node.pk not in (parent.from_node_id, parent.to_node_id):
+                return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
             changed_fields = []
-            if (record.get('quantity_received') is not None
+            if (record.get('quantity_received') is not None and node.pk == parent.to_node_id
                     and existing.quantity_received != record['quantity_received']):
                 existing.quantity_received = record['quantity_received']
                 changed_fields.append('quantity_received')
@@ -1459,6 +1473,12 @@ def _push_disbursement_voucher(node, record):
     record_id = record.get('id')
     if not record_id:
         return _record_result(record_id, False, "id manquant")
+
+    # BUG-789 : le bordereau débite le livre de caisse direction (SIEGE) ;
+    # comme l'API REST (IsHeadquarters), seul un jeton du nœud siège peut le pousser.
+    if node.code != 'SIEGE':
+        return _record_result(
+            record_id, False, "bordereau de versement réservé au siège : refusé pour une boulangerie")
 
     existing = DisbursementVoucher.objects.filter(pk=record_id).first()
     if existing is None:

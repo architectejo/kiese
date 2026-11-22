@@ -482,12 +482,14 @@ class TreasuryExtensionSyncTests(TestCase):
             },
         }, format='json')
 
+        # BUG-789 : seul un jeton du nœud SIEGE peut pousser un bordereau.
+        siege_api = _issue_token(Node.objects.get(code='SIEGE'))
         voucher_id = str(uuid.uuid4())
         record = {
             'id': voucher_id, 'date': date.today().isoformat(), 'motif': 'Achat farine',
             'beneficiary': 'MIDEMA', 'bills_10000': 5, 'node_origin': 'CLOUD',
         }
-        resp1 = self.api.post('/api/sync/push/', {
+        resp1 = siege_api.post('/api/sync/push/', {
             'batch_id': str(uuid.uuid4()), 'records': {'treasury.DisbursementVoucher': [record]},
         }, format='json')
         self.assertEqual(resp1.data['results']['treasury.DisbursementVoucher'][0]['status'], 'ACCEPTED', resp1.data)
@@ -495,7 +497,7 @@ class TreasuryExtensionSyncTests(TestCase):
         voucher = DisbursementVoucher.objects.get(pk=voucher_id)
         self.assertEqual(voucher.cashbook_entries.count(), 1)
 
-        resp2 = self.api.post('/api/sync/push/', {
+        resp2 = siege_api.post('/api/sync/push/', {
             'batch_id': str(uuid.uuid4()), 'records': {'treasury.DisbursementVoucher': [record]},
         }, format='json')
         self.assertEqual(resp2.data['results']['treasury.DisbursementVoucher'][0]['status'], 'ACCEPTED')

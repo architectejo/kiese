@@ -185,7 +185,9 @@ class AtomicityTests(Base):
 class IsolationAndDecimalTests(Base):
     def test_two_nodes_do_not_mix(self):
         ex1, ex2 = rec('EXIT', '1.000', node='K1'), rec('EXIT', '1.000', node='K2')
-        self.push(ex1, ex2)
+        # BUG-788 : chaque poste pousse ses propres mouvements (jeton du nœud).
+        self.push(ex1)
+        self.push(ex2, node=self.k2)
         self.push(rec('ENTRY', '5.000', '100000.00', node='K1'))
         self.assertEqual(self.price(ex1['id']), D('100000.00'))
         self.assertEqual(self.price(ex2['id']), D('0.00'))
@@ -193,7 +195,7 @@ class IsolationAndDecimalTests(Base):
         self.assertFalse(self.marker(ex2['id']).is_resolved)
         self.assertEqual(stock_of(self.k1).quantity, D('4.000'))
         self.assertEqual(stock_of(self.k2).quantity, D('-1.000'))
-        self.push(rec('ENTRY', '2.000', '7000.00', node='K2'))
+        self.push(rec('ENTRY', '2.000', '7000.00', node='K2'), node=self.k2)
         self.assertEqual(self.price(ex2['id']), D('7000.00'))
         self.assertEqual(self.price(ex1['id']), D('100000.00'))
 
