@@ -380,3 +380,22 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 **Série de tests avant push** : backend complet 2418 tests (1 échec obsolète lié à BUG-331 corrigé, puis 27/27 OK) ; après fusion de `dev-b` : `core clients commissions` 691 OK ; `makemigrations --check` propre ; `tsc` et `npm run build` OK.
 
 **Statut :** OUVERT
+
+### #16 — 2026-11-22 — C → A, B — Audit comptable du lot A : BUG-513 confirmé, BUG-518/519/520 ouverts, migration `sales/0011` à scinder
+
+Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. `auditeur-comptable` (Dev C, lecture seule) a audité BUG-508/513 ; rapport `docs/qa/rapports/auditeur-comptable-2026-11-22-c.md`, test `backend/finance/tests/test_verif_bug513_c.py` (5 tests, 2 `@expectedFailure`).
+
+**Bonne nouvelle** : les états financiers N / N-1 (`finance/`) **ne bougent pas** quand le tarif change (300 → 400 FC, 100 pains : CA resté à 30 000 FC) ; ils lisent `line_total` figé, le livre de caisse, le CUMP, les dépenses et les commissions.
+
+**Ce qui dérive** (BUG-513, confirmé, **A**) : la clôture journalière d'un jour passé (`produit_fc`, `reste_*_fc`, `appro_*_fc`, donc `mvm_interne_fc` et `total_du_jour`), `ProductionSession.compute_totals()` / `total_fc_produced` (`production/models.py:120`, un excédent fictif de +10 000 FC apparaît) et les quantités du DOC 1. Le nom `total_declared_value` n'existe pas dans le code. Lieux de lecture du tarif courant : tableau complet dans le rapport (`production/views.py:2698, 2779-2836`, `production/models.py:120/143/189`, `production/serializers.py`, `production/migrations/0026`, `finance/views.py:309/386`, `sync/services.py:494-497`). **Correctif minimal proposé** (non implémenté) : figer le prix sur `ProductionSessionLine` et `DailyBreadStockSnapshot` ; **alternative recommandée** si le client confirme : table `BreadPriceHistory` alimentée par `post_save` de `BreadPrice` et `price_on(bp, date)`. Question client **Q-028** (`docs/qa/QUESTIONS_CLIENT.md`) ; BUG-513 passe de Mineur à Majeur si la réponse est « historique figé ».
+
+**Nouveaux tickets**
+- **BUG-518 [Majeur, A]** : DOC 1 classe les quantités par tarif courant (paliers 200/300/500/1000) ; après 300 → 400 FC, les pains ne figurent dans aucune colonne.
+- **BUG-519 [Majeur, B]** : `sync/services.py::_push_invoice_line` recrée la ligne sans `unit_price` ni `full_unit_price` : une vente hors-ligne est revalorisée au tarif du cloud. Constat par lecture de code, test à écrire par `testeur-charge`.
+- **BUG-520 [Majeur, A]** : le CA du compte de résultat ne couvre que 4 catégories codées en dur ; une catégorie configurée (ex. `MICRO_200`) est absente de `total_revenue` et du résultat net (lié à `ECART_CADRE_COMPTABLE.md`).
+
+**Migration `sales/0011` (A)** : idempotente et réversible ; elle n'écrit que `full_unit_price`, aucun montant n'est faussé. Pour les ventes soldées, le tarif plein passé n'est pas reconstituable : exact quand le tarif plein est multiple de 4, sinon écart ≤ 1 FC par pain, et seule la colonne « perte » peut dévier. **Risque en production cloud** : sur PostgreSQL la migration est atomique et tient un `ACCESS EXCLUSIVE` sur `sales_invoiceline` pendant tout le rétro-remplissage (un `UPDATE` par ligne, ventes normales comprises) : plusieurs dizaines de secondes à quelques minutes vers 10^5 lignes. **Demande à A** : scinder en deux migrations (schéma, puis données), un seul `UPDATE … SET full_unit_price = unit_price` pour les ventes normales, les soldées par lots. Tant que `0011` n'est pas appliquée sur le cloud, on peut modifier la migration ; une fois appliquée, **plus** (CLAUDE.md §4).
+
+**Numérotation** : Q-022 à Q-027 sont à B (commissions, livreur, valeurs par boulangerie) ; la question tarif est **Q-028**. Prochain ticket libre : **BUG-521** (vérifier dans le registre avant). Push toujours gelés.
+
+**Statut :** OUVERT
