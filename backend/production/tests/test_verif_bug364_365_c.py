@@ -3,7 +3,6 @@ Donnees fictives uniquement."""
 from datetime import timedelta
 from decimal import Decimal as Dc
 from io import StringIO
-from unittest import expectedFailure
 
 from django.core.management import call_command
 from django.test import TestCase
@@ -160,7 +159,6 @@ class V364(TestCase):
             res.append(st.average_unit_cost)
         self.assertEqual(res[0], res[1])
 
-    @expectedFailure
     def test_BUG_524_two_entries_same_instant_after_negative_stock_order_changes_cump(self):
         """BUG-524 : stock negatif (-5) puis deux entrees de meme instant (3 @ 100, 10 @ 200) :
         le CUMP final depend de l'ordre (pk UUID aleatoire) et aucun avertissement n'est emis."""
@@ -204,14 +202,14 @@ class V365(IsoBase):
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(r.data['node'])
 
-    def test_hq_unknown_numeric_node_gives_zeros(self):
+    def test_hq_unknown_numeric_node_now_400_bug525(self):
         r = cl(self.u['DIRECTION']).get(f'{URL}?node=999999')
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 400)  # BUG-525 : inconnu -> 400 (avant : 200 muet)
+        self.assertIn('detail', r.data)
 
-    @expectedFailure
     def test_BUG_525_hq_non_numeric_node_not_500(self):
         r = cl(self.u['DIRECTION']).get(f'{URL}?node=ZZZ')
-        self.assertLess(r.status_code, 500)
+        self.assertEqual(r.status_code, 400)
 
     def test_node_less_non_hq(self):
         r = cl(mk('orph_c3_g', 'GERANT', None)).get(f'{URL}?node={self.k2.pk}')
