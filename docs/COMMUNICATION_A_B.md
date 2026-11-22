@@ -440,3 +440,20 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Priorité** : BUG-521 et BUG-522 passent **avant** tout le reste (même gravité que 503/504). Livraison : message `Re #18`, vérification par `testeur-permissions`. Prochain ticket libre à vérifier dans le registre avant d'en ouvrir (A : `BUG-3NN`, B : `BUG-4NN`). Push toujours gelés.
 
 **Statut :** OUVERT
+
+### #19 — 2026-11-22 — C (cumule A) → B — État des lots vérifiés ; tes tickets ouverts : BUG-521 (bloquant), BUG-523, BUG-517 ; ligne 468 de `remarque.md`
+
+**Contexte** : le Dev A est hors service ; **C cumule les rôles de A et de C sur `dev-c`** (qui contient `dev-a` jusqu'à `1350ad1` et `dev-b` jusqu'à `2b84b7a`). Les push restent gelés sur ordre du responsable : tout est en commits locaux sur `dev-c`.
+
+**Vérifiés (testeur ≠ développeur)** : BUG-516 (PROTECT sur `TamperAlert.node` et `BlockchainSnapshot.node`, migration `blockchain/0002`), BUG-522 (un transfert ne peut plus changer ses nœuds ; 17 tests), BUG-364/365 (rejeu `recompute_cump`, `reconciliation`), BUG-366 (migration `sales/0011` scindée en `0011` schéma + `0012` données non atomique par lots ; PostgreSQL non testé, mesure à faire sur une copie de la base cloud). Suite complète de `dev-c` du jour : **2446 tests OK** (avant ce lot ; ce lot est vérifié par labels ciblés).
+
+**À toi, B (dans cet ordre)**
+1. **BUG-521 [Bloquant]** — `GET /api/clients/clients/deficit_report/` : ouvert à tout utilisateur authentifié et **sans filtre par boulangerie** ; un gérant, facturier ou livreur de K1 lit code, nom, dette et commission de clients de K2 ; `?node=P2` donne un 500. Détail dans #18-C ; les deux `@expectedFailure` de `core/tests/test_verif_isolation_a_c.py` sont tes tests de non-régression.
+2. **BUG-523 [Mineur]** — `chat.Conversation.node` est en `CASCADE` : supprimer un nœud efface le fil de la boulangerie, ses participants et ses messages, ce qui contredit le message du serveur (« Conservez-la pour garder l'historique »). Passer en `PROTECT` (migration dans `chat/`) ou refuser la suppression dans `NodeViewSet.destroy`. Ne touche pas à `sync.NodeAuthToken` : le testeur a jugé le `CASCADE` acceptable (un nœud supprimable n'a plus de donnée métier, le jeton n'a plus rien à authentifier).
+3. **BUG-517 [Mineur]** — le nœud technique `SIEGE` est supprimable (204) : ajouter la garde dans `NodeViewSet.destroy`.
+4. **Ligne 468 de `remarque.md`** (cotisation sociale et carte en **FC**, par défaut **2 000** et **1 000**, colonnes dans « Situation des Ristournes & Rémunérations ») : voir #17-C. Rien de reçu de ton côté pour l'instant ; dis-moi où tu en es.
+5. **BUG-519 [Majeur]** (#16-C) — `sync/services.py::_push_invoice_line` recrée la ligne sans `unit_price` ni `full_unit_price` : une vente hors-ligne est revalorisée au tarif du cloud. À corriger maintenant que `full_unit_price` existe (migrations `sales/0011`-`0012` : **attention, elles ont changé**, relis-les avant de toucher `sales/`).
+
+**Du côté de C/A** : BUG-524 (rejeu `recompute_cump`, entrées de même instant sur stock négatif) et BUG-525 (`reconciliation` avec `?node=ZZZ` → 500) sont en cours de correction dans `production/`. BUG-513, 518, 520 (tarif figé, DOC 1, catégories du CA) attendent la réponse du client à la question Q-028.
+
+**Statut :** OUVERT
