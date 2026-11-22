@@ -8,7 +8,7 @@ from django.db.models import ProtectedError
 from django.db.models import Sum, F, Q
 from django.utils import timezone
 from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
-from kiese.node_guard import NoNodeGuardMixin
+from kiese.node_guard import NoNodeGuardMixin, resolve_node_param
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -55,6 +55,15 @@ _APPEND_MAX_RETRIES = 25
 # historiques légitimes.
 _JOURNAL_YEAR_MIN = 2000
 _JOURNAL_YEAR_MAX = 2100
+
+
+def _hq_node_filter_id(raw):
+    """BUG-560 : `?node=` (siège) illisible/inconnu -> 400 {"detail"} au lieu d'un 500.
+    Retourne la clé primaire du nœud."""
+    node, bad = resolve_node_param(raw)
+    if bad is not None:
+        raise ValidationError({'detail': bad.data['detail']})
+    return node.pk
 
 
 def _default_work_date(request):
@@ -326,6 +335,14 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             node = serializer.validated_data.get('node') or user.node
         if not node:
             raise ValidationError({'detail': 'Boulangerie requise.'})
+        # BUG-560 : l'unicité (node, team, date) est validée sur l'équipe du CORPS,
+        # mais `team=user.team` est enregistrée : contrôler l'équipe réelle.
+        report_date = serializer.validated_data.get('date')
+        if report_date is not None and FacturierReport.objects.filter(
+                node=node, facturier=user, team=user.team, date=report_date).exists():
+            raise ValidationError({'detail': (
+                f"Vous avez déjà un rapport pour {node.code}, équipe {user.team}, "
+                f"à la date {report_date}.")})
         obj = serializer.save(
             node=node,
             facturier=user,
@@ -1008,7 +1025,7 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
             else:
                 qs = qs.none()
         elif node_id:
-            qs = qs.filter(node_id=node_id)
+            qs = qs.filter(node_id=_hq_node_filter_id(node_id))
 
         # Month/year filter
         month = params.get('month')
@@ -1228,7 +1245,10 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
 
         qs = JournalEntry.objects.filter(date__month=month, date__year=year)
         if node_id:
-            qs = qs.filter(node_id=node_id)
+            try:
+                qs = qs.filter(node_id=_hq_node_filter_id(node_id))
+            except ValidationError as exc:
+                return Response({'detail': str(exc.detail['detail'])}, status=status.HTTP_400_BAD_REQUEST)
 
         totals = qs.aggregate(
             total_entries=Sum('entry_amount'),
@@ -1274,7 +1294,7 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         if not user.can_access_all_nodes:
             qs = qs.filter(node=user.node) if user.node_id else qs.none()
         elif node_id:
-            qs = qs.filter(node_id=node_id)
+            qs = qs.filter(node_id=_hq_node_filter_id(node_id))
         month = params.get('month')
         year  = params.get('year')
         # BUG-115 : même défaut que BUG-114 — valider avant tout
@@ -1348,7 +1368,10 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         if not request.user.can_access_all_nodes:
             qs = qs.filter(node=request.user.node) if request.user.node_id else qs.none()
         elif node_id:
-            qs = qs.filter(node_id=node_id)
+            try:
+                qs = qs.filter(node_id=_hq_node_filter_id(node_id))
+            except ValidationError as exc:
+                return Response({'detail': str(exc.detail['detail'])}, status=status.HTTP_400_BAD_REQUEST)
 
         totals = qs.aggregate(
             total_revenue=Sum('daily_revenue'),

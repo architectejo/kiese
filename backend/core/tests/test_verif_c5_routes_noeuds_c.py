@@ -214,7 +214,6 @@ class ClientsCommissionsAttack(Base5):
                         bad.append((who.username, p, qs, r.status_code))
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-560 : treasury journal/savings (?node= invalide) -> 500
     def test_BUG_560_treasury_journal_savings_node_param(self):
         bad = []
         c = api(self.u['DIRECTION'])
@@ -278,7 +277,6 @@ class Invalid5xx(Base5):
                         bad.append((who.username, q, str(body), r.status_code))
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-561 : run_check avec un corps JSON liste -> 500
     def test_BUG_561_run_check_list_body(self):
         r = api(self.u['DIRECTION']).post('/api/blockchain/snapshots/run_check/', [], format='json')
         self.assertLess(r.status_code, 500)
@@ -316,7 +314,6 @@ class IsolationReplay(Base5):
                 self.assertLess(r.status_code, 500, (role, forged))
                 self.assertEqual(FacturierReport.objects.filter(node=self.k2).count(), before, (role, forged, r.content))
 
-    @expectedFailure  # BUG-560 : 2e rapport meme jour/equipe -> IntegrityError (500)
     def test_BUG_560_duplicate_report_is_not_500(self):
         body = {'node': self.k1.pk, 'team': 'B', 'date': '2026-10-30'}
         api(self.u['GERANT']).post('/api/treasury/reports/', body, format='json')
@@ -772,7 +769,6 @@ class NewRoutesMatrix(Base5):
         self.assertEqual(r.status_code, 403)
         self.assertNotIn('777777', r.content.decode())
 
-    @expectedFailure  # BUG-563 : versements liste le noeud technique SIEGE
     def test_BUG_563_versements_hq_sees_real_bakeries_only(self):
         r = api(self.u['DIRECTION']).get(f'/api/treasury/closures/versements/?date={D}')
         codes = [x['node_code'] for x in r.data['results']]

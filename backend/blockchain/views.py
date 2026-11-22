@@ -141,6 +141,10 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         Run integrity check on all nodes (or a specific node via ?node=id).
         Creates a BlockchainSnapshot and TamperAlert records for violations.
         """
+        # BUG-561 : un corps JSON qui n'est pas un objet (liste, nombre...) -> 400.
+        if not hasattr(request.data, 'get'):
+            return Response({'detail': "Corps de requête invalide : un objet JSON est attendu."},
+                            status=status.HTTP_400_BAD_REQUEST)
         node_id = request.data.get('node') or request.query_params.get('node')
         if node_id:
             node, err = resolve_node_param(node_id)  # BUG-529 : inconnu -> 400

@@ -98,3 +98,63 @@ Test à ajouter : celui du ticket (`test_past_day_produced_value_after_tariff_ch
 | Remarque migration 0011 | Verrou long sur gros volume PostgreSQL (UPDATE par ligne dans une migration atomique) ; non ouvert en BUG car pas encore appliquée en production : à traiter par Dev A avant déploiement cloud | Mineur (préventif) | — |
 
 Exécution : `manage.py test finance.tests.test_verif_bug513_c` -> 5 tests, OK (expected failures = 2). Suite complète non relancée (consigne).
+
+---
+
+# Cycle test 1 (partie C : finance, trésorerie, blockchain) — 2026-11-22
+
+Lecture seule du code applicatif. Données 100 % fictives (`data_kiese/` non utilisé). Tests : `backend/finance/tests/test_audit_c_cycle1_c.py` (34 tests, 27 verts, 7 `@expectedFailure`). `python manage.py test finance` : 75 tests OK (9 échecs attendus au total, tous les anciens et ceux-ci).
+
+## 1. Scénario rejoué (API : factures, livraisons, rapports, dépenses, clôtures avec billetage, validation, versement au livre ; ORM : consommables)
+2 boulangeries, 3 jours (K1) et 2 jours (K2) du mois précédent, exercice N-1 avec 1 vente / 1 dépense / 1 versement / 1 sortie de farine. Calcul à la main dans la docstring du fichier.
+
+| Agrégat | Attendu (main) | Application | Verdict |
+|---|---|---|---|
+| CA GRAND / MINI / PREMIUM | 14 750 / 12 300 / 2 000 | idem | OK |
+| CA total (vente soldée à 75 % incluse) | 29 050 | 29 050 | OK |
+| Cash facturiers K1 / K2 | 18 800 / 6 500 | idem | OK |
+| Crédit (hors soldée) | 7 000 | 7 000 | OK |
+| Dépenses locales | 3 300 | 3 300 | OK |
+| Net des 5 clôtures | 22 000 | 22 000 | OK |
+| Écart de caisse | -50 (1 jour) | -50 | OK |
+| Livre de caisse N-1 / N | 1 600 / 23 600 | idem ; chaîne de hash valide | OK |
+| Cash-flow N : entrées / sorties / net / clôture | 22 000 / 0 / 22 000 / 23 600 | idem | OK |
+| Cash-flow : clôture N = clôture N-1 + net N | 23 600 | 23 600 | OK |
+| Créances (BP) | 3 000 | 3 000 | OK |
+| CA - cash = créances + manquant soldée | 3 750 = 3 000 + 750 | 3 750 | OK |
+| CM brute A/B/E/F (C exclue) | 2 200 / 2 250 / 1 500 / 375 | idem | OK |
+| Net à payer A/B/E/F | 200 / 2 250 / 1 500 / -625 | idem | OK |
+| Coût farine (CUMP, stock reporté de N-1, SIEGE exclu) | 21 006,8965 | 21 006,8965 | OK (voir BUG-806) |
+| Résultat net | 29 050 - 21 006,8965 - 3 950 - 3 300 = 793,1035 | 793,1035 | OK (non arrondi, BUG-806) |
+| Bilan N : créances / caisse / actif | 3 000 / 23 600 / 26 600 | idem | OK |
+| Bilan N-1 : caisse / actif | 1 600 / 1 600 | 23 600 / 26 600 | ECART : BUG-800 |
+| Exercice vide : bilan | 0 | caisse actuelle | ECART : BUG-800 |
+| Exercice vide : compte de résultat, cash-flow | 0, croissance None | 0, None | OK |
+| CA avec ajustement -2 pains (500) | 4 000 | 6 000 | ECART : BUG-801 |
+| CA avec régularisation RG 3 000 | 0 | 3 000 | ECART : BUG-802 |
+
+Note : mon premier calcul à la main du coût farine (21 100) ignorait le stock reporté de N-1 (9 sacs à 4 000) : l'application était juste, l'erreur venait de moi (corrigée).
+
+## 2. Contrôles demandés
+- Balance Σ débit = Σ crédit : impossible, il n'existe pas de balance (BUG-808, contradiction avec `cadre_comptable.md`, Q-003).
+- Bilan actif = passif : impossible (actif seul), idem BUG-808.
+- Résultat cohérent entre états : OK au sens CA - coûts - commissions - dépenses ; identité CA - cash = créances + manquant OK ; cash-flow = variation du livre OK ; bilan N-1 faux (BUG-800).
+- Caisse = livre de caisse : OK sur le théorique ; l'écart physique n'est pas au livre (BUG-809, Q-042).
+- Fuite entre boulangeries : aucune. Gérant K1 et facturier : 403 sur les 4 états avec ou sans `?node=` et sur le livre ; clôtures et dépenses du gérant limités à son nœud (`?node=<K2>` ignoré), commissions limitées à K1.
+- Decimal : montants exacts à 4 décimales, mais non arrondis (BUG-806) et rendus en float JSON (BUG-807) ; CUMP 4 décimales dans une colonne à 2 (BUG-803).
+- Exercice N-1 vide : états à zéro, hors bilan (BUG-800).
+
+## 3. Tickets ouverts (BUG-800 à BUG-809)
+800 Majeur (bilan N-1), 801 Majeur (ajustement négatif au CA), 802 Majeur (RG au CA), 803 Mineur (CUMP 2/4 décimales), 806 Mineur (arrondi), 807 Mineur (float JSON) : OUVERT. 804, 805, 808, 809 : À CLARIFIER (Q-040, Q-041, Q-003, Q-042).
+
+## 4. Contradictions entre documents (signalées, non tranchées)
+1. `cadre_comptable.md` (balance, bilan, TFR, comptes) vs `CLAUDE.md` 5.6 / code actuel (4 catégories de CA codées en dur, bilan à 2 postes) : écart chiffré dans `docs/qa/ECART_CADRE_COMPTABLE.md`, en attente de Q-003 (avenant).
+2. `CLAUDE.md` 5.3 (CM brute, retenues, remise annuelle 0,025 x volume) vs `adaptes.md` / classeurs (BUG-058/295 : remise 0,25 % affichée non déduite, remise annuelle par INDICE x TARIF + MÉRITE) : le code suit adaptes.md ; CLAUDE.md 5.3 est périmé sur ce point.
+3. `CLAUDE.md` 5.5 (livre de caisse : `solde = précédent + entrée - sortie`, clôture = caisse nette) vs obligation d'écart journalisé : le livre reçoit le théorique (Q-042).
+4. Comptabilité d'engagement implicite dans `cadre_comptable.md` (charges à la période) vs charge « commissions » = net payé (Q-041).
+
+## 4 bis. Blockchain / hash
+Aucune anomalie nouvelle : la chaîne de 6 écritures du scénario (N-1 puis N, deux boulangeries) se vérifie avec `verify_cashbook_chain`, les soldes cumulés sont recalculés ligne à ligne.
+
+## 5. Limites
+Aucun test PostgreSQL (BUG-803 démontré par le schéma, pas par la valeur). Le scénario suppose le mois précédent complet et le même exercice : un seul exercice N et N-1 (pas de clôture d'exercice). Le DOC 1 n'est pas rejoué pour l'ajustement (suspicion notée sur BUG-801).

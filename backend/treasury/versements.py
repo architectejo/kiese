@@ -55,7 +55,7 @@ class VersementsRecapMixin:
 
         # Périmètre : siège/direction = toutes les boulangeries ; gérant = la sienne.
         if user.can_access_all_nodes:
-            nodes = Node.objects.all()
+            nodes = Node.objects.exclude(code='SIEGE')  # BUG-563 : nœud technique
         elif user.node_id:
             nodes = Node.objects.filter(pk=user.node_id)
         else:

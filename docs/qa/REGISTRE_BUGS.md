@@ -331,11 +331,21 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-387 | Frontend : « Intrants — Stocks Consommables » : vue globale direction, formulaire d'envoi, Inventaire Physique (une saisie/jour, commentaire), détail par boulangerie (contrat : `docs/qa/rapports/dev-backend-2026-11-22-c1.md`) | Production | frontend | Majeur | VÉRIFIÉ (relecteur-code, 2026-11-22) | BUG-386 | dev-frontend | — |
 | BUG-540 | Envoi direct de pains : destinataire SIEGE (nœud technique) ou boulangerie inactive accepté (201) via l'API | Production | backend | Mineur | OUVERT | testeur-production (Dev C) | dev-backend | `test_verif_direct_consommables_c.py` |
 | BUG-541 | `consumables/dispatch/` `node: true` et `transfers/send` `to_node` flottant résolus en pk (int()) | Production | backend | Mineur | OUVERT | testeur-production (Dev C) | dev-backend | `test_verif_direct_consommables_c.py` |
-| BUG-560 | Trésorerie : `?node=ZZZ` / entier géant sur `treasury/journal/`, `journal/monthly_report/`, `savings/`, `savings/monthly_total/` (siège) -> 500 ; `POST /api/treasury/reports/` deux fois le même jour -> `IntegrityError` 500 (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `core/tests/test_verif_c5_routes_noeuds_c.py::test_BUG_560_*` (`@expectedFailure`) |
-| BUG-561 | `POST /api/blockchain/snapshots/run_check/` avec un corps JSON liste `[]` -> 500 (voir fiche) | Blockchain | backend | Mineur | OUVERT | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_561_run_check_list_body` (`@expectedFailure`) |
+| BUG-560 | Trésorerie : `?node=ZZZ` / entier géant sur `treasury/journal/`, `journal/monthly_report/`, `savings/`, `savings/monthly_total/` (siège) -> 500 ; `POST /api/treasury/reports/` deux fois le même jour -> `IntegrityError` 500 (voir fiche) | Trésorerie | backend | Mineur | CORRIGÉ | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `core/tests/test_verif_c5_routes_noeuds_c.py::test_BUG_560_*` (`@expectedFailure`) |
+| BUG-561 | `POST /api/blockchain/snapshots/run_check/` avec un corps JSON liste `[]` -> 500 (voir fiche) | Blockchain | backend | Mineur | CORRIGÉ | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_561_run_check_list_body` (`@expectedFailure`) |
 | BUG-562 | `consumables/dispatch/` quantité `"1e400"` -> 500 (`quantize` lève `InvalidOperation`) (voir fiche) | Production | backend | Mineur | OUVERT | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_562_dispatch_huge_exponent` (`@expectedFailure`) |
-| BUG-563 | `GET /api/treasury/closures/versements/` (siège) liste le nœud technique SIEGE (et les nœuds inactifs) comme boulangerie « NON_VERSE » : lignes et compteurs faussés (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_563_versements_hq_sees_real_bakeries_only` (`@expectedFailure`) |
+| BUG-563 | `GET /api/treasury/closures/versements/` (siège) liste le nœud technique SIEGE (et les nœuds inactifs) comme boulangerie « NON_VERSE » : lignes et compteurs faussés (voir fiche) | Trésorerie | backend | Mineur | CORRIGÉ | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_563_versements_hq_sees_real_bakeries_only` (`@expectedFailure`) |
 | BUG-564 | `PATCH /api/core/nodes/<SIEGE>/` `{"code": "X"}` (ADMIN/DIRECTION) -> 200 puis `DELETE` -> 204 : la garde BUG-517 teste `code == 'SIEGE'` et se contourne en renommant (voir fiche) | Core | backend | Mineur | OUVERT | testeur-permissions (Dev C), 2026-11-22c5 | dev-backend | `test_BUG_564_siege_cannot_be_renamed_then_deleted` (`@expectedFailure`) |
+| BUG-810 | Trésorerie : `node: "abc"` dans le corps d'un POST siège (`closures/`, `expenses/`, `reports/generate/`) -> 500 (`Node.objects.get(pk='abc')` ne rattrape que `DoesNotExist`) (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_810_non_numeric_node_in_body_is_400_not_500` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-811 | Clôture : billetage non obligatoire (corps sans aucune coupure accepté, écart = -net) et billetage/écart d'une clôture non infirmée modifiable par le gérant sans trace (voir fiche) | Trésorerie | backend | Majeur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_811_all_denominations_omitted_is_not_accepted_silently`, `test_BUG_811_pending_closure_gap_cannot_be_silently_rewritten` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-812 | Rapport facturier : `perform_create` enregistre `team=user.team` sans contrôle : gérant sans équipe ou d'équipe hors A/B crée un rapport d'équipe `''`/`C` (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_812_report_team_must_be_A_or_B` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-813 | Dépenses locales : date non validée (future acceptée) et dépense créée/supprimée sur un jour de clôture CONFIRMÉE sans mise à jour (voir fiche) | Trésorerie | backend | Majeur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_813_expense_future_date_refused`, `test_BUG_813_expense_on_confirmed_closure_day_refused` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-814 | Épargne journalière : `savings_rate: 0` explicite remplacé par le taux de configuration (15,8 %) à cause de `or` (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_814_savings_rate_zero_is_honoured` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-815 | Épargne journalière : PATCH/PUT de `date` vers un jour déjà saisi -> 500 (`validators = []` retire le contrôle d'unicité) (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_815_savings_put_to_existing_date_is_400_not_500` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-816 | Bons de décaissement : `DisbursementVoucherViewSet` est un ModelViewSet : DELETE (204) casse la chaîne de hash (`source_bordereau` SET_NULL couvert par le hash), PATCH modifie billets/date sans recalcul (voir fiche) | Trésorerie / Blockchain | backend | Majeur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_816_voucher_edit_or_delete_must_not_break_ledger` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-817 | Journal de caisse : date non validée (future acceptée) et solde d'une saisie antidatée calculé depuis l'écriture la plus récente du mois (solde progressif faux) (voir fiche) | Trésorerie | backend | Majeur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_817_journal_future_date_refused`, `test_BUG_817_journal_backdated_entry_balance_follows_date_order` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-818 | Trésorerie : `date_from`/`date_to` illisibles -> 500 sur `cashbook/`, `cashbook/period_summary/`, `vouchers/final_report/` ; `journal/suggested_ca/?node=abc` -> 500 (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_818_date_period_params_are_400_not_500` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
+| BUG-819 | Clôture : deux dépenses de 999 999 999 999,99 FC le même jour -> clôture enregistrée puis 500 (`InvalidOperation` à la sérialisation), ligne ensuite invisible (voir fiche) | Trésorerie | backend | Mineur | OUVERT | testeur-tresorerie (Dev C), 2026-11-22c2 | dev-backend | `test_BUG_819_huge_expenses_do_not_make_closure_500_or_vanish` (`@expectedFailure`, `test_cycle1_tresorerie_c.py`) |
 | BUG-530 | Commissions : `periods/history/?node=ZZZ` et `?months=abc` (siège) -> HTTP 500 (voir fiche) | Commissions | backend | Mineur | VÉRIFIÉ (testeur-permissions, Dev C, 2026-11-22-c5 ; `core/tests/test_verif_c5_routes_noeuds_c.py`, rapport `docs/qa/rapports/testeur-permissions-2026-11-22-c.md`) | testeur-production (Dev C) | à B | — |
 | BUG-526 | Production : `GET sessions/?date_from=abc` (ou `date_to=2026-13-45`) et `movements/flour_history/?month=abc` / `?year=abc` / `?month=13&year=99999` -> HTTP 500, gérant ET siège (voir fiche) | Production | backend | Mineur | CORRIGÉ | testeur-production (Dev C) | — | — |
 | BUG-527 | Ventes : `GET sales/invoices/daily_summary/?date=abc` -> HTTP 500 (gérant et siège) (voir fiche) | Ventes | backend | Mineur | CORRIGÉ | testeur-production (Dev C) | à A | — |
@@ -359,6 +369,16 @@ Registre unique partagé par tous les agents (voir CLAUDE.md, section 7).
 | BUG-555 | Settings (`ConfigForm.tsx` l.60-70) affiche encore « Frais d'Imprimés (FC) » = `Config.print_fee` modifiable, mais depuis BUG-417 `generate` utilise `Node.card_fee_fc` : ce champ n'a plus AUCUN effet (preuve : `core/tests/test_verif_bug417_c.py::test_config_print_fee_sans_effet`, print_fee=7777 -> carte 1 000). Risque : l'utilisateur règle la carte au mauvais endroit. Piste : retirer/griser le champ ou y renvoyer vers la fiche boulangerie | Core/Commissions | frontend | Mineur | OUVERT | testeur-clients-commissions, Dev C, 2026-11-22 (vérification BUG-417) | dev-frontend | `core/tests/test_verif_bug417_c.py` |
 | BUG-522 | `PATCH`/`PUT /api/production/transfers/<id>/` sur un transfert PENDING par le gérant demandeur : `from_node` et `to_node` sont écrits par `BreadTransferSerializer` (aucun `read_only`, `perform_update` fait `serializer.save()`). Constaté : `to_node` K1 -> K3 (le demandeur se fait passer pour une autre boulangerie, la demande apparaît chez le fournisseur au nom de K3) et `from_node` K2 -> K3 (redirection du fournisseur) | Production/Permissions | backend | Bloquant | VÉRIFIÉ (testeur-permissions, Dev C, 2026-11-22-c3) | testeur-permissions (Dev C), 2026-11-22c | — | `core/tests/test_verif_isolation_a_c.py::TransferIsolation::test_patch_pending_transfer_cannot_rewire_{to,from}_node` (`@expectedFailure`) |
 | BUG-523 | `DELETE /api/core/nodes/<id>/` : `chat.Conversation.node` en `CASCADE` ; un nœud dont les seuls comptes sont désactivés et sans autre historique est supprimé en 204 et son fil de discussion (`Conversation` NODE + `Message` + `Participant`) disparaît silencieusement, contrairement au message du serveur « Conservez-la pour garder l'historique » | Chat/Core | backend | Mineur | VÉRIFIÉ (testeur-permissions, Dev C, 2026-11-22-c5 ; `core/tests/test_verif_c5_routes_noeuds_c.py`, rapport `docs/qa/rapports/testeur-permissions-2026-11-22-c.md`) | testeur-permissions (Dev C), 2026-11-22c2 (vérification BUG-516) | B (module chat) | piste : `PROTECT` + migration chat, ou garde explicite dans `NodeViewSet.destroy` |
+| BUG-800 | Finance : `_balance_sheet_for_year` ignore l'année : `cash_position` = dernier solde du livre TOUTES années, `receivables` = `current_debt` actuel. Le bilan N-1 (et tout exercice passé ou vide) affiche la caisse et les créances d'AUJOURD'HUI (voir fiche) | Finance | backend | Majeur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_13/14_BUG_800_*` (`@expectedFailure`) |
+| BUG-801 | Finance : une facture d'ajustement négatif (`adjustment_sign=-1`, lignes à quantité positive) est AJOUTÉE au chiffre d'affaires au lieu d'être soustraite : 5 000 - 2x500 donne 6 000 au lieu de 4 000 (voir fiche) | Finance | backend | Majeur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_negative_adjustment_reduces_revenue_BUG_801` (`@expectedFailure`) |
+| BUG-802 | Finance : une régularisation (RG) livrée est comptée dans le chiffre d'affaires alors qu'elle est exclue du cash et n'est pas une vente (BUG-178, CLAUDE.md 5.1) : CA +3 000 pour une RG de 10x300 (voir fiche) | Finance | backend | Majeur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_regularisation_is_not_revenue_BUG_802` (`@expectedFailure`) |
+| BUG-803 | Production/Finance : le CUMP (4 décimales) est figé dans `ConsumableMovement.unit_price` (2 décimales) ; SQLite (postes) ne tronque pas, PostgreSQL (cloud) arrondit : le coût matière diffère entre poste et cloud (voir fiche) | Finance | backend | Mineur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_exit_unit_price_column_keeps_the_cump_precision_BUG_803` (`@expectedFailure`) |
+| BUG-804 | Finance : créances du bilan = `Σ current_debt` des clients ACTIFS seulement ; les BP créditrices (clients épargne) viennent en déduction au lieu d'un passif (voir fiche et Q-040) | Finance | backend | Mineur | À CLARIFIER | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `ReceivablesRulesTests` (caractérisation) |
+| BUG-805 | Finance/Commissions : charge « commissions » = net à payer des seules commissions payées (après retenues) ; la retenue de dette ne réduit pas la créance ; le paiement n'écrit rien dans le livre (voir fiche et Q-041) | Finance | backend | Majeur | À CLARIFIER | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `CommissionAccountingTests` (caractérisation) |
+| BUG-806 | Finance : le compte de résultat renvoie des montants à 4 décimales non arrondis (coût farine 21 006,8965 ; résultat 793,1035) ; pas de `quantize` à l'affichage (CLAUDE.md 4) (voir fiche) | Finance | backend | Mineur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_18b_BUG_806_*` (`@expectedFailure`) |
+| BUG-807 | Finance : les 3 états sont rendus en nombres JSON (float, `12300.0`) et non en chaînes comme `summary` ; contrat « argent = Decimal » rompu à la frontière API (voir fiche) | Finance | backend | Mineur | OUVERT | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_18a_BUG_807_*` (`@expectedFailure`) |
+| BUG-808 | Finance : aucune balance (Σ débit = Σ crédit), ni passif, ni capitaux propres : actif = passif invérifiable ; structure très en deçà de `cadre_comptable.md` (voir fiche, Q-003 et `ECART_CADRE_COMPTABLE.md`) | Finance | backend | Majeur | À CLARIFIER | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_12_balance_sheet_current_year` (caractérisation) |
+| BUG-809 | Finance : le bilan ne lit que le livre direction ; les espèces d'une vente livrée non encore versées ne sont ni caisse ni créance (actif 0 pour 5 000 de CA) ; le livre reçoit le net THÉORIQUE, l'écart physique n'y figure pas (voir fiche et Q-042) | Finance | backend | Mineur | À CLARIFIER | auditeur-comptable (Dev C), 2026-11-22 cycle 1 | dev-backend | `test_cash_sale_not_yet_banked_*`, `test_09_*` (caractérisation) |
 
 ## Fiches détaillées
 
@@ -17067,15 +17087,17 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - Tests : `test_BUG_541_json_true_is_not_node_pk_1`, `test_BUG_541_float_to_node_is_not_truncated_to_pk` (`@expectedFailure`).
 
 ### BUG-560 — [Mineur] Trésorerie : `?node=` invalide sur journal / savings et doublon de rapport facturier -> 500
-- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5 (balayage `?node=` du lot 530-532).
+- Module : Trésorerie · backend · Statut : CORRIGÉ (dev-backend, 2026-11-22c4) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5 (balayage `?node=` du lot 530-532).
 - (a) Siège : `GET /api/treasury/journal/?node=ZZZ`, `journal/monthly_report/?node=ZZZ|<entier 30 chiffres>|9223372036854775808`, `savings/?node=ZZZ`, `savings/monthly_total/?node=...` -> 500. Attendu : 400 `{"detail"}` (helper `core.mixins.parse_node_param` ou `kiese.node_guard.resolve_node_param`).
 - (b) `POST /api/treasury/reports/` deux fois avec la même date : le validateur d'unicité (node, team, date) contrôle l'équipe du CORPS, mais `perform_create` enregistre `team=user.team` -> `IntegrityError` (500) au second envoi. Attendu : 400 « rapport déjà existant ».
 - Tests : `test_BUG_560_treasury_journal_savings_node_param`, `test_BUG_560_duplicate_report_is_not_500` (`@expectedFailure`).
+- Correction (dev-backend) : `treasury/views.py` : helper `_hq_node_filter_id` (resolve_node_param) sur journal/savings et leurs totaux mensuels ; `perform_create` des rapports contrôle (node, facturier, team réelle, date) -> 400. Test `treasury/tests/test_bug560_561_563.py`.
 
 ### BUG-561 — [Mineur] `blockchain/snapshots/run_check/` : corps JSON liste -> 500
-- Module : Blockchain · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5.
+- Module : Blockchain · backend · Statut : CORRIGÉ (dev-backend, 2026-11-22c4) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5.
 - Étapes : siège, `POST /api/blockchain/snapshots/run_check/` corps `[]`. Observé : 500 (`request.data.get` sur une liste). Attendu : 400 ou corps ignoré. Autres corps (`{"node": ZZZ|géant|[1]|{...}|true|1.5|null}`) : OK depuis BUG-529.
 - Test : `test_BUG_561_run_check_list_body` (`@expectedFailure`).
+- Correction (dev-backend) : `blockchain/views.py::run_check` : corps non objet -> 400. Test `treasury/tests/test_bug560_561_563.py`.
 
 ### BUG-562 — [Mineur] `consumables/dispatch/` : quantité `"1e400"` -> 500
 - Module : Production · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5.
@@ -17083,15 +17105,125 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - Test : `test_BUG_562_dispatch_huge_exponent` (`@expectedFailure`).
 
 ### BUG-563 — [Mineur] `treasury/closures/versements/` : le nœud technique SIEGE (et les nœuds inactifs) listés comme boulangerie
-- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5.
+- Module : Trésorerie · backend · Statut : CORRIGÉ (dev-backend, 2026-11-22c4) · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5.
 - Observé : pour le siège, `nodes = Node.objects.all()` (`treasury/versements.py`) : la ligne SIEGE apparaît en `NON_VERSE` et fausse `count` et `totals.counts` (jamais versé par construction). Attendu : `.exclude(code='SIEGE')` (et décision sur `is_active=False`), comme `NodeViewSet.list` et `consumables/global`. Aucune fuite : gérant limité à son nœud, `?node=<autre>` -> 403, compte sans boulangerie -> liste vide, facturier/livreur 403.
 - Test : `test_BUG_563_versements_hq_sees_real_bakeries_only` (`@expectedFailure`).
+- Correction (dev-backend) : `treasury/versements.py` : `Node.objects.exclude(code='SIEGE')` (nœuds inactifs réels conservés). Test `treasury/tests/test_bug560_561_563.py`.
 
 ### BUG-564 — [Mineur] Nœud SIEGE : garde de suppression (BUG-517) contournable par renommage du code
 - Module : Core · backend · Statut : OUVERT · Ouvert par : testeur-permissions (Dev C), 2026-11-22c5 (contre-vérification BUG-517).
 - Étapes : ADMIN, `PATCH /api/core/nodes/<pk SIEGE>/` `{"code": "TMPX"}` -> 200 ; `DELETE` du même nœud -> 204. Les modules BUG-386 / livre de caisse cherchent `code='SIEGE'` (`get_or_create`) : le nœud est recréé sans contrôle et les écritures déjà attribuées sont orphelines ou dupliquées. Attendu : `code` (et `is_active`) du nœud SIEGE non modifiables (400), ou garde de suppression sur l'identité technique.
 - Test : `test_BUG_564_siege_cannot_be_renamed_then_deleted` (`@expectedFailure`).
 
+### BUG-810 — [Mineur] `node` non numérique dans le corps d'un POST siège -> 500
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : DIRECTION, `POST /api/treasury/closures/` (ou `expenses/`, ou `reports/generate/`) avec `"node": "abc"`. Observé : 500 (`Node.objects.get(pk="abc")` lève `ValueError`, seul `DoesNotExist` est rattrapé dans `perform_create` / `generate`). `node: 999999` donne bien 400. Journal et épargne sont protégés par le `PrimaryKeyRelatedField` du serializer. Attendu : 400 « Boulangerie introuvable » (`kiese.node_guard.resolve_node_param`).
+- Test : `test_BUG_810_non_numeric_node_in_body_is_400_not_500` (`@expectedFailure`).
+
+### BUG-811 — [Majeur] Clôture : billetage facultatif et écart réécrivable avant confirmation
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2 · point (b) à confirmer auprès du client.
+- (a) `POST /api/treasury/closures/` avec `{"date": ...}` seulement (aucune coupure) -> 201, `physical_cash_total = 0`, écart = -net. CLAUDE.md 5.5 : ventilation des billets obligatoire. Attendu : 400 si aucune des 8 coupures n'est fournie.
+- (b) Le gérant `PATCH` le billetage d'une clôture NON infirmée et NON confirmée : 200, écart recalculé, aucune notification ni trace de l'écart initial. `perform_update` ne contrôle que `is_validated`, alors que sa docstring et remarque.md l.156 disent « seule une clôture infirmée peut être modifiée ». L'écart « journalisé et non modifiable » (5.5) peut donc être effacé avant que le comptable ne le voie.
+- Tests : `test_BUG_811_all_denominations_omitted_is_not_accepted_silently`, `test_BUG_811_pending_closure_gap_cannot_be_silently_rewritten` (`@expectedFailure`).
+
+### BUG-812 — [Mineur] Rapport facturier : équipe hors A/B acceptée
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : gérant dont `team` vaut `''` ou `C` (champ validé seulement en `full_clean`), `POST /api/treasury/reports/` `{"date": ...}` -> 201 avec `team: ""` / `"C"`. CLAUDE.md 5.2 : équipes A et B uniquement. Un `team` du corps est bien ignoré. Attendu : 400 « équipe A ou B requise ».
+- Test : `test_BUG_812_report_team_must_be_A_or_B` (`@expectedFailure`).
+
+### BUG-813 — [Majeur] Dépenses locales : date non contrôlée, jour confirmé modifiable
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- (a) `POST /api/treasury/expenses/` avec une date à +30 jours -> 201 (la clôture applique `validate_requested_date`, pas la dépense). (b) Dépense créée (et supprimable) sur un jour dont la clôture est CONFIRMÉE : 201, la clôture garde un `total_expenses` périmé ; au versement `promote_closure_to_cashbook` recalcule et change silencieusement net et écart déjà confirmés. Attendu : mêmes règles de date que la clôture ; refus (ou correction tracée BUG-083) sur un jour confirmé.
+- Tests : `test_BUG_813_expense_future_date_refused`, `test_BUG_813_expense_on_confirmed_closure_day_refused` (`@expectedFailure`).
+
+### BUG-814 — [Mineur] Épargne : taux 0 remplacé par le taux de configuration
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : `POST /api/treasury/savings/` `{"savings_rate": "0", "daily_revenue": "100000", ...}` -> 201, `savings_amount = 15800.00` (`validated_data.get('savings_rate') or Config...` : `Decimal('0')` est falsy). Attendu : 0,00 (tester `is None`).
+- Test : `test_BUG_814_savings_rate_zero_is_honoured` (`@expectedFailure`).
+
+### BUG-815 — [Mineur] Épargne : changement de date vers un jour existant -> 500
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : deux épargnes (jours J-1 et J) ; `PATCH` de la seconde avec `date = J-1` -> 500 (`IntegrityError` sur unique (node, date) ; `validators = []` retire le validateur DRF pour permettre l'upsert du POST). Attendu : 400 ou fusion explicite.
+- Test : `test_BUG_815_savings_put_to_existing_date_is_400_not_500` (`@expectedFailure`).
+
+### BUG-816 — [Majeur] Bons de décaissement modifiables / supprimables : chaîne rompue
+- Module : Trésorerie · blockchain · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : DIRECTION crée un bon (écriture de sortie au livre), puis `DELETE /api/treasury/vouchers/<id>/` -> 204 : `CashbookEntry.source_bordereau` passe à NULL (`SET_NULL`) alors que ce champ est couvert par le hash -> `integrity_check` `chain_valid: false` après une opération légitime côté API (même défaut que BUG-198 pour les clôtures). `PATCH` `{"bills_20000": 4, "date": "2026-01-01"}` -> 200 : billets et date changent, `physical_cash_total` reste 20 000 (non recalculé), bon et écriture divergent. Attendu : ajout seul (`http_method_names = ['get','post','head','options']`) ou `PROTECT` + refus 403.
+- Test : `test_BUG_816_voucher_edit_or_delete_must_not_break_ledger` (`@expectedFailure`).
+
+### BUG-817 — [Majeur] Journal de caisse : dates non validées et solde antidaté faux
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- (a) `POST /api/treasury/journal/` avec une date future -> 201 (aucun `validate_requested_date`). (b) Saisie du 10 mars (1000) puis du 5 mars (100) : la seconde reçoit `running_balance = 1100` (calcul depuis l'écriture la plus récente du mois, `order_by('-date', '-created_at')`), alors que le journal s'affiche trié par date : solde progressif faux, écritures postérieures jamais recalculées. Attendu : mêmes règles de date que la clôture ; solde calculé à la date de saisie avec recalcul des suivantes, ou saisie antidatée refusée.
+- Tests : `test_BUG_817_journal_future_date_refused`, `test_BUG_817_journal_backdated_entry_balance_follows_date_order` (`@expectedFailure`).
+
+### BUG-818 — [Mineur] Filtres de période illisibles -> 500 (livre de caisse, bons, journal)
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2 (complète BUG-560, qui ne couvre pas ces routes).
+- Observé : `GET cashbook/?date_from=garbage` (ou `date_to=2026-13-45`), `cashbook/period_summary/?date_from=2026-02-30`, `vouchers/final_report/?date_to=99999-01-01` -> 500 (chaîne brute passée à `filter(date__gte=...)`) ; `journal/suggested_ca/?node=abc&date=...` (siège) -> 500. Attendu : 400 via `kiese.node_guard.parse_date_param` / `resolve_node_param`.
+- Test : `test_BUG_818_date_period_params_are_400_not_500` (`@expectedFailure`).
+
+### BUG-819 — [Mineur] Clôture : somme des dépenses hors plage -> 500 et clôture fantôme
+- Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-tresorerie (Dev C), 2026-11-22c2.
+- Étapes : deux dépenses de `999999999999.99` le même jour (chacune acceptée), puis `POST closures/` : la clôture est enregistrée (`total_expenses` hors DecimalField(14,2)) puis `InvalidOperation` à la sérialisation -> 500 ; la ligne est ensuite masquée de la liste (filtre BUG-201) et un nouvel essai répond « clôture existante ». Sur PostgreSQL : `DataError`. Attendu : 400 avant écriture quand la somme dépasse `_MAX_MONEY`.
+- Test : `test_BUG_819_huge_expenses_do_not_make_closure_500_or_vanish` (`@expectedFailure`).
+
 ### Vérification BUG-508 (migrations) / 197 / 519 / 527 / 385 (Sales.tsx) (testeur-ventes, Dev C, 2026-11-22-c)
 - Rapport : `docs/qa/rapports/testeur-ventes-2026-11-22-c.md`. Tests : `backend/sales/tests/test_verif_ventes_c.py` (20 tests). `manage.py test sales` + sync 519 : 427 tests OK ; `npm run build` OK.
 - BUG-519 : VÉRIFIÉ (prix du nœud conservés après changement de tarif cloud, ancien payload inchangé, 18 valeurs invalides REJECTED, rejeu sans effet sur les prix). BUG-508 (migrations 0011/0012 : aller-retour, soldées, plus de 1000 lignes, idempotence), BUG-197, BUG-527 (8 dates invalides -> 400), BUG-385 partie Sales.tsx : confirmés (statuts déjà VÉRIFIÉ par d'autres agents, non modifiés). BUG-526/528/529 hors périmètre Ventes. BP, blocage crédit, remboursement non-vente, reçu : inchangés.
+
+### Cycle test 1 (partie C) — auditeur-comptable (Dev C, 2026-11-22)
+- Rapport : `docs/qa/rapports/auditeur-comptable-2026-11-22-c.md` (section « Cycle test 1 »). Tests : `backend/finance/tests/test_audit_c_cycle1_c.py` (34 tests : 27 verts, 7 `@expectedFailure`). Données fictives ; scénario chiffré à la main dans la docstring du fichier (2 boulangeries, 3 jours, N et N-1).
+
+### BUG-800 — [Majeur] Bilan : N-1 et exercices passés relisent la caisse et les créances actuelles
+- Module : Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé (`finance/views.py::_balance_sheet_for_year`) : `year` n'est jamais utilisé. `cash_position` = `running_balance` de la dernière écriture du livre (toutes années), `receivables` = `Σ current_debt` en temps réel. Avec 1 600 FC au livre fin N-1 et 23 600 FC fin N, `balance_sheet.previous_year.cash_position` renvoie 23 600 ; un exercice vide (N-2) affiche aussi la caisse actuelle. La variation de trésorerie ne peut donc pas se lire sur le bilan (le cash-flow, lui, est bien isolé : clôture N = clôture N-1 + flux net N).
+- Attendu : caisse = solde du livre à la dernière écriture de date <= 31/12 de l'année ; créances = BP à cette date (dernier `Invoice.debt_after` par client <= fin d'année).
+- Tests : `test_13_BUG_800_balance_sheet_previous_year_is_isolated`, `test_14_BUG_800_balance_sheet_empty_year_is_zero` (`@expectedFailure`).
+
+### BUG-801 — [Majeur] Chiffre d'affaires : l'ajustement négatif est additionné
+- Module : Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Étapes : facture livrée 10xGRAND (5 000) puis `POST /api/sales/invoices/<id>/adjust/` `adjustment_sign=-1`, 2 pains. Observé : `total_revenue` = 6 000. Attendu : 4 000. Cause : `_income_statement_for_year` somme `InvoiceLine.line_total` (positif, le signe est porté par l'en-tête, BUG-097) sans tenir compte de `invoice.adjustment_sign`. Défaut probablement identique sur DOC 1 (`invoice_total`), non testé ici.
+- Test : `test_negative_adjustment_reduces_revenue_BUG_801` (`@expectedFailure`).
+
+### BUG-802 — [Majeur] Chiffre d'affaires : une régularisation (RG) est comptée comme vente
+- Module : Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : facture RG livrée 10xMINI (3 000, aucun paiement) : `total_revenue` = 3 000. `regenerate_facturier_reports` l'exclut (BUG-178), la commission l'exclut (BUG-261), mais le compte de résultat ne filtre pas `special_code`. CA surévalué à chaque régularisation.
+- Attendu : exclure `invoice__special_code` RG (et NS) ; à confirmer avec le client pour la RG (voir BUG-178).
+- Test : `test_regularisation_is_not_revenue_BUG_802` (`@expectedFailure`).
+
+### BUG-803 — [Mineur] CUMP à 4 décimales figé dans une colonne à 2 décimales
+- Module : Production/Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : `ConsumableStock.average_unit_cost` = 4 décimales ; `ConsumableMovement.unit_price` (valeur de sortie) = `decimal_places=2`. SQLite (tests, postes desktop) conserve 1,4375 ; PostgreSQL (cloud, `numeric(14,2)`) arrondit à 1,44 (non démontrable ici, le test vérifie la précision du schéma). Sel 3 000 g à 1,40 + 1 000 g à 1,55, sortie 4 000 g : 5 750 FC sur le poste, 5 760 FC sur le cloud ; l'écart croît avec les quantités en grammes.
+- Attendu : `unit_price` à 4 décimales (migration) ou coût de sortie figé et arrondi à l'écriture, identique sur les deux moteurs.
+- Test : `test_exit_unit_price_column_keeps_the_cump_precision_BUG_803` (`@expectedFailure`).
+
+### BUG-804 — [Mineur] Créances du bilan : clients inactifs exclus, BP créditrices déduites — À CLARIFIER
+- Module : Finance · backend · Statut : À CLARIFIER (Q-040) · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : `Client.objects.filter(is_active=True)` : 7 000 FC dus par un client désactivé disparaissent de l'actif ; une BP de -4 000 (client épargne, dette de l'ETS) réduit les créances (6 000 au lieu de 10 000 d'actif et 4 000 de passif).
+- Tests de caractérisation : `ReceivablesRulesTests` (verts), à inverser selon la réponse.
+
+### BUG-805 — [Majeur] Charge « commissions » : net payé, retenue de dette non apurée — À CLARIFIER
+- Module : Finance/Commissions · backend · Statut : À CLARIFIER (Q-041) · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé (CM 1 250, retenue de dette 400, net 850) : (a) le résultat ne comptabilise que 850 (net) et seulement après `mark_paid` ; non payée : 0 ; sur le scénario du mois : 3 950 contre 6 325 de CM brute due ; (b) la retenue de 400 ne diminue pas `Client.current_debt` (reste 2 000) : créance et charge ne se compensent plus ; (c) `mark_paid` n'écrit rien au livre de caisse ni au cash-flow.
+- Attendu possible (engagement) : charge = CM brute ; retenue = apurement de créance ; décaissement du net au livre. À trancher par le client.
+- Tests de caractérisation : `CommissionAccountingTests` (verts).
+
+### BUG-806 — [Mineur] Compte de résultat : montants non arrondis
+- Module : Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : `cost_flour` = 21006.8965000000, `gross_profit` = 8043.1035, `net_result` = 793.1035 (CUMP 4 décimales x quantité 3 décimales, aucune `quantize`). CLAUDE.md 4 exige un arrondi explicite à l'écriture comptable ; les lignes arrondies à 2 décimales ne somment pas le total affiché.
+- Test : `test_18b_BUG_806_income_statement_amounts_are_rounded_to_the_franc_cent` (`@expectedFailure`).
+
+### BUG-807 — [Mineur] États financiers : montants en float JSON
+- Module : Finance · backend · Statut : OUVERT · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : `GET finance/years/<id>/income_statement|cashflow|balance_sheet|comparative/` renvoie `12300.0` (l'encodeur DRF convertit un `Decimal` brut en float) ; `summary` renvoie des chaînes. Risque de résidu binaire sur de gros totaux ou des CUMP à 4 décimales.
+- Attendu : chaînes arrondies, comme `summary` (impact frontend : parser).
+- Test : `test_18a_BUG_807_money_in_json_is_a_string_not_a_float` (`@expectedFailure`).
+
+### BUG-808 — [Majeur] Pas de balance ni de bilan équilibré — À CLARIFIER (contradiction avec `cadre_comptable.md`)
+- Module : Finance · backend · Statut : À CLARIFIER (Q-003, `ECART_CADRE_COMPTABLE.md` [A]) · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : le « bilan » = 2 agrégats d'actif (créances + caisse du livre direction). Aucun passif, capitaux propres ni écriture en partie double : « Σ débit = Σ crédit » et « actif = passif » sont invérifiables. Sur le scénario : actif 26 600 FC pour un résultat de 793 FC, rien ne permet de réconcilier (stocks, immobilisations, capital, dettes absents). Décision d'avenant en attente (Q-003).
+- Test : `test_12_balance_sheet_current_year` (clés exactes de la réponse).
+
+### BUG-809 — [Mineur] Bilan : caisse non versée absente ; livre = net théorique — À CLARIFIER
+- Module : Finance/Trésorerie · backend · Statut : À CLARIFIER (Q-042) · Ouvert par : auditeur-comptable (Dev C), 2026-11-22 cycle 1.
+- Observé : (a) une vente cash livrée (CA 5 000) sans clôture versée : caisse 0, créances 0, actif 0 ; (b) `promote_closure_to_cashbook` inscrit `net_cash` (théorique) : avec 1 250 compté pour 1 300 attendu, le livre porte 1 300 et l'écart de -50 n'existe que sur la clôture.
+- Tests de caractérisation : `test_cash_sale_not_yet_banked_is_in_revenue_but_in_no_asset_BUG_809`, `test_09_cashbook_holds_theoretical_cash_not_counted_cash` (verts).
