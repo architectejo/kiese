@@ -563,15 +563,17 @@ class DeficitReportLeak(IsoBase):
             period=p, client=self.c2, order_value=Dc('100'), commission_gross=Dc('10'), node_origin='P2')
         Client.objects.filter(pk=self.c2.pk).update(current_debt=Dc('90000'))
 
-    @expectedFailure  # BUG-521 (ouvert)
     def test_gerant_k1_does_not_see_k2_deficit_clients(self):
+        # BUG-521 corrige : facturier/livreur n'ont pas a lire les commissions (403, cf. BUG-253).
         for role in ('GERANT', 'FACTURIER', 'LIVREUR'):
             for q in ('', f'?node={self.k2.pk}'):
                 r = cl(self.u[role]).get('/api/clients/clients/deficit_report/' + q)
-                self.assertEqual(r.status_code, 200)
-                self.assertNotIn(self.c2.code, {x['client_code'] for x in r.data}, (role, q))
+                if role == 'GERANT':
+                    self.assertEqual(r.status_code, 200)
+                    self.assertNotIn(self.c2.code, {x['client_code'] for x in r.data}, (role, q))
+                else:
+                    self.assertEqual(r.status_code, 403, (role, q))
 
-    @expectedFailure  # BUG-521 (ouvert) : `?node=<code>` -> ValueError (500)
     def test_node_param_non_numeric_is_not_a_500(self):
         r = cl(self.u['GERANT']).get('/api/clients/clients/deficit_report/?node=P2')
         self.assertLess(r.status_code, 500)

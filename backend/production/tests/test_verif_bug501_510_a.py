@@ -3,6 +3,7 @@ Contre-attaque (testeur-production, Dev A, 2026-11-22-a) des tickets CORRIGÉ
 BUG-501, 502, 508, 509, 510 et points signalés par le dev (perte des soldées,
 alerte de surconsommation approximative). Données fictives uniquement.
 """
+from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 from unittest import expectedFailure
@@ -148,7 +149,11 @@ class Bug501CounterTests(TestCase):
         ConsumableStock.objects.filter(pk=stock.pk).update(quantity=D('10.000'), average_unit_cost=D('50.0000'))
         stock.refresh_from_db()
         out = _mv(stock, 'EXIT', '2', '50')
-        _mv(stock, 'ENTRY', '5', '100')
+        ent = _mv(stock, 'ENTRY', '5', '100')
+        # BUG-416 : horloge Windows grossiere -> created_at explicite et croissant
+        base = out.created_at
+        ConsumableMovement.objects.filter(pk=out.pk).update(created_at=base)
+        ConsumableMovement.objects.filter(pk=ent.pk).update(created_at=base + timedelta(seconds=1))
         stock.refresh_from_db()
         return out
 
