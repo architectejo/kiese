@@ -114,6 +114,23 @@ class SocialDistributionLineSerializer(serializers.ModelSerializer):
         fields = ['id', 'distribution', 'client', 'client_display', 'indice', 'total_social', 'remise', 'merite', 'total_payer', 'position', 'form']
         read_only_fields = ['id', 'remise', 'total_payer']
 
+    def validate_indice(self, value):
+        # BUG-740 : un indice = nombre de mois cotisés dans l'année (0 à 12).
+        if value < 0 or value > 12:
+            raise serializers.ValidationError("L'indice doit être compris entre 0 et 12 (mois cotisés).")
+        return value
+
+    def validate_merite(self, value):
+        # BUG-740 : le mérite est un bonus, jamais négatif.
+        if value < 0:
+            raise serializers.ValidationError("Le mérite ne peut pas être négatif.")
+        return value
+
+    def validate_total_social(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Le total des cotisations ne peut pas être négatif.")
+        return value
+
     def validate(self, attrs):
         # BUG-254 : `distribution` est désormais exposé ; 400 propre au lieu d'un 500.
         distribution = attrs.get('distribution') or (self.instance.distribution if self.instance else None)

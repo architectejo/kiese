@@ -1,4 +1,5 @@
-from decimal import Decimal
+import uuid
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.db.models import F, Q, Sum
@@ -190,6 +191,15 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             # Pre-compute gross to derive social deduction
             # BUG-289 : cotisation = valeur de la boulangerie, sauf personnalisation explicite.
             cotisation = client.effective_cotisation_sociale
+            # BUG-737 : un client facturé dans plusieurs boulangeries le même mois
+            # n'est prélevé (BP et cotisation) qu'UNE fois : la première paie
+            # générée retient ; les lignes suivantes du même mois reçoivent 0
+            # (modifiables à la main). La carte reste propre à chaque boulangerie.
+            deja_retenu = ClientCommission.objects.filter(
+                client_id=client_id, period__month=month, period__year=year,
+            ).exclude(period=period).exists()
+            debt_default = Decimal('0.00') if deja_retenu else Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
+            social_default = Decimal('0.00') if deja_retenu else cotisation
 
             commission, created = ClientCommission.objects.get_or_create(
                 period=period, client_id=client_id,
@@ -197,8 +207,8 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                     'total_breads': agg['total_breads'],
                     'order_value': agg['order_value'],
                     'commission_rate': client.commission_rate,
-                    'deduction_debt': Decimal(str(client.current_debt)),  # BUG-293 : BP créditrice conservée (négatif)
-                    'deduction_social': cotisation,
+                    'deduction_debt': debt_default,
+                    'deduction_social': social_default,
                     'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
                     'node_origin': node.code,
                 }
@@ -374,9 +384,16 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 commission.manuel_notes = ''
             else:
                 try:
-                    commission.manuel_adjustment = Decimal(str(adj))
-                except Exception:
-                    return Response({'detail': 'Valeur invalide pour manuel_adjustment.'}, status=status.HTTP_400_BAD_REQUEST)
+                    if isinstance(adj, (bool, list, dict)):
+                        raise InvalidOperation
+                    value = Decimal(str(adj))
+                    # BUG-745 : valeur finie, 12 chiffres entiers + 2 décimales max.
+                    if not value.is_finite() or abs(value) >= Decimal('10') ** 12:
+                        raise InvalidOperation
+                    commission.manuel_adjustment = value.quantize(Decimal('0.01'))
+                except (InvalidOperation, ValueError, TypeError):
+                    return Response({'detail': 'Valeur invalide pour manuel_adjustment (nombre fini, 12 chiffres maximum).'},
+                                    status=status.HTTP_400_BAD_REQUEST)
                 commission.manuel_notes = notes
             commission.compute(float(config.annual_bonus_rate))
             fields = [
@@ -404,5 +421,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         period_id = request.query_params.get('period')
         if not period_id:
             return Response({'detail': '`period` query param est requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            period_id = uuid.UUID(str(period_id))  # BUG-744 : 400 au lieu de 500
+        except (ValueError, AttributeError, TypeError):
+            return Response({'detail': 'Paramètre « period » invalide : identifiant (UUID) attendu.'},
+                            status=status.HTTP_400_BAD_REQUEST)
         qs = self.get_queryset().filter(period=period_id)
         return Response(ClientCommissionSerializer(qs, many=True).data)

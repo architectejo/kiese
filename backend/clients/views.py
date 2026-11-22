@@ -1,6 +1,10 @@
-from decimal import Decimal
+import unicodedata
+import uuid
+from decimal import Decimal, InvalidOperation
+from django.db import transaction
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
+from .search import AccentInsensitiveSearchFilter, fold_expr, fold_term
 from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
@@ -15,7 +19,7 @@ from core.permissions import IsGerant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
 from django.utils import timezone
 from .models import Client, SocialContribution, SocialDistribution, SocialDistributionLine, _generate_client_code
-from .imports import parse_client_excel, split_name
+from .imports import parse_client_excel, split_name, NAME_MAX_LENGTH
 from .serializers import (
     ClientSerializer, ClientCreateSerializer,
     SocialContributionSerializer, SocialDistributionSerializer, SocialDistributionLineSerializer,
@@ -24,7 +28,7 @@ from .serializers import (
 
 class ClientViewSet(viewsets.ModelViewSet):
     queryset = Client.objects.select_related('node').all()
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, AccentInsensitiveSearchFilter, filters.OrderingFilter]
     filterset_fields = ['node', 'category', 'is_active']
     search_fields    = ['code', 'first_name', 'last_name', 'phone']
     ordering_fields  = ['last_name', 'current_debt', 'total_breads_received', 'created_at']
@@ -88,15 +92,15 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _order_by_relevance(queryset, search):
-        term = search.strip().lower()
+        term = fold_term(search.strip())  # BUG-743 : casse + accents (SQLite)
         if not term:
             return queryset
         queryset = queryset.annotate(
-            _code_lower=Lower('code'),
-            _first_lower=Lower('first_name'),
-            _last_lower=Lower('last_name'),
-            _full_name_lower=Lower(Concat('last_name', Value(' '), 'first_name')),
-            _full_name_lower_rev=Lower(Concat('first_name', Value(' '), 'last_name')),
+            _code_lower=fold_expr('code'),
+            _first_lower=fold_expr('first_name'),
+            _last_lower=fold_expr('last_name'),
+            _full_name_lower=fold_expr(Concat('last_name', Value(' '), 'first_name')),
+            _full_name_lower_rev=fold_expr(Concat('first_name', Value(' '), 'last_name')),
         )
         queryset = queryset.annotate(
             _search_rank=Case(
@@ -408,12 +412,17 @@ class ClientViewSet(viewsets.ModelViewSet):
                 unknown_nodes.append(node_code)
                 continue
             existing = {
-                (f.strip().upper(), l.strip().upper())
+                (unicodedata.normalize('NFC', f).strip().upper(), unicodedata.normalize('NFC', l).strip().upper())
                 for f, l in Client.objects.filter(node=node).values_list('first_name', 'last_name')
             }
             new_count, dup_count = 0, 0
+            invalid = []
             for raw_name in names:
                 first, last = split_name(raw_name)
+                # BUG-746 : nom trop long = signalé (rapport `invalid`), jamais écrit.
+                if len(first) > NAME_MAX_LENGTH or len(last) > NAME_MAX_LENGTH:
+                    invalid.append(raw_name[:60])
+                    continue
                 key = (first.upper(), last.upper())
                 if key in existing:
                     dup_count += 1
@@ -428,6 +437,8 @@ class ClientViewSet(viewsets.ModelViewSet):
                 'total_in_file': len(names),
                 'to_import': new_count,
                 'already_existing': dup_count,
+                'invalid': len(invalid),
+                'invalid_names': invalid[:20],
             })
 
         created = 0
@@ -449,6 +460,19 @@ class ClientViewSet(viewsets.ModelViewSet):
             'unknown_nodes': unknown_nodes,
         })
 
+    @staticmethod
+    def _parse_ids(ids):
+        """BUG-741 : liste d'UUID valides (400 sinon)."""
+        if not isinstance(ids, (list, tuple)):
+            raise ValidationError({'detail': "Paramètre « ids » invalide : liste d'identifiants attendue."})
+        parsed = []
+        for raw in ids:
+            try:
+                parsed.append(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError, TypeError):
+                raise ValidationError({'detail': "Paramètre « ids » invalide : identifiant de client (UUID) attendu."})
+        return parsed
+
     @action(detail=False, methods=['post'])
     def bulk_move(self, request):
         """Move a set of clients to another bakery (Direction centrale uniquement).
@@ -457,21 +481,25 @@ class ClientViewSet(viewsets.ModelViewSet):
         node_id = request.data.get('node')
         if not ids or not node_id:
             raise ValidationError({'detail': 'ids et node sont requis.'})
+        ids = self._parse_ids(ids)  # BUG-741 : 400 au lieu de 500
+        node_id = parse_node_param(node_id)
         try:
             new_node = Node.objects.get(pk=node_id)
         except Node.DoesNotExist:
-            raise ValidationError({'node': 'Boulangerie introuvable.'})
+            raise ValidationError({'detail': 'Boulangerie introuvable.'})
 
-        clients = list(Client.objects.filter(id__in=ids))
         moved = 0
-        for client in clients:
-            if client.node_id == new_node.id:
-                continue
-            client.node = new_node
-            client.code = _generate_client_code(new_node.code)
-            client.node_origin = new_node.code
-            client.save(update_fields=['node', 'code', 'node_origin'])
-            moved += 1
+        # BUG-741 : lot atomique, jamais partiellement déplacé.
+        with transaction.atomic():
+            clients = list(Client.objects.filter(id__in=ids))
+            for client in clients:
+                if client.node_id == new_node.id:
+                    continue
+                client.node = new_node
+                client.code = _generate_client_code(new_node.code)
+                client.node_origin = new_node.code
+                client.save(update_fields=['node', 'code', 'node_origin'])
+                moved += 1
         log_activity(
             request.user, "Déplacement Clients",
             f"{moved} client(s) déplacé(s) vers {new_node.code} — {new_node.name}.",
@@ -486,6 +514,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         ids = request.data.get('ids') or []
         if not ids:
             raise ValidationError({'detail': 'ids requis.'})
+        ids = self._parse_ids(ids)  # BUG-741
 
         clients = list(Client.objects.filter(id__in=ids))
         deleted, blocked = 0, []
@@ -601,6 +630,34 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             node_id = user.node_id
         if not all([node_id, month, year]):
             raise ValidationError({'detail': 'node, month et year sont requis.'})
+        # BUG-739 : validation stricte, 400 en français (jamais 200 ni 500).
+        node_id = parse_node_param(node_id)
+        try:
+            if isinstance(month, (bool, list, dict, float)) or isinstance(year, (bool, list, dict, float)):
+                raise ValueError
+            month = int(str(month).strip())
+            year = int(str(year).strip())
+        except (TypeError, ValueError):
+            raise ValidationError({'detail': 'Paramètres « month » et « year » invalides : entiers attendus.'})
+        if not 1 <= month <= 12:
+            raise ValidationError({'detail': 'Paramètre « month » invalide : un mois entre 1 et 12 est attendu.'})
+        if not 2000 <= year <= 2100:
+            raise ValidationError({'detail': 'Paramètre « year » invalide : une année entre 2000 et 2100 est attendue.'})
+        manual_amount = request.data.get('amount')
+        if manual_amount in (None, ''):
+            manual_amount = None
+        else:
+            try:
+                if isinstance(manual_amount, (bool, list, dict)):
+                    raise InvalidOperation
+                manual_amount = Decimal(str(manual_amount))
+                if not manual_amount.is_finite() or manual_amount < 0 or manual_amount > Decimal('99999999.99'):
+                    raise InvalidOperation
+                manual_amount = manual_amount.quantize(Decimal('0.01'))
+            except (InvalidOperation, ValueError, TypeError):
+                raise ValidationError({'detail': 'Montant invalide : nombre positif de 99 999 999,99 FC maximum attendu.'})
+        if not Node.objects.filter(pk=node_id).exists():
+            raise ValidationError({'detail': 'Boulangerie introuvable.'})
         # BUG-256 : `cotisation_sociale` est un montant (DecimalField) -> `> 0`.
         clients = [c for c in Client.objects.filter(node_id=node_id, is_active=True).select_related('node')
                    if c.effective_cotisation_sociale > 0]  # BUG-289 : valeur effective
@@ -611,7 +668,7 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                 node_id=node_id,
                 month=month,
                 year=year,
-                defaults={'amount': request.data.get('amount') or client.effective_cotisation_sociale},
+                defaults={'amount': manual_amount if manual_amount else client.effective_cotisation_sociale},
             )
             if is_new:
                 created += 1
