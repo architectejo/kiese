@@ -447,15 +447,15 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Au niveau de "Production & Stocks" section "Fournée en cours" le champ "Augmenter les sacs (nouveau total)" doit incrémanter le nombre de sac de la valeur saisit dans ce champ, d'ou le champ doit s'appeler "Augmenter les sacs" et pas "(nouveau total)"
 
-[] Au niveau de "Production & Stocks" section "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)", on doit donner à un gérant la possibilité d'envoyer les pains à une autre boulangerie sans avoir réçu la demande de cette autre boulangarie
+[c] Au niveau de "Production & Stocks" section "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)", on doit donner à un gérant la possibilité d'envoyer les pains à une autre boulangerie sans avoir réçu la demande de cette autre boulangarie
 
 [] Au niveau de "Configuration" les valaure du formulaire "§2.3 — Algorithme des Commissions (CM)" sont propre à chaque boulangerie, le frais de carte est à prendre à compte dans les commussions des clients
 
-[] Dans "Commissions CM" on doit prendre en compte les valeurs de carte et cotisation social qui dependent de la boulangerie à deduire de la commussion de chaque client, le filtre doit aussi se faire sur le mois de l'année.
+[c] Dans "Commissions CM" on doit prendre en compte les valeurs de carte et cotisation social qui dependent de la boulangerie à deduire de la commussion de chaque client, le filtre doit aussi se faire sur le mois de l'année.
 
-[] Dans "Clôture & Caisse" la section "Versement" doit aussi être visible chez les membres de la direction centrale
+[c] Dans "Clôture & Caisse" la section "Versement" doit aussi être visible chez les membres de la direction centrale
 
-[] Dans "Clôture & Caisse" toutes les options de cloture doivent être placer dans "Clôture Journalière" et supprimer dans "Clôture & Caisse" d'ou la page doit simplement s'appeler "Caisse" puisqu'elle aurea que les options de la "Caisse"
+[c] Dans "Clôture & Caisse" toutes les options de cloture doivent être placer dans "Clôture Journalière" et supprimer dans "Clôture & Caisse" d'ou la page doit simplement s'appeler "Caisse" puisqu'elle aurea que les options de la "Caisse"
 
 [] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.
 
@@ -465,7 +465,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Dans "Commissions CM" section "Situation des Ristournes & Rémunérations" comme dans "Gestion Clientèle" liste des clients (par ordre alphabetique), lorsqu'on clique sur un client, une boite modal doit s'ouvrir avec l'historique des achats, depots (opérations) sur le mois courrant de l'année avec la possibilité révenir sur des mois passés — traité sous BUG-400 (développeur B, 2026-11-21) : cliquer sur le nom d'un client (Commissions CM et Gestion Clientèle) ouvre une fenêtre avec ses achats, dépôts et retraits du mois courant, totaux du mois et navigation vers les mois passés (réservé gérant et au-dessus). API et écran VÉRIFIÉS par test et relecture de code ; rendu visuel (navigateur, 360 px) à contrôler.
 
-[] Dit à dev-b que la "Cotisation sociale" et "Carte" (Frais d'Imprimé) sont en Fc et non en % et qu'ils doivent apparaitre dans le tableau "Situation Des Ristournes & Rémunérations" dans "Commissions CM" (l'utilisateur doit voir clairement les sommes qui seront deduit à ses client), pardefaut la cotisation est de 2000 Fc et 1000 Fc pour la Carte
+[c] Dit à dev-b que la "Cotisation sociale" et "Carte" (Frais d'Imprimé) sont en Fc et non en % et qu'ils doivent apparaitre dans le tableau "Situation Des Ristournes & Rémunérations" dans "Commissions CM" (l'utilisateur doit voir clairement les sommes qui seront deduit à ses client), pardefaut la cotisation est de 2000 Fc et 1000 Fc pour la Carte
 
 [] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
 
