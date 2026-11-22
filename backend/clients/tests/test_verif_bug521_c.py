@@ -5,7 +5,6 @@ contenu, pagination ; + boite noire de `bassins` (meme famille : `node` non vali
 Donnees fictives uniquement.
 """
 from decimal import Decimal as Dc
-from unittest import expectedFailure  # noqa: F401
 
 from clients.models import Client
 from commissions.models import ClientCommission, CommissionPeriod

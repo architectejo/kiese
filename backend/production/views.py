@@ -6,7 +6,7 @@ from django.db.models import Q, Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
-from kiese.node_guard import NoNodeGuardMixin
+from kiese.node_guard import NoNodeGuardMixin, month_year_error
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
@@ -24,6 +24,7 @@ from core.workday import (
 )
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyOpeningConfirmationLine, DailyTeamAssignment, _adjust_bread_stock
 from .services import compute_day_production, finalize_derived_production
+from .transfer_direct import DirectTransferMixin
 from .serializers import (
     ProductionSessionSerializer, BreadStockSerializer, ConsumableTypeSerializer, ConsumableStockSerializer,
     ConsumableMovementSerializer, ConsumableCountSerializer, BreadTransferSerializer, BreadDisposalSerializer,
@@ -679,6 +680,11 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         elif is_node_less_non_hq(user):
             qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         params = self.request.query_params
+        # BUG-526 : date illisible / impossible -> 400, jamais 500.
+        for key in ('date_from', 'date_to'):
+            raw = params.get(key)
+            if raw and _safe_parse_date(raw) is None:
+                raise ValidationError({'detail': _INVALID_DATE_DETAIL})
         if params.get('date_from'):
             qs = qs.filter(date__gte=params['date_from'])
         if params.get('date_to'):
@@ -1571,6 +1577,11 @@ class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vi
         month   = params.get('month')
         year    = params.get('year')
 
+        # BUG-526 : mois / année illisibles ou hors bornes -> 400, jamais 500.
+        err_my = month_year_error(month, year)
+        if err_my:
+            return Response({'detail': err_my}, status=status.HTTP_400_BAD_REQUEST)
+
         qs = ConsumableMovement.objects.filter(
             movement_type=ConsumableMovement.MovementType.ENTRY,
             stock__consumable_type='FLOUR',
@@ -1656,7 +1667,7 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         )
 
 
-class BreadTransferViewSet(NoNodeGuardMixin, viewsets.ModelViewSet):
+class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.ModelViewSet):
     queryset = BreadTransfer.objects.select_related(
         'from_node', 'to_node', 'bread_price', 'initiated_by', 'confirmed_by'
     ).all()

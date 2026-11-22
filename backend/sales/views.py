@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
 from core.mixins import is_node_less_non_hq
-from kiese.node_guard import NoNodeGuardMixin
+from kiese.node_guard import NoNodeGuardMixin, parse_date_param
 from core.models import Node, BreadPrice, Config
 from core.permissions import IsFacturier, IsLivreur, IsGerant, IsFacturierOrLivreur
 from core.utils import log_activity, create_notification, validate_requested_date as _validate_requested_date
@@ -1159,7 +1159,11 @@ class InvoiceViewSet(
         nominal payment_type, which used to hide any cash collected on a
         CREDIT invoice.
         """
-        target_date = request.query_params.get('date', str(_default_work_date(request.user)))
+        target_date = request.query_params.get('date') or str(_default_work_date(request.user))
+        # BUG-527 : date illisible / impossible -> 400, jamais 500.
+        _d, _err = parse_date_param(target_date, 'date')
+        if _err:
+            return Response({'detail': _err}, status=status.HTTP_400_BAD_REQUEST)
         # BUG-275 : date de référence d'une vente = date de LIVRAISON (jour
         # calendaire), comme bread_summary, le rapport facturier et la clôture.
         qs = self.get_queryset().filter(delivered_at__date=target_date, status=Invoice.Status.DELIVERED)

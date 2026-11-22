@@ -709,6 +709,14 @@ export interface BreadTransferLine {
   quantity_gap?: number;
 }
 
+/** BUG-382 : corps de `POST /api/production/transfers/send/` (envoi direct de pains). */
+export interface DirectSendPayload {
+  /** pk ou code de la boulangerie destinataire. */
+  to_node: string | number;
+  lines: Array<{ bread_price: number; quantity_sent: number }>;
+  notes?: string;
+}
+
 export interface BreadTransfer {
   id: string;
   from_node: string;
@@ -719,6 +727,9 @@ export interface BreadTransfer {
   total_sent?: number;
   quantity_received?: number;
   transfer_status: 'PENDING' | 'RESPONDED' | 'CONFIRMED' | 'DISPUTED' | 'CANCELLED';
+  /** BUG-380 : `REQUEST` = demande de la réceptrice (flux historique) ; `DIRECT` = envoi spontané de l'émettrice. */
+  flow?: 'REQUEST' | 'DIRECT';
+  flow_display?: string;
   transfer_date: string;
   quantity_gap?: number;
   notes?: string;
@@ -956,6 +967,43 @@ export interface CashClosure {
   notes: string;
   created_at: string;
   has_cashbook_entry: boolean;
+}
+
+/**
+ * BUG-381 / BUG-382 : « Versement » en lecture seule pour la direction
+ * (`GET /api/treasury/closures/versements/`, une ligne par boulangerie visible).
+ * Contrat : docs/qa/rapports/dev-backend-2026-11-22-a6.md. Montants = chaînes décimales.
+ */
+export type VersementStatus = 'NON_VERSE' | 'EN_ATTENTE' | 'VALIDE' | 'INFIRME';
+
+export interface VersementRow {
+  node: number | string;
+  node_code: string;
+  node_display: string;
+  date: string;
+  status: VersementStatus;
+  closure: CashClosure | null;
+  total_entries: string;
+  total_expenses: string;
+  net_cash: string;
+  physical_cash_total: string;
+  cash_gap: string;
+}
+
+export interface VersementsResponse {
+  date: string;
+  count: number;
+  results: VersementRow[];
+  totals: {
+    total_entries: string;
+    total_expenses: string;
+    net_cash: string;
+    physical_cash_total: string;
+    cash_gap: string;
+    bills: Record<string, number>;
+    counts: Record<VersementStatus, number>;
+    versed_count: number;
+  };
 }
 
 /** BUG-207 : ligne de `cashbook/period_summary/` (un élément par boulangerie ; montants = chaînes décimales). */
@@ -1595,6 +1643,9 @@ export const productionApi = {
       getPage<BreadTransfer>('/api/production/transfers/', params),
     create: (data: Partial<Omit<BreadTransfer, 'lines'>> & { lines?: Array<{ bread_price: number; quantity_sent: number }> }) =>
       apiClient.post<BreadTransfer>('/api/production/transfers/', data),
+    // BUG-382 : envoi direct (gérant et au-dessus) ; déstocke l'émettrice, la réceptrice valide ensuite.
+    send: (data: DirectSendPayload) =>
+      apiClient.post<BreadTransfer>('/api/production/transfers/send/', data),
     respond: (id: string, approved: boolean, lines?: Array<{ bread_price: number; quantity_sent: number }>) =>
       apiClient.post(`/api/production/transfers/${id}/respond_to_request/`, { approved, lines }),
     confirm: (id: string, lines: Array<{ bread_price: number; quantity_received: number }>) =>
@@ -1720,6 +1771,9 @@ export const treasuryApi = {
       apiClient.post<CashClosure>(`/api/treasury/closures/${id}/reject/`, { reason: reason || '' }),
     pushToCashbook: (id: string) =>
       apiClient.post(`/api/treasury/closures/${id}/push_to_cashbook/`),
+    /** BUG-381 : tableau « Versement » par boulangerie (lecture seule) ; `date` AAAA-MM-JJ, `node` pk ou code. */
+    versements: (params?: Record<string, string>) =>
+      apiClient.get<VersementsResponse>('/api/treasury/closures/versements/', { params }),
   },
   cashbook: {
     list: (params?: Record<string, string>) =>

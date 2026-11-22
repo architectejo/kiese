@@ -20,6 +20,7 @@ from core.models import Node, Config
 from core.permissions import IsGerant, IsHeadquarters
 from core.utils import log_activity, create_notification, validate_requested_date
 from core.workday import work_date_for
+from .versements import VersementsRecapMixin
 from .hashing import compute_cashbook_entry_hash, verify_cashbook_chain, check_cashbook_head, GENESIS_HASH
 from .models import (
     LocalExpense, FacturierReport, CashClosure, CashbookEntry, JournalEntry,
@@ -424,7 +425,7 @@ _MAX_MONEY = Decimal('999999999999.99')
 _CLOSURE_MONEY_DEFER = ('physical_cash_total', 'cash_gap', 'net_cash')
 
 
-class CashClosureViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = CashClosure.objects.select_related('node', 'gerant').prefetch_related('cashbook_entries').all()
     serializer_class = CashClosureSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]

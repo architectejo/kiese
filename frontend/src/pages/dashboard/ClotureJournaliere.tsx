@@ -7,6 +7,7 @@ import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
 import { ClotureClientsModal } from '@/components/production/ClotureClientsModal';
+import { ClotureOperations } from '@/components/treasury/ClotureOperations';
 import { isProduitEnAttente, PRODUIT_EN_ATTENTE_HELP } from '@/utils/clotureProduit';
 import { nonServiCumul, nonServiTotalFc, NON_SERVI_INCLUT_HELP } from '@/utils/clotureNonServi';
 import { exportClotureToExcel, printClotureReport } from '@/utils/clotureReportExport';
@@ -132,8 +133,8 @@ export const ClotureJournaliere: React.FC = () => {
           <div>
             <h1 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: '2px' }}>Clôture Journalière</h1>
             <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.72rem' }}>
-              Rapport consolidé par catégorie de pain — facture, reste, approvisionnement, ventes cash/soldée,
-              dispositions, transferts, régularisations et totaux (document réuni, CLAUDE.md §5.4)
+              Rapport consolidé par catégorie de pain, puis opérations de clôture du jour : rapports facturiers,
+              versement (billetage), dépenses locales, clôtures à confirmer (CLAUDE.md §5.4 et §5.5)
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -391,6 +392,10 @@ export const ClotureJournaliere: React.FC = () => {
           </div>
         </>
       )}
+
+      {/* Options de clôture (rapports facturiers, versement/billetage, dépenses locales, clôtures du jour),
+          déplacées depuis l'ancienne page « Clôture & Caisse » (désormais « Caisse »). */}
+      <ClotureOperations />
 
       {canSeeClientsList && (
         <ClotureClientsModal

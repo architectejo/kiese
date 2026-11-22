@@ -316,6 +316,7 @@ class BreadTransferSerializer(serializers.ModelSerializer):
     from_node_display       = serializers.StringRelatedField(source='from_node', read_only=True)
     to_node_display         = serializers.StringRelatedField(source='to_node', read_only=True)
     transfer_status_display = serializers.CharField(source='get_transfer_status_display', read_only=True)
+    flow_display            = serializers.CharField(source='get_flow_display', read_only=True)
     quantity_gap            = serializers.IntegerField(read_only=True)
     total_sent              = serializers.IntegerField(read_only=True)
     lines                   = BreadTransferLineSerializer(many=True, read_only=True)
@@ -325,12 +326,12 @@ class BreadTransferSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'from_node', 'from_node_display', 'to_node', 'to_node_display',
             'quantity_sent', 'quantity_received', 'quantity_gap', 'total_sent',
-            'transfer_status', 'transfer_status_display',
+            'transfer_status', 'transfer_status_display', 'flow', 'flow_display',
             'initiated_by', 'confirmed_by', 'notes', 'lines',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'transfer_status', 'confirmed_by', 'quantity_gap', 'total_sent',
+            'id', 'transfer_status', 'flow', 'flow_display', 'confirmed_by', 'quantity_gap', 'total_sent',
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         extra_kwargs = {
