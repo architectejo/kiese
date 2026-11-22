@@ -52,10 +52,11 @@ test.describe('FACTURIER K4', () => {
 
     await menuMobile(page);
     await expect(page.locator('a[href="/treasury"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/cloture-journaliere"]')).toHaveCount(0);
     await expect(page.locator('a[href="/commissions"]')).toHaveCount(0);
     await expect(page.locator('a[href="/sales/create"]')).toHaveCount(1);
     await page.screenshot({ path: `${CAP}/cf-${info.project.name}-facturier-menu.png` });
-    for (const r of ['/treasury', '/commissions']) {
+    for (const r of ['/treasury', '/cloture-journaliere', '/commissions']) {
       await page.goto(r, { waitUntil: 'domcontentloaded' });
       await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 30_000 });
       expect(await overflow(page)).toBeLessThanOrEqual(1);
@@ -131,9 +132,10 @@ test.describe('LIVREUR K4', () => {
     await later(page);
     await menuMobile(page);
     await expect(page.locator('a[href="/treasury"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/cloture-journaliere"]')).toHaveCount(0);
     await expect(page.locator('a[href="/commissions"]')).toHaveCount(0);
     await page.screenshot({ path: `${CAP}/cf-${info.project.name}-livreur-menu.png` });
-    for (const r of ['/treasury', '/commissions']) {
+    for (const r of ['/treasury', '/cloture-journaliere', '/commissions']) {
       await page.goto(r, { waitUntil: 'domcontentloaded' });
       await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 30_000 });
     }

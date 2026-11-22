@@ -38,8 +38,8 @@ async function creerVenteCash(request: APIRequestContext, facturier: string, cod
   expect(d.ok(), await d.text()).toBeTruthy();
 }
 
-async function allerTreso(page: Page) {
-  await page.goto('/treasury', { waitUntil: 'domcontentloaded' });
+async function allerTreso(page: Page, route = '/cloture-journaliere') {
+  await page.goto(route, { waitUntil: 'domcontentloaded' });
   await later(page);
 }
 
@@ -178,7 +178,7 @@ test('Livre de caisse : solde progressif et verification d\'integrite verte (dir
   const C = cfg(info);
   test.setTimeout(240_000);
   await login(page, 'zz_direction');
-  await allerTreso(page);
+  await allerTreso(page, '/treasury');
   await filtrerK4(page, C.node);
   await expect(page.getByText(new RegExp(`Versement Journalier ${C.node}`)).first()).toBeVisible({ timeout: 60_000 });
   const dialogues: string[] = [];

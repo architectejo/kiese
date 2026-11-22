@@ -18,7 +18,7 @@ test('BUG-298 : apres cloture, ecart +500 (Excedent) et un seul solde comptable'
   expect(gap).toBe(500); expect(net).toBe(13000);
 
   await login(page, 'zz_clients_gerant');
-  await page.goto('/treasury', { waitUntil: 'domcontentloaded' });
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded' });
   await later(page);
   await expect(page.getByText(/Écart: \+?500 FC/).first()).toBeVisible({ timeout: 60_000 });
   await page.waitForTimeout(3_000);
@@ -26,7 +26,9 @@ test('BUG-298 : apres cloture, ecart +500 (Excedent) et un seul solde comptable'
   await page.screenshot({ path: `${CAP}/vf-${info.project.name}-bug298.png`, fullPage: true });
   expect(corps).not.toMatch(/-13 000 FC/);
   expect(corps).not.toMatch(/\(Manque\)/);
-  expect(corps).not.toMatch(/15 000 FC\s*\n?\s*(SOLDE|ÉCART)/);
+  // Page « Clôture Journalière » : « TOTAL CRÉDIT DU JOUR » s'intercale entre le cash et le solde ; on
+  // vérifie donc que le solde comptable n'est pas lu directement après le total cash brut.
+  expect(corps).not.toMatch(/TOTAL CASH DU JOUR\s*\n?\s*15 000 FC\s*\n?\s*(SOLDE|ÉCART)/);
   // carte ECART BILLETAGE : +500 FC ; SOLDE COMPTABLE CAISSE : 13 000 FC
   const carteEcart = page.getByText(/^ÉCART BILLETAGE/).first().locator('xpath=..');
   await expect(carteEcart).toContainText(/\+500 FC/);

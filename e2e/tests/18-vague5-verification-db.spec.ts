@@ -44,7 +44,7 @@ test('BUG-282 : vitrine sans debordement a 320/360/768/1440', async ({ page, req
   }
 });
 
-test('BUG-242 : /treasury refuse au facturier et au livreur, ouvert au gerant', async ({ page }) => {
+test('BUG-242 : /treasury (Caisse) et /cloture-journaliere refuses au facturier et au livreur, ouverts au gerant', async ({ page }) => {
   test.setTimeout(600_000);
   for (const u of ['zz_treso_facturier_a', 'zz_treso_livreur']) {
     await page.context().clearCookies();
@@ -54,17 +54,25 @@ test('BUG-242 : /treasury refuse au facturier et au livreur, ouvert au gerant', 
     page.on('request', r => { if (r.url().includes('/api/treasury/')) appels.push(r.url()); });
     await seConnecter(page, u);
     await reporterModale(page);
-    await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
-    await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 60_000 });
-    expect(appels, `appels /api/treasury/ pour ${u}`).toHaveLength(0);
-    expect(await ecart(page)).toBeLessThanOrEqual(1);
+    for (const route of ['/treasury', '/cloture-journaliere']) {
+      await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 240_000 });
+      await expect(page.getByText('Accès refusé')).toBeVisible({ timeout: 60_000 });
+      expect(appels, `appels /api/treasury/ pour ${u} sur ${route}`).toHaveLength(0);
+      expect(await ecart(page)).toBeLessThanOrEqual(1);
+    }
     page.removeAllListeners('request');
   }
   await page.goto('/login');
   await page.evaluate(() => localStorage.clear());
   await seConnecter(page, 'zz_clients_gerant');
   await reporterModale(page);
+  // « Caisse » : accessible au gerant, sans les options de clôture.
   await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
+  await expect(page.getByText('Accès refusé')).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: 'Caisse', exact: true })).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByText(/Saisir le nombre de coupures/)).toHaveCount(0);
+  // « Clôture Journalière » : billetage visible pour le gerant.
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await expect(page.getByText('Accès refusé')).toHaveCount(0);
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 90_000 });
   expect(await ecart(page)).toBeLessThanOrEqual(1);
@@ -77,7 +85,7 @@ test('BUG-276 : billetage hors borne -> message francais, aucune requete POST', 
   const GER = ['zz_demo_gerant_k2', 'zz_demo_gerant_b1', 'zz_clients_gerant', 'zz_clients_gerant'];
   await seConnecter(page, GER[Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name))]);
   await reporterModale(page);
-  await page.goto('/treasury', { waitUntil: 'domcontentloaded', timeout: 240_000 });
+  await page.goto('/cloture-journaliere', { waitUntil: 'domcontentloaded', timeout: 240_000 });
   await expect(page.getByText(/Saisir le nombre de coupures/)).toBeVisible({ timeout: 90_000 });
   // la modale « Stock de depart » peut arriver tardivement : la reporter tant qu'elle est la
   const plusTard = page.getByRole('button', { name: /plus tard/i });
