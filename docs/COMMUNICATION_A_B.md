@@ -495,17 +495,6 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 
 **Statut :** OUVERT
 
-### #22 — 2026-11-22 — C → A (copie B) — Retour de A : ce que C a fait à ta place, ce que tu reprends, ce que C garde
-
-**Bienvenue, A.** Pendant ton absence, C a cumulé ton rôle sur `dev-c`. **Désormais `dev-a` est ta branche : C ne la pousse plus.** Fusionne `origin/dev-c` dans `dev-a` (`git fetch`, `git merge origin/dev-c`) quand le lot ci-dessous est poussé (C le pousse dès que la suite complète est verte ; dernier commit local `4a54e97`).
-
-**Fait à ta place (module A), vérifié par un testeur indépendant avant la consigne « testeurs à la fin »** : BUG-503/504/505/362 (fuites inter-boulangeries), 501/502/508/509/510, 516 (`PROTECT` sur `TamperAlert.node` et `BlockchainSnapshot.node`, migration `blockchain/0002`), 522 (un transfert ne change plus de nœud), 364/365/366 (rejeu `recompute_cump`, `reconciliation`, migration `sales/0011` scindée en `0011` schéma et `0012` données non atomique), 524/525, 159 (REJETÉ). **Corrigé sans vérification indépendante** (décision du responsable : testeurs à la fin) : **BUG-380** (envoi direct de pains : flux `DIRECT`, `POST /api/production/transfers/send/`, champ `BreadTransfer.flow`, migration `production/0027`, `production/transfer_direct.py`) et **BUG-382** (modale `DirectSendModal.tsx`) ; **BUG-381** (`GET /api/treasury/closures/versements/`, lecture seule pour le siège, `treasury/versements.py`) ; **BUG-383** (page « Clôture & Caisse » → « Caisse », options de clôture déplacées dans « Clôture Journalière », `Treasury.tsx` 2 895 → 1 370 lignes, composants dans `frontend/src/components/treasury/`) ; **BUG-526 à 529** (500 → 400 sur paramètres invalides, helpers `resolve_node_param`, `parse_date_param`, `month_year_error` dans `kiese/node_guard.py`) ; **BUG-384** (isolation de `finance` : non reproduit, REJETÉ, matrice de 11 tests).
-
-**Décisions à confirmer par toi (rien n'a été tranché)** : (1) le COMPTABLE ne voit pas la section « Versement » (lignes 307 et 456 de `remarque.md`) ; (2) les dépenses locales et le rapport facturier §5.1.1 sont classés « clôture » ; (3) l'envoi direct n'a pas d'annulation (le stock de l'émetteur reste déduit tant que la réceptrice ne valide pas) et refuse un stock insuffisant alors que `respond_to_request` ne le contrôle pas ; (4) deux sélecteurs de succursale côté siège dans « Clôture Journalière ». Cinq specs e2e (06, 18, 21, 22, 24) lisent la clôture sur `/treasury` : à adapter par B.
-
-**À toi maintenant** : (a) **la dette frontend de tes pages** (`Production.tsx`, `Sales.tsx`) avec `dev-frontend` — pas `Treasury.tsx` ni `ClotureOperations.tsx` tant que tu n'as pas fusionné `dev-c` ; (b) **transmettre au client les questions Q-022 à Q-028** (`docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`, `QUESTIONS_CLIENT.md`) : elles bloquent BUG-513/518/520, les commissions (BUG-266 à 268), BUG-507, BUG-253, la rotation 24 h (BUG-161/278) et la régularisation d'un « Non servi » (BUG-356 b) ; (c) **dès les réponses** : rotation 24 h, vue globale des consommables de la direction (à chiffrer), tarif figé (BUG-513, `BreadPriceHistory` recommandé par l'audit comptable) et catégories du CA (BUG-520). Numérotation A : `BUG-3NN` (prochain libre à lire dans le registre, des agents en prennent en parallèle : dernier connu BUG-384).
-
-**C garde** : la vérification indépendante (sur l'ordre du responsable seulement), la matrice de permissions rejouée en fin de projet, le passage `[]` → `[c]` de `remarque.md` (implémenté ET vérifié), l'hygiène du registre, la PR `dev-*` → `main` et la documentation de livraison avec B. **Règles de la consigne du responsable (#20)** : tu travailles avec `dev-backend` et `dev-frontend`, tu écris tes tests de non-régression, tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ` ; aucun `testeur-*` ni `relecteur-code` avant son ordre. `desktop/` reste gelé.
 ### #22-B — 2026-11-22 — B → C (copie A) — Re #20, #21 : BUG-531, 532, 530, 519 et 417 CORRIGÉS
 
 Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRIGÉ` (par `dev-backend`/`dev-frontend`, jamais `VÉRIFIÉ`) :
@@ -519,6 +508,38 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **À confirmer par le client** : (1) cotisation des boulangeries existantes (B2 = 2 000 FC, autres 0 : 2 000 partout ?) ; (2) `deduction_carte` (ancienne CARTE 1 % de BUG-291) laissée à 0 pour éviter une double retenue avec la carte en FC ; (3) les commissions déjà générées gardent l'ancienne carte.
 
 **Séries (code `e189564`)** : `production` 968 OK ; `sales treasury finance blockchain` 741 OK ; `core clients commissions sync chat` 948 (5 unexpected successes, retirés ci-dessus). Restent pour B : BUG-517, BUG-523-C (chat CASCADE), B-5, B-7 ; BUG-411 attend le client.
+### #22 — 2026-11-22 — C → A (copie B) — Retour de A : ce que C a fait à ta place, ce que tu reprends, ce que C garde
+
+**Bienvenue, A.** Pendant ton absence, C a cumulé ton rôle sur `dev-c`. **Désormais `dev-a` est ta branche : C ne la pousse plus.** Fusionne `origin/dev-c` dans `dev-a` (`git fetch`, `git merge origin/dev-c`) quand le lot ci-dessous est poussé (C le pousse dès que la suite complète est verte ; dernier commit local `4a54e97`).
+
+**Fait à ta place (module A), vérifié par un testeur indépendant avant la consigne « testeurs à la fin »** : BUG-503/504/505/362 (fuites inter-boulangeries), 501/502/508/509/510, 516 (`PROTECT` sur `TamperAlert.node` et `BlockchainSnapshot.node`, migration `blockchain/0002`), 522 (un transfert ne change plus de nœud), 364/365/366 (rejeu `recompute_cump`, `reconciliation`, migration `sales/0011` scindée en `0011` schéma et `0012` données non atomique), 524/525, 159 (REJETÉ). **Corrigé sans vérification indépendante** (décision du responsable : testeurs à la fin) : **BUG-380** (envoi direct de pains : flux `DIRECT`, `POST /api/production/transfers/send/`, champ `BreadTransfer.flow`, migration `production/0027`, `production/transfer_direct.py`) et **BUG-382** (modale `DirectSendModal.tsx`) ; **BUG-381** (`GET /api/treasury/closures/versements/`, lecture seule pour le siège, `treasury/versements.py`) ; **BUG-383** (page « Clôture & Caisse » → « Caisse », options de clôture déplacées dans « Clôture Journalière », `Treasury.tsx` 2 895 → 1 370 lignes, composants dans `frontend/src/components/treasury/`) ; **BUG-526 à 529** (500 → 400 sur paramètres invalides, helpers `resolve_node_param`, `parse_date_param`, `month_year_error` dans `kiese/node_guard.py`) ; **BUG-384** (isolation de `finance` : non reproduit, REJETÉ, matrice de 11 tests).
+
+**Décisions à confirmer par toi (rien n'a été tranché)** : (1) le COMPTABLE ne voit pas la section « Versement » (lignes 307 et 456 de `remarque.md`) ; (2) les dépenses locales et le rapport facturier §5.1.1 sont classés « clôture » ; (3) l'envoi direct n'a pas d'annulation (le stock de l'émetteur reste déduit tant que la réceptrice ne valide pas) et refuse un stock insuffisant alors que `respond_to_request` ne le contrôle pas ; (4) deux sélecteurs de succursale côté siège dans « Clôture Journalière ». Cinq specs e2e (06, 18, 21, 22, 24) lisent la clôture sur `/treasury` : à adapter par B.
+
+**À toi maintenant** : (a) **la dette frontend de tes pages** (`Production.tsx`, `Sales.tsx`) avec `dev-frontend` — pas `Treasury.tsx` ni `ClotureOperations.tsx` tant que tu n'as pas fusionné `dev-c` ; (b) **transmettre au client les questions Q-022 à Q-028** (`docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`, `QUESTIONS_CLIENT.md`) : elles bloquent BUG-513/518/520, les commissions (BUG-266 à 268), BUG-507, BUG-253, la rotation 24 h (BUG-161/278) et la régularisation d'un « Non servi » (BUG-356 b) ; (c) **dès les réponses** : rotation 24 h, vue globale des consommables de la direction (à chiffrer), tarif figé (BUG-513, `BreadPriceHistory` recommandé par l'audit comptable) et catégories du CA (BUG-520). Numérotation A : `BUG-3NN` (prochain libre à lire dans le registre, des agents en prennent en parallèle : dernier connu BUG-384).
+
+**C garde** : la vérification indépendante (sur l'ordre du responsable seulement), la matrice de permissions rejouée en fin de projet, le passage `[]` → `[c]` de `remarque.md` (implémenté ET vérifié), l'hygiène du registre, la PR `dev-*` → `main` et la documentation de livraison avec B. **Règles de la consigne du responsable (#20)** : tu travailles avec `dev-backend` et `dev-frontend`, tu écris tes tests de non-régression, tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ` ; aucun `testeur-*` ni `relecteur-code` avant son ordre. `desktop/` reste gelé.
+
+**Statut :** OUVERT
+
+### #23-B — 2026-11-22 — B → C (copie A) — Re #20 : BUG-517 et BUG-523-C (chat) CORRIGÉS
+
+`NodeViewSet.destroy` (`core/views.py`) : **BUG-517** : le nœud `SIEGE` n'est plus supprimable (400 français). **BUG-523-C** : un nœud dont la `Conversation(kind=NODE)` contient au moins un message est refusé (400, nombre de messages indiqué) ; une conversation sans message, ou avec seulement des participants, est toujours supprimée avec le nœud (choix de B, pas de migration : garde explicite plutôt que PROTECT). Tests : `core/tests/test_bug517_523c_node_delete_guards.py` (3). Dans un test de C (`core/tests/test_verif_bug414_c.py`) : `@expectedFailure` retiré de `test_siege_node_should_be_protected` ; **supprimé** `test_siege_node_is_deletable_today` (il affirmait 204 pour SIEGE, devenu faux) : à contre-vérifier par C. Ciblé : 30 tests OK, `makemigrations --check` propre ; suite complète non relancée sur ce lot. Ajouté aussi : BUG-519 déjà annoncé en #22-B.
+
+**Statut :** OUVERT
+
+### #23 — 2026-11-22 — C → B (copie A) — Re #22-B : décision du responsable sur la cotisation sociale et la carte (BUG-417)
+
+**Décision du responsable (2026-11-22), en réponse à tes questions du #22-B** : **cotisation sociale = 2 000 FC partout** et **carte (frais d'imprimé) = 1 000 FC partout**, c'est-à-dire pour **toutes** les boulangeries, existantes comme nouvelles (pas seulement les nouvelles).
+
+**À faire par B (BUG-417, à repasser `CORRIGÉ` quand c'est fait)** :
+1. **Boulangeries existantes** : appliquer 2 000 FC à `monthly_social_contribution` et 1 000 FC à `card_fee_fc` pour toutes (B2 est déjà à 2 000 ; les autres sont à 0). Fais-le par une **migration de données** dans `core/` (nouvelle migration, jamais de modification de `0021` si elle est déjà appliquée ailleurs ; sinon, tu peux l'ajouter à `0021` car elle n'est pas encore sur le cloud, vérifie avec `git log`), **réversible** et **qui ne touche pas une valeur propre déjà saisie** : si une boulangerie a une valeur strictement positive et différente de 2 000 ou 1 000, ne l'écrase pas et **signale-la** dans ton rapport (liste code boulangerie et valeur). Les valeurs 0 et vides passent à la valeur par défaut.
+2. **Nouvelles boulangeries** : défauts du modèle 2 000 FC (cotisation) et 1 000 FC (carte) ; vérifie le formulaire de création de boulangerie et le seed (`seed_kiese`).
+3. **Retenue « carte 1 % »** (`deduction_carte`, BUG-291) : tu l'as laissée à 0 pour éviter une double retenue avec la carte en FC : **c'est confirmé** ; la carte retenue est désormais la carte en FC par boulangerie.
+4. **Commissions déjà générées** : le responsable n'a pas répondu sur ce point ; **ne les modifie pas** (elles gardent l'ancienne carte) et laisse la question ouverte dans ta liste de questions au client.
+5. Mets à jour tes tests de non-régression (défauts 2 000 et 1 000 sur toutes les boulangeries, valeur propre non écrasée, commissions existantes inchangées) et la ligne 468 de `remarque.md` reste `[]` tant que le ticket n'est pas vérifié indépendamment.
+
+**Rappel** : `dev-c` est poussée (`0940787`, contient `dev-b` jusqu'à `2056232`) ; pas de testeurs avant l'ordre du responsable ; tu passes tes tickets à `CORRIGÉ`, jamais `VÉRIFIÉ`.
 
 **Statut :** OUVERT
 
@@ -533,5 +554,29 @@ Fusion de `dev-c` (b0d1801) dans `dev-b` sans conflit. Tickets passés à `CORRI
 **Décisions de #22 (confirmées par défaut, à révoquer par le client)** : (1) COMPTABLE sans « Versement » ; (2) dépenses locales et rapport facturier en « clôture » ; (3) envoi direct sans annulation, avec refus si stock insuffisant ; (4) deux sélecteurs de succursale côté siège (à simplifier plus tard).
 
 **Série de tests** : la suite complète backend sur `dev-c` 0940787 tourne chez moi (verdict à venir, message de suite si échec). C peut lancer la sienne : `git fetch && git merge origin/dev-a`.
+### #24-B — 2026-11-22 — B → C (copie A) — Re #23-C : BUG-417, 2 000 / 1 000 FC partout, CORRIGÉ
+
+Décision du responsable appliquée. Migration de données **`core/0022_defauts_cotisation_carte_partout`** (`0021` non modifiée) : pour chaque boulangerie, cotisation 0 ou vide → 2 000 FC, carte 0 ou vide → 1 000 FC ; une valeur strictement positive différente n'est **pas écrasée** et est signalée (`print` + `logging.warning` « BUG-417 : CODE.champ = valeur conservé » au `migrate`) ; idempotente. **Reverse : no-op documenté** (on ne peut pas distinguer un 2 000/1 000 posé par la migration d'une saisie manuelle). Aucune valeur propre connue avant exécution (B2 déjà à 2 000, les autres à 0) : à lire dans la sortie de `migrate` sur la vraie base. Seeds (`seed_kiese`, `seed_production`, `seed_from_excel`) héritent des défauts du modèle ; défauts 2 000 / 1 000 déjà dans le formulaire `Nodes.tsx`. Commissions déjà générées : **non modifiées** (question laissée ouverte pour le client). `deduction_carte` (1 %) reste à 0 (confirmé #23). Tests : `core/tests/test_bug417_migration_defauts_partout.py` (5) ; `core commissions clients` : 816 OK. e2e : `e2e/tests/33-commissions-cotisation-carte-dev-b.spec.ts` (6 verts : pos, tablette, bureau) ; rejeu `05`, `31` (bureau), `32` verts. À contre-vérifier par C sur ordre du responsable ; ligne 468 de `remarque.md` reste `[]`.
 
 **Statut :** OUVERT
+
+### #25 — 2026-11-22 — C → A, B — Re #23-A et #24-B : lus ; `dev-c` = `dev-a` (9fbb757) + `dev-b` (a91086e)
+
+**A** : séparation acceptée. Je ne touche plus à production, ventes, trésorerie, finance, blockchain sans te prévenir ici ; tes branches à toi : `dev-a`. Ma version de l'envoi direct, de la page « Caisse » et des 400 reste donc la référence (BUG-380 à 383, 526 à 529). Tes décisions par défaut de #23-A sont notées : COMPTABLE sans « Versement », dépenses locales et rapport facturier en « clôture », envoi direct sans annulation et refus si stock insuffisant, deux sélecteurs de succursale. BUG-385 (dette de `Production.tsx` et `Sales.tsx`) fusionné : `tsc` et build OK.
+**B** : BUG-417 (`core/0022`) relu : cohérent avec #23-C (0 ou vide → défaut, valeur propre positive non écrasée et signalée, idempotent, reverse sans effet documenté). Spec e2e 33 notée ; son rejeu sur un poste avec navigateur reste à faire avec 05, 31, 32.
+**Contrôles faits avant push** : `check` et `makemigrations --check` propres ; `tsc` et build OK ; `core` + `commissions` + `clients` : **816 tests OK** (4 ignorés, 1 échec attendu) ; suite complète précédente (avant les derniers lots de B) : 2694 OK.
+**Rien ne bloque** de mon côté. En attente du responsable : l'ordre « testeurs » (vérification indépendante de tous les tickets `CORRIGÉ`, matrice de permissions, `[]` → `[c]` de `remarque.md`, PR vers `main`). Brouillon de PR : `docs/PR_dev-c_vers_main.md`. Prochain numéro de message libre : **#26**.
+
+**Statut :** INFO
+
+### #26 — 2026-11-22 — C → B (copie A) — Passation : B reprend le rôle de Dev C et cumule `dev-b` et `dev-c`
+
+**Décision du responsable (2026-11-22)** : à partir de ce push, **B reprend les tâches du Dev C et cumule `dev-b` et `dev-c`**. Le Dev C (Claude) n'intervient plus après ce commit. **A** reste seul sur `dev-a` (production, ventes, trésorerie, finance, blockchain).
+
+**Tout est dans `docs/PASSATION_DEV_C.md`** : état du dépôt et des tests, règles en vigueur (push autonome, testeurs à la fin sur l'ordre du responsable, `desktop/` gelé, numérotation `BUG-3NN` / `4NN` / `5NN`, environnement Windows et Python 3.14), **tableau « ticket `CORRIGÉ` → testeur à lancer »** pour la vérification indépendante, lignes de `remarque.md` à passer de `[]` à `[c]` (seulement après vérification), tâches de fin de projet (suite complète, PR `dev-c` → `main`, e2e à adapter, documentation), points qui dépendent du client et précautions avant la mise en production. Brouillon de PR : `docs/PR_dev-c_vers_main.md`.
+
+**Points clés** : (1) **n'ouvre aucun testeur sans l'ordre du responsable** ; (2) les marques `@expectedFailure` ne s'ouvrent que dans les fichiers `…_c.py` de tests de C : si un test passe « par surprise », retire la marque ; (3) `dev-c` = branche d'intégration (`dev-a` + `dev-b`) : tu la pousses toi-même ; (4) **registre nettoyé** : 326 tickets, plus de doublon ; BUG-521 `VÉRIFIÉ`, BUG-517/523/530 `CORRIGÉ` ; lignes ajoutées pour BUG-380, 381, 382 ; sept anciennes lignes ont des colonnes décalées (127, 140, 021, 077, 232, 253, 356) : sans conséquence, à nettoyer si tu y touches.
+
+**Dernier état de `dev-c`** : `dev-a` 9fbb757 + `dev-b` a91086e ; `check` et migrations propres ; `tsc` et build OK ; `core` + `commissions` + `clients` : 816 tests OK ; dernière suite complète : 2694 tests OK. Prochain numéro de message libre : **#27**.
+
+**Statut :** INFO
