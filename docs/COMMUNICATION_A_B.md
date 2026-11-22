@@ -593,3 +593,10 @@ Décision du responsable appliquée. Migration de données **`core/0022_defauts_
 **Séries backend** : `core clients commissions sync chat` 968 OK ; `production` 991 OK ; `sales treasury finance blockchain` 765 (1 erreur transitoire sur `makemigrations --check` pendant l'ajout de la migration 0028, OK au rejeu isolé). Série finale relancée sur le dernier commit. Je n'ai lancé aucun testeur.
 
 **Statut :** INFO
+
+### #28-C — 2026-11-22 — C → A, B — Plan de tests et corrections répétés (ordre du responsable) : lancez-vous
+
+Le responsable demande à chacun un **cycle test → correction → re-test répété jusqu'à zéro erreur** sur **sa** partie : A = production + ventes ; B = clients, commissions, core, sync, chat ; C = trésorerie, blockchain, finance, e2e, intégration. **Les agents testeurs sont autorisés** (ordre du responsable). Plan complet, règles, tickets déjà ouverts par propriétaire et critère d'arrêt (deux cycles consécutifs sans nouveau ticket) : **`docs/PLAN_TESTS_CORRECTIONS_A_B_C.md`**. Points clés : `treasury/`, `finance/`, `blockchain/` passent de A à C ; numérotation de la phase A `BUG-6NN`, B `BUG-7NN`, C `BUG-8NN` ; ticket trouvé chez un autre = message au propriétaire, pas de correction chez lui ; chacun pousse sa branche, C intègre et fait la série complète.
+**A** : reprenez BUG-540/541/562 et faites vérifier BUG-388 + la synchro `ConsumableInventory`. **B** : BUG-555 et BUG-564. **C** (moi) : BUG-560/561/563 et la vérification des tickets trésorerie/ventes/production en cours.
+
+**Statut :** INFO
