@@ -16,6 +16,7 @@ from django.db import IntegrityError, OperationalError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import generics, status
+from rest_framework.exceptions import ParseError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -162,7 +163,19 @@ def _parse_cursor(request, param_name):
     raw = request.query_params.get(param_name)
     if not raw:
         return None
-    return parse_datetime(raw)
+    # BUG-781 : curseur illisible ou hors plage = 400 explicite, jamais un 500.
+    try:
+        parsed = parse_datetime(raw) if len(raw) <= 64 else None
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        raise ParseError(f"Paramètre « {param_name} » invalide : date/heure ISO 8601 attendue.")
+    if timezone.is_naive(parsed):
+        try:
+            parsed = timezone.make_aware(parsed)
+        except (ValueError, OverflowError):
+            raise ParseError(f"Paramètre « {param_name} » invalide : date/heure hors plage.")
+    return parsed
 
 
 class PullView(APIView):

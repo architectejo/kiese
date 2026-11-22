@@ -6,7 +6,7 @@ from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
 from .search import AccentInsensitiveSearchFilter, fold_expr, fold_term
 from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.parsers import MultiPartParser
@@ -505,6 +505,19 @@ class ClientViewSet(viewsets.ModelViewSet):
             f"{moved} client(s) déplacé(s) vers {new_node.code} — {new_node.name}.",
         )
         return Response({'moved': moved, 'requested': len(ids)})
+
+    def destroy(self, request, *args, **kwargs):
+        """BUG-760 : un client référencé (factures, commissions, distributions
+        sociales : relations PROTECT) n'est pas supprimable : 400 explicite,
+        comme `bulk_delete`, jamais un 500."""
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {'detail': "Ce client est référencé par des factures, commissions ou distributions "
+                           "sociales : suppression impossible."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     @action(detail=False, methods=['post'])
     def bulk_delete(self, request):

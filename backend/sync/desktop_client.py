@@ -119,7 +119,7 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
         pending_total = sum(len(v) for v in payload['records'].values())
         if pending_total == 0:
             _STATE['pending_count'] = 0
-            _pull_only(logger, cloud_url, headers)
+            _pull_only(logger, cloud_url, headers, data_dir)
             return
         _save_pending_batch(data_dir, payload)
 
@@ -170,14 +170,57 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
     _STATE['last_error'] = None
     logger.info('Synchronisation : push accepté (batch %s).', response.json().get('batch_id'))
 
-    _pull_only(logger, cloud_url, headers)
+    _pull_only(logger, cloud_url, headers, data_dir)
 
 
-def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict) -> None:
+_PULL_CURSOR_KEYS = ('since_config', 'since_client_debt')
+# Curseur de pull en mémoire (repli quand aucun répertoire de données n'est
+# fourni) ; indexé par URL du Cloud.
+_PULL_CURSORS: dict = {}
+
+
+def _cursor_path(data_dir: str) -> Path:
+    return Path(data_dir) / 'sync_pull_cursor.json'
+
+
+def load_pull_cursor(data_dir, cloud_url: str) -> dict:
+    """BUG-784 : curseur de pull (`since_config`, `since_client_debt`) du
+    dernier pull appliqué, persisté sur disque pour survivre à un redémarrage.
+    Vide (pull complet) si absent, illisible ou émis pour un autre Cloud."""
+    cursor = _PULL_CURSORS.get(cloud_url)
+    if cursor is None and data_dir:
+        try:
+            data = json.loads(_cursor_path(data_dir).read_text(encoding='utf-8'))
+        except (ValueError, OSError):
+            data = None
+        if isinstance(data, dict) and data.get('cloud_url') == cloud_url:
+            cursor = {k: data[k] for k in _PULL_CURSOR_KEYS if isinstance(data.get(k), str) and data[k]}
+    return dict(cursor or {})
+
+
+def save_pull_cursor(data_dir, cloud_url: str, response_data) -> None:
+    if not isinstance(response_data, dict):
+        return
+    cursor = {k: response_data[k] for k in _PULL_CURSOR_KEYS
+              if isinstance(response_data.get(k), str) and response_data[k]}
+    if not cursor:
+        return
+    _PULL_CURSORS[cloud_url] = cursor
+    if data_dir:
+        try:
+            _cursor_path(data_dir).write_text(json.dumps({'cloud_url': cloud_url, **cursor}), encoding='utf-8')
+        except OSError:
+            pass  # curseur en mémoire conservé ; au pire un pull complet au redémarrage
+
+
+def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=None) -> None:
     from sync.management.commands.sync_now import TRANSIENT_STATUS_CODES, apply_pull_response
 
     try:
-        response = requests.get(f'{cloud_url}/api/sync/pull/', headers=headers, timeout=PULL_TIMEOUT)
+        response = requests.get(
+            f'{cloud_url}/api/sync/pull/', headers=headers, timeout=PULL_TIMEOUT,
+            params=load_pull_cursor(data_dir, cloud_url),
+        )
     except requests.RequestException as exc:
         logger.warning('Synchronisation : coupure réseau au pull (%s).', exc)
         _STATE['connection'] = 'OFFLINE'
@@ -196,7 +239,10 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict) -> None:
         _STATE['last_error'] = f'Pull refusé ({response.status_code}).'
         return
 
-    apply_pull_response(response.json())
+    data = response.json()
+    apply_pull_response(data)
+    # Le curseur n'avance qu'une fois la descente appliquée.
+    save_pull_cursor(data_dir, cloud_url, data)
     _STATE['connection'] = 'ONLINE'
     _STATE['last_pull_at'] = time.time()
     _STATE['last_error'] = None

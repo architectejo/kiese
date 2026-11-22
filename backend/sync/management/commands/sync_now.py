@@ -145,9 +145,16 @@ class Command(BaseCommand):
         apply_push_response(response.json())
         self.stdout.write(self.style.SUCCESS("Push terminé."))
 
+        # BUG-784 : curseur du dernier pull appliqué (persisté), pour ne
+        # redescendre que les clients modifiés depuis.
+        from sync.desktop_client import load_pull_cursor, save_pull_cursor
+        data_dir = getattr(settings, 'KIESE_DATA_DIR', None)
+        pull_params = load_pull_cursor(data_dir, cloud_url)
+
         try:
             pull_response, pull_attempts = _send_with_retry(
-                lambda: requests.get(f"{cloud_url}/api/sync/pull/", headers=headers, timeout=30),
+                lambda: requests.get(f"{cloud_url}/api/sync/pull/", headers=headers, timeout=30,
+                                     params=pull_params),
                 max_retries, backoff, on_retry=_on_retry,
             )
         except requests.RequestException as exc:
@@ -163,7 +170,9 @@ class Command(BaseCommand):
         if pull_response.status_code >= 400:
             raise CommandError(f"Pull refusé par le Cloud ({pull_response.status_code}) : {pull_response.text}")
 
-        apply_pull_response(pull_response.json())
+        pull_data = pull_response.json()
+        apply_pull_response(pull_data)
+        save_pull_cursor(data_dir, cloud_url, pull_data)
         self.stdout.write(self.style.SUCCESS("Synchronisation terminée (push + pull)."))
 
 
@@ -481,13 +490,46 @@ def apply_pull_response(payload):
     de ce nœud — jamais une fusion, un simple remplacement par la valeur
     déjà arbitrée au Cloud (SYNC.md §2.2).
     """
-    from clients.models import Client
+    from decimal import Decimal, InvalidOperation
 
-    for client_data in payload.get('clients', []):
-        Client.objects.filter(pk=client_data['id']).update(
-            current_debt=client_data['current_debt'],
-            category=client_data['category'],
-        )
+    from django.db import transaction
+
+    from clients.models import Client
+    from sync.models import DebtMovement
+    from sync.services import MAX_DEBT_ABS, _strict_uuid
+
+    # BUG-781 : une réponse tronquée ou hostile ne doit jamais lever
+    # d'exception : entrées invalides ignorées, rien d'écrit à tort.
+    clients = payload.get('clients') if isinstance(payload, dict) else None
+    if not isinstance(clients, list):
+        return
+    for client_data in clients:
+        if not isinstance(client_data, dict):
+            continue
+        client_id = _strict_uuid(client_data.get('id'))
+        category = client_data.get('category')
+        if client_id is None or category not in Client.Category.values:
+            continue
+        raw_debt = client_data.get('current_debt')
+        if isinstance(raw_debt, bool) or raw_debt is None:
+            continue
+        try:
+            debt = Decimal(str(raw_debt))
+        except InvalidOperation:
+            continue
+        if not debt.is_finite() or abs(debt) >= MAX_DEBT_ABS:
+            continue
+        with transaction.atomic():
+            # BUG-780 : un mouvement local pas encore poussé n'est pas dans la
+            # valeur Cloud : écraser la dette locale la ferait redescendre et
+            # fausserait BP et plafond. Le client est ignoré ; une fois le
+            # mouvement poussé, la dette Cloud le contient et un prochain pull
+            # (curseur `updated_at` du Cloud) la redescend.
+            if DebtMovement.objects.filter(client_id=client_id, is_synced=False).exists():
+                continue
+            Client.objects.filter(pk=client_id).update(
+                current_debt=debt.quantize(Decimal('0.01')), category=category,
+            )
     # `config`/`bread_prices` : appliqués par le futur backend desktop sur
     # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
     # appliquer ici quand la commande est testée contre la même base que

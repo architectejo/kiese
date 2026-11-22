@@ -1860,6 +1860,20 @@ def _preflight(node, label, record):
     return record, None
 
 
+def _tag_inventory(model_label, raw_record, result):
+    """
+    BUG-731 (réouverture) : le résultat d'une ligne de comptage porte TOUJOURS
+    la clé `inventory`, y compris quand le rejet vient du contrôle commun
+    (`_preflight`) ou d'une exception avant le handler ; sinon le nœud
+    émetteur marquerait l'inventaire « synchronisé » et perdrait la ligne.
+    """
+    if model_label == 'production.ConsumableCount' and isinstance(raw_record, dict):
+        inv_ref = _strict_uuid(raw_record.get('inventory'))
+        if inv_ref is not None:
+            result['inventory'] = str(inv_ref)
+    return result
+
+
 def process_push_batch(node, records_by_model):
     """
     Traite un lot `push` reçu d'un nœud local : chaque enregistrement,
@@ -1881,11 +1895,12 @@ def process_push_batch(node, records_by_model):
             results[model_label] = [_record_result(None, False, "liste d'enregistrements attendue")]
             continue
         for record in records:
+            raw_record = record
             try:
                 with _tx.atomic():
                     record, rejected = _preflight(node, model_label, record)
                     if rejected is not None:
-                        model_results.append(rejected)
+                        model_results.append(_tag_inventory(model_label, raw_record, rejected))
                         continue
                     model_results.append(handler(node, record))
             except OperationalError as exc:
@@ -1919,9 +1934,9 @@ def process_push_batch(node, records_by_model):
                 logger.warning(
                     "Sync %s : %s non traité (%s : %s)", node.code, model_label, type(exc).__name__, exc,
                 )
-                rid = record.get('id') if isinstance(record, dict) else None
-                model_results.append(_record_result(
-                    rid, False, "erreur serveur : enregistrement non traité (données invalides)"))
+                rid = raw_record.get('id') if isinstance(raw_record, dict) else None
+                model_results.append(_tag_inventory(model_label, raw_record, _record_result(
+                    rid, False, "erreur serveur : enregistrement non traité (données invalides)")))
         if model_results:
             results[model_label] = model_results
 

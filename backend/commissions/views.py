@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
+from clients.models import Client
 from core.models import Config, Node
 from core.permissions import IsHeadquarters, IsGerant, IsDirection
 from core.utils import log_activity
@@ -195,35 +196,53 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             # n'est prélevé (BP et cotisation) qu'UNE fois : la première paie
             # générée retient ; les lignes suivantes du même mois reçoivent 0
             # (modifiables à la main). La carte reste propre à chaque boulangerie.
-            deja_retenu = ClientCommission.objects.filter(
-                client_id=client_id, period__month=month, period__year=year,
-            ).exclude(period=period).exists()
-            debt_default = Decimal('0.00') if deja_retenu else Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
-            social_default = Decimal('0.00') if deja_retenu else cotisation
+            # BUG-782 : verrou par client pour toute la séquence « contrôle
+            # deja_retenu + création » : deux générations de boulangeries
+            # différentes ne s'exécutent plus en parallèle pour un même client.
+            with transaction.atomic():
+                Client.objects.select_for_update().filter(pk=client_id).first()
+                deja_retenu = ClientCommission.objects.filter(
+                    client_id=client_id, period__month=month, period__year=year,
+                ).exclude(period=period).exists()
+                debt_default = Decimal('0.00') if deja_retenu else Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
+                social_default = Decimal('0.00') if deja_retenu else cotisation
 
-            commission, created = ClientCommission.objects.get_or_create(
-                period=period, client_id=client_id,
-                defaults={
-                    'total_breads': agg['total_breads'],
-                    'order_value': agg['order_value'],
-                    'commission_rate': client.commission_rate,
-                    'deduction_debt': debt_default,
-                    'deduction_social': social_default,
-                    'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
-                    'node_origin': node.code,
-                }
-            )
-            if not created:
-                # BUG-264 : une commission payée n'est jamais recalculée ; sinon
-                # seuls les champs dérivés des factures sont rafraîchis (les
-                # retenues saisies à la main sont conservées).
-                if commission.is_paid:
-                    continue
-                commission.total_breads     = agg['total_breads']
-                commission.order_value      = agg['order_value']
-                commission.commission_rate  = client.commission_rate
-            commission.compute(float(config.annual_bonus_rate))
-            commission.save()
+                commission, created = ClientCommission.objects.get_or_create(
+                    period=period, client_id=client_id,
+                    defaults={
+                        'total_breads': agg['total_breads'],
+                        'order_value': agg['order_value'],
+                        'commission_rate': client.commission_rate,
+                        'deduction_debt': debt_default,
+                        'deduction_social': social_default,
+                        'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
+                        'node_origin': node.code,
+                    }
+                )
+                if created and not deja_retenu:
+                    # Filet sans verrou réel (SQLite) : si une ligne d'une autre
+                    # boulangerie, créée avant la nôtre, a retenu entre-temps,
+                    # la nôtre cède (la plus ancienne garde la retenue unique).
+                    earlier = ClientCommission.objects.filter(
+                        client_id=client_id, period__month=month, period__year=year,
+                    ).exclude(pk=commission.pk).filter(
+                        Q(created_at__lt=commission.created_at)
+                        | Q(created_at=commission.created_at, pk__lt=commission.pk)
+                    ).exists()
+                    if earlier:
+                        commission.deduction_debt = Decimal('0.00')
+                        commission.deduction_social = Decimal('0.00')
+                if not created:
+                    # BUG-264 : une commission payée n'est jamais recalculée ; sinon
+                    # seuls les champs dérivés des factures sont rafraîchis (les
+                    # retenues saisies à la main sont conservées).
+                    if commission.is_paid:
+                        continue
+                    commission.total_breads     = agg['total_breads']
+                    commission.order_value      = agg['order_value']
+                    commission.commission_rate  = client.commission_rate
+                commission.compute(float(config.annual_bonus_rate))
+                commission.save()
 
         log_activity(
             request.user, "Génération Commissions CM",
