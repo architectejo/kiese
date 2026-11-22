@@ -113,6 +113,19 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
   page.on('request', r => { if (r.url().includes('/api/sales/invoices/')) appels.push(r.url()); });
   // Donnee propre au test : une facture PENDING retro-datee (le livreur du parcours 19 vide la file de livraisons).
   const apiReq = await pwRequest.newContext();
+  // Base neuve : `Config.allow_backdated_sales` est desactive (400 sur invoice_date passee). Seuls ADMIN/DIRECTION
+  // peuvent le modifier (BUG-083) : on l'active avec le compte direction de test, puis on restaure la valeur initiale.
+  const lgDir = await apiReq.post(`${API}/api/core/auth/login/`, { data: { username: 'zz_demo_direction', password: 'zz_demo_direction' } });
+  const HD = { Authorization: `Bearer ${(await lgDir.json()).access}` };
+  const reglageAvant = (await (await apiReq.get(`${API}/api/core/config/`, { headers: HD })).json()).allow_backdated_sales as boolean;
+  if (!reglageAvant) {
+    const act = await apiReq.patch(`${API}/api/core/config/`, { headers: HD, data: { allow_backdated_sales: true } });
+    expect(act.status(), await act.text()).toBe(200);
+  }
+  const restaurerReglage = async () => {
+    if (!reglageAvant) await pwRequest.newContext().then(c => c.patch(`${API}/api/core/config/`, { headers: HD, data: { allow_backdated_sales: false } }).finally(() => c.dispose()));
+  };
+  try {
   const lg = await apiReq.post(`${API}/api/core/auth/login/`, { data: { username: 'zz_clients_facturier', password: 'zz_clients_facturier' } });
   const HA = { Authorization: `Bearer ${(await lg.json()).access}` };
   const cl = await (await apiReq.get(`${API}/api/clients/clients/?search=K4-0964`, { headers: HA })).json();
@@ -146,6 +159,9 @@ test('BUG-283 (UI de BUG-274) : la file de livraisons de l ecran affiche les PEN
   if (await voirPlus.isVisible().catch(() => false)) await voirPlus.click();
   if (recu) await expect(page.locator('body'), `l'ecran liste ${recu}`).toContainText(recu, { timeout: 10_000 });
   await page.screenshot({ path: `${CAP}/vague5-livraisons-${test.info().project.name}.png` });
+  } finally {
+    await restaurerReglage();
+  }
 });
 
 test('BUG-281 : libelle « Equipe de service de la periode » (necessite un gerant de boulangerie en rotation, K3)', async ({ page }) => {

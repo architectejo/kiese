@@ -1,4 +1,4 @@
-import { expect, Page, APIRequestContext } from '@playwright/test';
+import { expect, Page, Locator, APIRequestContext } from '@playwright/test';
 
 export const CAP = '../docs/qa/captures';
 export const API = process.env.E2E_API_URL || 'http://localhost:8000';
@@ -41,4 +41,20 @@ export async function apiToken(request: APIRequestContext, user: string, pwd?: s
 
 export function idx(projectName: string) {
   return Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(projectName));
+}
+
+/**
+ * Flux reel facture -> livraison -> recu (CLAUDE.md 5.2) : le bouton de la file est « Confirmer livraison »
+ * (« Confirmer livraison partielle » si une quantite servie a ete reduite). Si le reglage « ventes passees »
+ * est actif, une modale « Confirmer la livraison » (date optionnelle) demande en plus « Confirmer & imprimer ».
+ * Le recu (« BON DE LIVRAISON ») s'ouvre ensuite. `carte` restreint la recherche du bouton a une facture.
+ */
+export async function confirmerLivraison(page: Page, carte?: Locator) {
+  const portee = carte ?? page;
+  await portee.getByRole('button', { name: /^confirmer livraison( partielle)?$/i }).first().click();
+  const recu = page.getByText(/BON DE LIVRAISON/);
+  const modale = page.getByRole('button', { name: /confirmer & imprimer/i });
+  await expect(recu.or(modale).first()).toBeVisible({ timeout: 30_000 });
+  if (await modale.isVisible().catch(() => false)) await modale.click();
+  await expect(recu).toBeVisible({ timeout: 30_000 });
 }

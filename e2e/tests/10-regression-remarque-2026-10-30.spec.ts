@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { COMPTES, PASSWORD } from '../fixtures/comptes';
 import { seConnecter } from '../fixtures/helpers';
+import { confirmerLivraison } from '../fixtures/cycle';
 
 /**
  * Parcours de non-régression ciblé — passe E2E du 2026-10-30 (coordinateur).
@@ -33,10 +34,15 @@ test('Vente Soldée (BUG-107/111) : l\'aperçu à -25% avant soumission est coh�
   await page.goto('/sales/create');
 
   const recherche = page.getByPlaceholder('Ex: K1-0045 ou KANZA Albert...');
-  await recherche.fill('K1-0082'); // client fictif ZZTEST (jamais un client reel)
   const suggestion = page.locator('text=/BP:|Solde OK/').first();
-  await expect(suggestion).toBeVisible({ timeout: 45_000 });
-  await suggestion.click();
+  // Sur une base neuve, la 1re frappe peut être perdue (modale « Stock de départ » reportée en cours de saisie) et la
+  // liste de suggestions est re-rendue à l'arrivée des résultats : on retape le code puis on relance le clic.
+  await expect(async () => {
+    await recherche.fill('');
+    await recherche.fill('K1-0082'); // client fictif ZZTEST (jamais un client reel)
+    await expect(suggestion).toBeVisible({ timeout: 12_000 });
+    await suggestion.click({ timeout: 5_000 });
+  }).toPass({ timeout: 100_000 });
 
   // Coche "Vente Soldée / Vente Cash".
   const venteSoldee = page.getByText(/Vente Soldée \/ Vente Cash/).first();
@@ -69,23 +75,14 @@ test('Vente Soldée (BUG-107/111) : l\'aperçu à -25% avant soumission est coh�
   const carte = page.locator('text=/BP avant/').first();
   await expect(carte).toBeVisible({ timeout: 10_000 });
 
-  // Sélecteur précis : NE PAS utiliser `.first()`/`.last()` sur "Imprimer le
-  // reçu" sans scope — la file peut contenir d'autres factures "En attente"
-  // laissées par d'autres parcours de la suite (ex. 08-facturation-serie.spec.ts,
-  // qui crée 10 factures "Mettre en attente" jamais livrées) ou par une
-  // exécution précédente de CE MÊME test resté en attente (ex. un échec
-  // avant la confirmation de livraison) — un filtre générique sur le badge
-  // "SOLDÉE" peut alors matcher PLUSIEURS cartes (l'ancienne ET la nouvelle),
-  // avec un ordre non garanti. On cible donc sans ambiguïté la carte portant
-  // le numéro de reçu exact retourné par le serveur pour CETTE facture.
+  // Sélecteur précis : on cible la carte portant le numéro de reçu exact retourné par le serveur pour CETTE
+  // facture (la file peut contenir d'autres factures « En attente » laissées par d'autres parcours).
+  // Flux réel : « Confirmer livraison » dans la carte, puis le reçu s'ouvre (CLAUDE.md §5.2).
   const carteSoldee = page.locator('div')
     .filter({ hasText: numeroRecu })
-    .filter({ has: page.getByRole('button', { name: /imprimer le reçu/i }) })
+    .filter({ has: page.getByRole('button', { name: /^confirmer livraison( partielle)?$/i }) })
     .last();
-  await carteSoldee.getByRole('button', { name: /imprimer le reçu/i }).click();
-  await expect(page.getByText('Confirmer la livraison')).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: /confirmer & imprimer/i }).click();
-  await expect(page.getByText(/BON DE LIVRAISON/)).toBeVisible({ timeout: 10_000 });
+  await confirmerLivraison(page, carteSoldee);
 
   // BUG-111 : le total général du reçu (lu du serveur, `order_total`) doit
   // être EXACTEMENT celui déjà annoncé à l'écran avant soumission — pas le
@@ -149,6 +146,9 @@ test('Vente sans commission + Vente Soldée (BUG-052) : les deux cases sont comb
 // hors rotation par largeur d'écran : pos -> K2, tablette -> K5, bureau -> B1.
 const GERANT_B = ['zz_demo_gerant_k2', 'zz_prod_gerant_k4', 'zz_e301_gerant', 'zz_e301_gerant']; // pos -> K2, tablette -> K4, bureau -> B2
 
+// NOTE rejeu : la règle serveur « une fournée par équipe et par jour » rend les deux tests de fournée ci-dessous
+// rejouables UNE seule fois par jour sur une même base (A et B du compte clôturées ou occupées ensuite) : base neuve
+// (ou lendemain) pour un nouveau rejeu.
 test('Clôture de fournée automatisée (BUG-093/108) : l\'action "Clôturer" déclenche le recoupement et verrouille la saisie', async ({ page, request }, info) => {
   const i = Math.max(0, ['pos', 'tablette', 'bureau', 'tv'].indexOf(info.project.name));
   // Une seule fournée « en cours » par boulangerie : on clôture par l'API celle laissée par le parcours 05 (zz_* uniquement).
@@ -200,12 +200,22 @@ test("BUG-315 : après déclaration d'une fournée, « Historique des Fournées 
   await page.goto('/production', { waitUntil: 'domcontentloaded' });
   const panneau = page.getByTestId('batch-in-progress-panel');
   await expect(panneau.getByText('Déclaration de Fournée')).toBeVisible({ timeout: 30_000 });
-  await panneau.getByLabel('Équipe', { exact: true }).selectOption('B');
-  await panneau.getByLabel(/Nombre de sacs de farine/).fill('1');
-  await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
-  await expect(panneau.getByTestId('batch-objective')).toBeVisible({ timeout: 30_000 });
-  // Sans rechargement : la ligne « Éq.B » apparaît dans l'historique.
-  await expect(page.getByText(/Éq\.B/).first()).toBeVisible({ timeout: 10_000 });
+  // Règle serveur : une fournée par équipe et par jour ; une fois clôturée, l'équipe ne peut plus être déclarée
+  // (« Session de production clôturée pour l'Équipe B le … — déclaration impossible »). Le test « Clôture de
+  // fournée » ci-dessus (même compte, même jour) clôture l'équipe B : on essaie donc B puis A, la première libre.
+  let equipe = '';
+  for (const eq of ['B', 'A']) {
+    await panneau.getByLabel('Équipe', { exact: true }).selectOption(eq);
+    await panneau.getByLabel(/Nombre de sacs de farine/).fill('1');
+    await panneau.getByRole('button', { name: /enregistrer la fournée/i }).click();
+    const objectif = panneau.getByTestId('batch-objective');
+    const refus = panneau.getByText(/déclaration impossible/);
+    await expect(objectif.or(refus).first()).toBeVisible({ timeout: 30_000 });
+    if (await objectif.isVisible()) { equipe = eq; break; }
+  }
+  expect(equipe, "aucune équipe libre aujourd'hui pour ce compte (A et B déjà clôturées)").not.toBe('');
+  // Sans rechargement : la ligne « Éq.X » de l'équipe déclarée apparaît dans l'historique.
+  await expect(page.getByText(new RegExp(`Éq\\.${equipe}`)).first()).toBeVisible({ timeout: 10_000 });
 });
 
 test('Journal de Caisse (BUG-091/105) : un écart avec la Clôture déclenche un avertissement, jamais un blocage', async ({ page }) => {

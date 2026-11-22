@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { CAP, API, login, later, overflow, idx, apiToken } from '../fixtures/cycle';
+import { CAP, API, login, later, overflow, idx, apiToken, confirmerLivraison } from '../fixtures/cycle';
 
 /**
  * Une fois le rapport facturier (niveau 1) genere par le parcours 21, la livraison de la vacation est bloquee
@@ -70,10 +70,7 @@ test.describe('FACTURIER K4', () => {
     await page.screenshot({ path: `${CAP}/cf-${info.project.name}-facturier-file.png`, fullPage: true });
     expect(await overflow(page)).toBeLessThanOrEqual(1);
 
-    await page.getByRole('button', { name: /imprimer le reçu/i }).first().click();
-    await expect(page.getByText('Confirmer la livraison')).toBeVisible();
-    await page.getByRole('button', { name: /confirmer & imprimer/i }).click();
-    await expect(page.getByText(/BON DE LIVRAISON/)).toBeVisible({ timeout: 30_000 });
+    await confirmerLivraison(page);
     const recu = page.locator('body');
     await expect(recu.getByText(/RCCM:?\s*021-A-650/)).toBeVisible();
     await expect(recu.getByText(/10-F4300-N85947U/)).toBeVisible();
@@ -114,9 +111,7 @@ test.describe('FACTURIER K4', () => {
     await later(page);
     await facturer(page, cSous, 99, 0);
     await expect(page.getByText(/BP avant/).first()).toBeVisible({ timeout: 30_000 });
-    await page.getByRole('button', { name: /imprimer le reçu/i }).first().click();
-    await page.getByRole('button', { name: /confirmer & imprimer/i }).click();
-    await expect(page.getByText(/BON DE LIVRAISON/)).toBeVisible({ timeout: 30_000 });
+    await confirmerLivraison(page);
     await page.getByRole('button', { name: /fermer/i }).last().click();
     await facturer(page, cSous, 1, 0);
     await expect(page.getByText(/plafond|bloqu/i)).toHaveCount(0);
@@ -146,10 +141,7 @@ test.describe('LIVREUR K4', () => {
     await expect(page.getByText(/File des Livraisons/i)).toBeVisible({ timeout: 30_000 });
     await page.screenshot({ path: `${CAP}/cf-${info.project.name}-livreur-file.png`, fullPage: true });
     expect(await overflow(page)).toBeLessThanOrEqual(1);
-    await page.getByRole('button', { name: /imprimer le reçu/i }).first().click();
-    await expect(page.getByText('Confirmer la livraison')).toBeVisible();
-    await page.getByRole('button', { name: /confirmer & imprimer/i }).click();
-    await expect(page.getByText(/BON DE LIVRAISON/)).toBeVisible({ timeout: 30_000 });
+    await confirmerLivraison(page);
     await expect(page.getByText(/RCCM:?\s*021-A-650/)).toBeVisible();
     await expect(page.getByText('Solde arrêté ce jour')).toBeVisible();
     await page.screenshot({ path: `${CAP}/cf-${info.project.name}-livreur-recu.png`, fullPage: true });
