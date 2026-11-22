@@ -470,3 +470,36 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 [] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
 
 [] Dans "Production & Stocks" section "Intrants — Stocks Consommables (§3.2)" La direction doit avoir une vu globale pour les stocks de toute les boulangerie, quantité des Farine, Huile (Litre), Sel (g), Levure (Paquet 450 g) et les stocks disponible à la direction, il peut orienter(envoyer) une certaine quantité à des boulangéries, "Inventaire Physique" c'est le gérant qui le saisit, une fois saisi il ne peut pas modifier le même jours, il doit attandre le jour d'après mais il peut ajouter un commentaire, et la direction peut voir "Inventaire Physique" en cliquant sur une boulangerie une boite modale doit s'ouvrir avec les détails
+
+
+
+_______________________________________________________________
+
+[] Dans "Clôture Journalière" section "Décomposition par Catégorie de Pain" pas besoin d'afficher ce genre de texte:
+"
+    Régularisation : pains ajoutés ou retirés par les factures de régularisation (code RG) et par les corrections de commande (ajustements), à leur prix plein.
+    Non Servi : montant des commandes non servies du jour (code NS), cumulé avec les factures déclarées Non servi (commandé initial) ; elles ne comptent pas dans les ventes. Le code NS est retranché du total du jour, aucun pain n'a été remis.
+
+    Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md.
+"
+
+[] Dans "Production & Stocks" onglet des "Intrants" les utilisateurs de la direction ne voient que les sections "Vue globale des consommables — toutes boulangeries", "Orienter / envoyer du stock direction vers les boulangeries", "Approvisionner le stock direction" et "Inventaire Physique" de chaque boulangerie et pas la section "Intrants — Stocks Consommables (§3.2)"
+
+[] "Heure de relève des équipes" est en réalité l'heure de cloture, le gérant a le choix de changer d'équipe ou non (poursuivre avec la même équipe), une fois cette heure arrivé une boite nodal doit s'ouvrir pour que le gerant complete les informations suivante par catégorie des pains: "Non Vendu (NV)", "Déclassés", "Sorties Gratuites"... Etc Pour une bonne Cloture Journalière, une fois ces informations remplit, bloque les ventes (Facturation, Enregistrer commande) dans cette boulangerie, jusqu'à la validation de la "Clôtures du Jour" par la direction
+
+[] Autre demande du client:
+"
+    ## Production & Stocks :
+
+    **Réconciliation :**
+
+    ➜ Le Journal des Sorties Non Valorisées doit permettre de voir les résultats des jours précédents.
+
+    ➜ La boulangerie qui effectue un transfert en envoyant les pains à une autre boulangerie : les pains envoyés sont considérés comme vendus dans le rapport de clôture. Ces pains vont ajouter la valeur au total du jour, mais pour la boulangerie qui reçoit les pains lors du transfert, la valeur de ces pains sera retranchée de son total du jour.
+
+    ## CLÔTURE JOURNALIÈRE :
+
+    La répartition par catégorie indique 0 % partout.
+
+    Pour les dépenses locales, il y a des catégories qui seront uniquement pour la direction et d'autres qui seront pour les boulangeries. On doit pouvoir gérer ça depuis la configuration.
+"
