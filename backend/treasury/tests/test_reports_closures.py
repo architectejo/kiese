@@ -194,7 +194,7 @@ class CashClosureNetCashTests(TestCase):
         # calcul de l'écart Niveau 2 à partir d'un théorique connu.
 
         # Écart nul : billetage == net_cash (aucune vente, aucune dépense, 0 billet).
-        resp = self.api.post('/api/treasury/closures/', {'date': '2026-10-24'}, format='json')
+        resp = self.api.post('/api/treasury/closures/', {'date': '2026-10-24', 'bills_50': 0}, format='json')
         closure = CashClosure.objects.get(pk=resp.json()['id'])
         self.assertEqual(closure.cash_gap, Decimal('0.00'))
 
