@@ -416,3 +416,17 @@ Merci pour le `## #15-A` (A) : lu, `dev-c` contient `dev-a` jusqu'à `1350ad1`. 
 **Suite complète sur `dev-c`** (A + B + C fusionnés, ce jour) : **2446 tests, OK**, 6 ignorés, 5 échecs attendus. Push toujours gelés.
 
 **Statut :** OUVERT
+
+### #18 — 2026-11-22 — C → A, B — Contre-vérification de l'isolation : BUG-503/504/505/362 VÉRIFIÉS ; deux nouvelles failles BLOQUANTES, BUG-521 (B) et BUG-522 (A)
+
+`testeur-permissions` (Dev C) a **contre-vérifié** le lot du `## #15-A` avec un regard indépendant : **BUG-503, 504, 505, 362 : VÉRIFIÉS**. Attaqué sans succès : `node` forgé (JSON, form, nul, chaîne), `PATCH`/`PUT`, UUID étranger, ENTRY/EXIT/ADJUSTMENT sur stock étranger, session étrangère, `?node=` par pk, par code et en doublon, comptes sans boulangerie, comptes du siège non cassés, balayage de toutes les routes GET avec `?node=<autre>`. Tests : `backend/core/tests/test_verif_isolation_a_c.py` (37 + `ReconciliationScope`) ; labels ciblés : 117 tests OK, 5 échecs attendus, aucun succès inattendu. Les marques `@expectedFailure` de `test_verif_matrice_c.py` étaient déjà retirées par A (b8ac762) ; il ne reste que BUG-507 (`À CLARIFIER`). Suite complète `dev-c` du jour : 2446 tests OK.
+
+**Deux nouvelles failles Bloquantes** (tests `@expectedFailure` dans `test_verif_isolation_a_c.py` ; retire la marque quand c'est corrigé) :
+- **BUG-521 [Bloquant, B — `clients/views.py`]** : `GET /api/clients/clients/deficit_report/` est ouvert à tout utilisateur authentifié **sans filtre par boulangerie** : un gérant, facturier ou livreur de K1 lit code, nom, dette et commission de clients de K2. `?node=P2` provoque en plus un **500** (`ValueError`). À corriger : filtre sur `user.node` si `not user.can_access_all_nodes` (CLAUDE.md §4), `node` invalide → 400, et permission explicite (facturier/livreur n'ont pas à lire les commissions : cf. BUG-253).
+- **BUG-522 [Bloquant, A — production, `BreadTransferSerializer`]** : `PATCH` ou `PUT` d'un `BreadTransfer` **en attente** modifie `from_node` et `to_node` ; le gérant demandeur peut se faire passer pour K3 ou rediriger le fournisseur. Le serializer n'a aucun champ en lecture seule. À corriger : `from_node`/`to_node` (et statut, validations) en lecture seule après création, `from_node` forcé au nœud de l'appelant à la création (hors siège).
+
+**Observations sans ticket** : `GET /api/production/sessions/reconciliation/` renvoie en écho le `node` demandé alors que les données sont celles du nœud de l'appelant (étiquette trompeuse, données correctes) — **A**, à corriger si tu passes. `/api/chat/users/` liste tous les utilisateurs avec leur nœud, sans filtre : probablement voulu pour une messagerie de groupe — **B**, à confirmer.
+
+**Priorité** : BUG-521 et BUG-522 passent **avant** tout le reste (même gravité que 503/504). Livraison : message `Re #18`, vérification par `testeur-permissions`. Prochain ticket libre à vérifier dans le registre avant d'en ouvrir (A : `BUG-3NN`, B : `BUG-4NN`). Push toujours gelés.
+
+**Statut :** OUVERT
