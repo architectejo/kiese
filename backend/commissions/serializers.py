@@ -22,6 +22,12 @@ class ClientCommissionSerializer(serializers.ModelSerializer):
     period_display = serializers.StringRelatedField(source='period', read_only=True)
     node           = serializers.PrimaryKeyRelatedField(source='period.node', read_only=True)
     node_display   = serializers.StringRelatedField(source='period.node', read_only=True)
+    # BUG-417 : sommes FC déduites par client (tableau « Situation des Ristournes
+    # & Rémunérations »), alias lisibles de deduction_social / deduction_prints.
+    cotisation_sociale_fc = serializers.DecimalField(
+        source='deduction_social', max_digits=12, decimal_places=2, read_only=True)
+    carte_fc = serializers.DecimalField(
+        source='deduction_prints', max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model  = ClientCommission
@@ -30,6 +36,7 @@ class ClientCommissionSerializer(serializers.ModelSerializer):
             'total_breads', 'order_value', 'commission_rate',
             'commission_gross',
             'deduction_debt', 'deduction_social', 'deduction_prints', 'deduction_other',
+            'cotisation_sociale_fc', 'carte_fc',
             'deduction_carte', 'deduction_remise', 'total_deductions',
             'carried_debt_in',
             'net_ordi', 'net_carte',

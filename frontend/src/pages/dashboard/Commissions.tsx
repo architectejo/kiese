@@ -4,7 +4,8 @@ import {
   FiPocket, FiAward, FiSearch, FiRefreshCw, FiEdit2,
   FiPrinter, FiDownload
 } from 'react-icons/fi';
-import { commissionsApi, coreApi, ClientCommission, BakeryNode } from '@/api/services';
+import { commissionsApi, coreApi, ClientCommission, BakeryNode, CommissionSummary } from '@/api/services';
+import { CommissionsTotalsRow, CommissionTotals, formatFc } from '@/components/commissions/CommissionsTotalsRow';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
 import { localIsoDate } from '@/store/workDateStore';
@@ -69,6 +70,21 @@ export const Commissions: React.FC = () => {
   const isReady = commissionsQ.isComplete;
   const reloadCommissions = commissionsQ.reload;
   const loadData = useCallback(async () => { reloadCommissions(); }, [reloadCommissions]);
+  // BUG-417 : totaux verticaux calculés par le serveur (mêmes filtres que la liste).
+  const [summary, setSummary] = useState<CommissionSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSummary(null);
+    setSummaryError(null);
+    commissionsApi.commissions.summary({
+      ...(nodeFilter ? { period__node: nodeFilter } : {}),
+      ...(filterMonth ? { period__month: filterMonth } : {}),
+      ...(filterYear ? { period__year: filterYear } : {}),
+    }).then(res => { if (!cancelled) setSummary(res.data); })
+      .catch(err => { if (!cancelled) setSummaryError(getErrorDetail(err, 'Totaux indisponibles.')); });
+    return () => { cancelled = true; };
+  }, [nodeFilter, filterMonth, filterYear, commissionsQ.isComplete]);
   const progress = `${commissionsQ.loaded} / ${commissionsQ.total ?? '…'}`;
   const periodLabel = filterMonth || filterYear
     ? `${filterMonth ? MONTHS_FR[Number(filterMonth) - 1] : 'Tous les mois'} ${filterYear || '(toutes années)'}`
@@ -175,12 +191,36 @@ export const Commissions: React.FC = () => {
   const totalRemaining = commissions.filter(c => !c.is_paid).reduce((s, c) => s + Math.max(0, parseFloat(c.net_payable || '0')), 0);
   const totalCarriedDebt = commissions.filter(c => !c.is_paid).reduce((s, c) => s + Math.max(0, -parseFloat(c.net_payable || '0')), 0);
 
+  // BUG-417 : cotisation et carte (FC) d'une ligne.
+  const cotisationOf = (c: ClientCommission) => parseFloat(c.cotisation_sociale_fc ?? c.deduction_social ?? '0') || 0;
+  const carteOf = (c: ClientCommission) => parseFloat(c.carte_fc ?? c.deduction_prints ?? '0') || 0;
+  // Sans recherche ni filtre de statut : totaux serveur ; sinon (ou si le serveur échoue) somme des lignes affichées.
+  const localFilterActive = searchTerm.trim() !== '' || statusFilter !== 'All';
+  let totals: CommissionTotals | null = null;
+  if (!localFilterActive && summary) {
+    totals = {
+      orders: parseFloat(summary.total_orders), cm: parseFloat(summary.total_cm),
+      cotisation: parseFloat(summary.total_cotisation), carte: parseFloat(summary.total_carte),
+      net: parseFloat(summary.total_net),
+    };
+  } else if (isReady && (localFilterActive || summaryError)) {
+    totals = {
+      orders: filteredCommissions.reduce((s, c) => s + parseFloat(c.order_value || '0'), 0),
+      cm: filteredCommissions.reduce((s, c) => s + parseFloat(c.commission_gross || '0'), 0),
+      cotisation: filteredCommissions.reduce((s, c) => s + cotisationOf(c), 0),
+      carte: filteredCommissions.reduce((s, c) => s + carteOf(c), 0),
+      net: filteredCommissions.reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0),
+    };
+  }
+
   const handlePrint = () => {
     if (!isReady) return;
     const dateStr = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
     const totCmd = filteredCommissions.reduce((s, c) => s + parseFloat(c.order_value || '0'), 0);
     const totCm  = filteredCommissions.reduce((s, c) => s + parseFloat(c.commission_gross || '0'), 0);
     const totNet = filteredCommissions.reduce((s, c) => s + parseFloat(c.net_payable || '0'), 0);
+    const totCot = filteredCommissions.reduce((s, c) => s + cotisationOf(c), 0);
+    const totCarte = filteredCommissions.reduce((s, c) => s + carteOf(c), 0);
     const rows = filteredCommissions.map(c => {
       const net  = parseFloat(c.net_payable || '0');
       const rate = (parseFloat(c.commission_rate || '0') * 100).toFixed(0);
@@ -190,6 +230,8 @@ export const Commissions: React.FC = () => {
         <td style="text-align:center">${rate}%</td>
         <td style="text-align:right">${parseFloat(c.commission_gross||'0').toLocaleString('fr-FR')}</td>
         <td style="text-align:right">${parseFloat(c.net_ordi||'0').toLocaleString('fr-FR')}</td>
+        <td style="text-align:right">${cotisationOf(c).toLocaleString('fr-FR')}</td>
+        <td style="text-align:right">${carteOf(c).toLocaleString('fr-FR')}</td>
         <td style="text-align:right;font-weight:bold;color:${net<0?'#dc2626':'#059669'}">${net<0?`(${Math.abs(net).toLocaleString('fr-FR')})`:net.toLocaleString('fr-FR')}</td>
         <td style="text-align:center"><span style="padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;background:${c.is_paid?'#d1fae5':'#fef3c7'};color:${c.is_paid?'#065f46':'#92400e'}">${c.is_paid?'PAYÉ':'EN ATTENTE'}</span></td>
       </tr>`;
@@ -206,6 +248,7 @@ export const Commissions: React.FC = () => {
       <table><thead><tr>
         <th>Client</th><th style="text-align:right">Commande (FC)</th><th style="text-align:center">Taux</th>
         <th style="text-align:right">CM Brute</th><th style="text-align:right">NET/ORDI</th>
+        <th style="text-align:right">Cotisation sociale (FC)</th><th style="text-align:right">Carte / Frais d'imprimé (FC)</th>
         <th style="text-align:right">NET À PAYER</th><th style="text-align:center">Statut</th>
       </tr></thead><tbody>${rows}</tbody>
       <tfoot><tr>
@@ -213,6 +256,8 @@ export const Commissions: React.FC = () => {
         <td style="text-align:right">${totCmd.toLocaleString('fr-FR')}</td>
         <td></td><td style="text-align:right">${totCm.toLocaleString('fr-FR')}</td>
         <td></td>
+        <td style="text-align:right">${totCot.toLocaleString('fr-FR')}</td>
+        <td style="text-align:right">${totCarte.toLocaleString('fr-FR')}</td>
         <td style="text-align:right;color:#059669">${totNet.toLocaleString('fr-FR')}</td>
         <td></td>
       </tr></tfoot></table></body></html>`;
@@ -226,13 +271,15 @@ export const Commissions: React.FC = () => {
 
   const handleExportExcel = () => {
     if (!isReady) return;
-    const headers = ['Client', 'Commande (FC)', 'Taux CM', 'CM Brute (FC)', 'NET/ORDI (FC)', 'NET À PAYER (FC)', 'Statut'];
+    const headers = ['Client', 'Commande (FC)', 'Taux CM', 'CM Brute (FC)', 'NET/ORDI (FC)', 'Cotisation sociale (FC)', 'Carte / Frais d\'imprimé (FC)', 'NET À PAYER (FC)', 'Statut'];
     const rows = filteredCommissions.map(c => [
       c.client_display || c.client,
       parseFloat(c.order_value || '0'),
       (parseFloat(c.commission_rate || '0') * 100).toFixed(0) + '%',
       parseFloat(c.commission_gross || '0'),
       parseFloat(c.net_ordi || '0'),
+      cotisationOf(c),
+      carteOf(c),
       parseFloat(c.net_payable || '0'),
       c.is_paid ? 'PAYÉ' : 'EN ATTENTE',
     ]);
@@ -469,6 +516,8 @@ export const Commissions: React.FC = () => {
                   <th style={{ padding: '8px 10px' }}>Tx</th>
                   <th style={{ padding: '8px 10px' }}>CM Brute</th>
                   <th style={{ padding: '8px 10px' }}>NET/ORDI</th>
+                  <th style={{ padding: '8px 10px' }}>Cotisation sociale (FC)</th>
+                  <th style={{ padding: '8px 10px' }}>Carte / Frais d'imprimé (FC)</th>
                   <th style={{ padding: '8px 10px', fontWeight: 900 }}>NET À PAYER</th>
                   <th style={{ padding: '8px 10px', textAlign: 'center' }}>Statut</th>
                   <th style={{ padding: '8px 10px', textAlign: 'center' }}>Action</th>
@@ -519,6 +568,8 @@ export const Commissions: React.FC = () => {
                       </td>
                       <td style={{ padding: '8px 10px', fontWeight: 700 }}>{parseFloat(c.commission_gross || '0').toLocaleString('fr-FR')}</td>
                       <td style={{ padding: '8px 10px' }}>{netOrdi.toLocaleString('fr-FR')}</td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{formatFc(cotisationOf(c))}</td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{formatFc(carteOf(c))}</td>
                       <td style={{ padding: '8px 10px', fontWeight: 800, color: netPayable < 0 ? 'hsl(var(--color-danger))' : 'hsl(var(--color-success))' }}>
                         {netPayable < 0
                           ? `Client: ${Math.abs(netPayable).toLocaleString('fr-FR')} FC`
@@ -551,12 +602,23 @@ export const Commissions: React.FC = () => {
                   );
                 })}
                 {filteredCommissions.length === 0 && (
-                  <tr><td colSpan={10} style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-muted))' }}>
+                  <tr><td colSpan={10 /* 10 colonnes depuis BUG-417 */} style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-muted))' }}>
                     {commissions.length === 0 ? 'Aucune commission enregistrée' : isReady ? 'Aucun résultat pour ces filtres' : 'Aucun résultat parmi les commissions déjà chargées…'}
                   </td></tr>
                 )}
               </tbody>
+              {filteredCommissions.length > 0 && (
+                <CommissionsTotalsRow
+                  totals={totals}
+                  label={localFilterActive ? `TOTAL filtré (${filteredCommissions.length})` : `TOTAL (${summary?.count ?? filteredCommissions.length} clients)`}
+                />
+              )}
             </table>
+            {summaryError && (
+              <div role="alert" style={{ marginTop: '6px', fontSize: '0.7rem', color: 'hsl(var(--color-warning))' }}>
+                {summaryError} Totaux calculés sur les lignes chargées.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -631,7 +693,7 @@ export const Commissions: React.FC = () => {
                 {debt < 0 && row('(+) Crédit client (BP créditrice)', Math.abs(debt), 'hsl(var(--color-success))', '+')}
                 {subtotalRow('= NET / ORDI', netOrdi)}
                 {social > 0 && row('(−) Cotisation sociale',  social, 'hsl(var(--color-danger))', '−')}
-                {prints > 0 && row('(−) Frais imprimés',      prints, 'hsl(var(--color-danger))', '−')}
+                {prints > 0 && row("(−) Carte / frais d'imprimé",     prints, 'hsl(var(--color-danger))', '−')}
                 {other  > 0 && row('(−) Retenues diverses',   other,  'hsl(var(--color-danger))', '−')}
                 {remise > 0 && row('Remise (0,25 % de la commande, non déduite)', remise, 'hsl(var(--text-muted))')}
                 {carriedDebtIn > 0 && (

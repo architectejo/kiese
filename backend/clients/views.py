@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -314,11 +314,23 @@ class ClientViewSet(viewsets.ModelViewSet):
         """Classify clients of a node by monthly order volume into 5 BASSINS categories."""
         from commissions.models import CommissionPeriod, ClientCommission
         from django.db.models import Sum
+        user = request.user
         node_id = request.query_params.get('node')
         month   = request.query_params.get('month')
         year    = request.query_params.get('year')
+        # BUG-531 : compte sans boulangerie -> vide ; non-siège borné à son nœud.
+        if is_node_less_non_hq(user):
+            return Response({'categories': [], 'thresholds': {}, 'rows': []})
+        if not user.can_access_all_nodes:
+            node_id = user.node_id
+        elif node_id:
+            node_id = parse_node_param(node_id)
         if not all([node_id, month, year]):
             return Response({'detail': 'node, month et year sont requis.'}, status=400)
+        try:
+            month, year = int(month), int(year)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Paramètres « month » et « year » invalides : entiers attendus.'}, status=400)
 
         config = Config.get_instance()
         CATEGORIES = ['GRAND FORMAT', 'INTER G&M', 'INTER M&PT', 'MOYEN', 'PETIT']
@@ -509,10 +521,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         else:
             node_id = request.query_params.get('node')
             if node_id:
-                try:
-                    node_id = int(node_id)
-                except (TypeError, ValueError):
-                    raise ValidationError({'detail': "Paramètre « node » invalide : identifiant de boulangerie numérique attendu."})
+                node_id = parse_node_param(node_id)
                 period_qs = period_qs.filter(node_id=node_id)
         latest_period = period_qs.first()
         if not latest_period:

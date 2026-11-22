@@ -15,11 +15,17 @@ _client_seq = [0]
 _user_seq = [0]
 
 
-def make_node(code=None, name=None, sac_value_fc=None):
+def make_node(code=None, name=None, sac_value_fc=None,
+              social=Decimal('0.00'), card_fee=Decimal('0.00')):
+    # BUG-417 : les defauts reels d'une nouvelle boulangerie sont 2000 / 1000 FC
+    # (Node.monthly_social_contribution / card_fee_fc). Les fabriques de test
+    # restent neutres (0) pour que les scenarios existants calculent a la main
+    # sans retenue implicite ; les tests de defauts creent le Node directement.
     _node_seq[0] += 1
     code = code or f"TK{_node_seq[0]}"
     name = name or f"Boulangerie Test {code}"
-    return Node.objects.create(code=code, name=name, sac_value_fc=sac_value_fc)
+    return Node.objects.create(code=code, name=name, sac_value_fc=sac_value_fc,
+                               monthly_social_contribution=social, card_fee_fc=card_fee)
 
 
 def make_user(role='FACTURIER', node=None, team='A', username=None, password='test-pass-123'):

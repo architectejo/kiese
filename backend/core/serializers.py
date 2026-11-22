@@ -15,7 +15,7 @@ class NodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Node
         fields = [
-            'id', 'code', 'name', 'address', 'sac_value_fc', 'monthly_social_contribution', 'is_active',
+            'id', 'code', 'name', 'address', 'sac_value_fc', 'monthly_social_contribution', 'card_fee_fc', 'is_active',
             'last_sync', 'display_name',
             'team_a_start_time', 'team_a_end_time',
             'team_b_start_time', 'team_b_end_time',
@@ -28,6 +28,12 @@ class NodeSerializer(serializers.ModelSerializer):
         # BUG-314 : jamais négatif (NaN/inf/trop grand sont déjà refusés par DRF).
         if value is not None and value < 0:
             raise serializers.ValidationError("La cotisation sociale mensuelle ne peut pas être négative.")
+        return value
+
+    def validate_card_fee_fc(self, value):
+        # BUG-417 : montant FC de la carte, jamais négatif.
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Le montant de la carte ne peut pas être négatif.")
         return value
 
     def validate_sac_value_fc(self, value):

@@ -54,8 +54,18 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def history(self, request):
         """Last N commission periods for a node with aggregates (total CM, net, paid)."""
+        from core.mixins import parse_node_param
         node_id = request.query_params.get('node')
-        n = min(int(request.query_params.get('months', 12)), 36)
+        if node_id:
+            node_id = parse_node_param(node_id)  # BUG-530 : 400 au lieu de 500
+        try:
+            n = min(int(request.query_params.get('months', 12)), 36)
+        except (TypeError, ValueError):
+            return Response({'detail': "Paramètre « months » invalide : entier attendu."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if n < 1:
+            return Response({'detail': "Paramètre « months » invalide : entier positif attendu."},
+                            status=status.HTTP_400_BAD_REQUEST)
         qs = self.get_queryset()
         if node_id:
             qs = qs.filter(node_id=node_id)
@@ -67,6 +77,8 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 total_cm=Sum('commission_gross'),
                 total_net=Sum('net_payable'),
                 total_paid=Sum('net_payable', filter=Q(is_paid=True)),
+                total_cotisation=Sum('deduction_social'),
+                total_carte=Sum('deduction_prints'),
             )
             inv_agg = Invoice.objects.filter(
                 # BUG-320 : le versement conservé d'une facture « Non servi »
@@ -89,6 +101,8 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 'total_cm':       str(agg['total_cm']       or 0),
                 'total_net':      str(agg['total_net']       or 0),
                 'total_paid':     str(agg['total_paid']      or 0),
+                'total_cotisation': str(agg['total_cotisation'] or 0),
+                'total_carte':    str(agg['total_carte']     or 0),
                 'total_payments': str(inv_agg['total_payments'] or 0),
             })
         return Response(result)
@@ -166,7 +180,7 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                     'commission_rate': client.commission_rate,
                     'deduction_debt': Decimal(str(client.current_debt)),  # BUG-293 : BP créditrice conservée (négatif)
                     'deduction_social': cotisation,
-                    'deduction_prints': config.print_fee,
+                    'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
                     'node_origin': node.code,
                 }
             )
@@ -216,7 +230,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     ordering         = ['client__last_name', 'pk']
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve'):
+        if self.action in ('list', 'retrieve', 'summary'):
             return [IsGerant()]
         if self.action in ('mark_paid', 'set_manuel'):
             # BUG-265 : réservés à ADMIN/DIRECTION (ne pas écraser IsDirection).
@@ -277,6 +291,21 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
+
+    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
+    def summary(self, request):
+        """BUG-417 : totaux verticaux de la situation des ristournes (mêmes filtres que la liste)."""
+        qs = self.filter_queryset(self.get_queryset())
+        agg = qs.aggregate(
+            total_orders=Sum('order_value'), total_cm=Sum('commission_gross'),
+            total_debt=Sum('deduction_debt'),
+            total_cotisation=Sum('deduction_social'), total_carte=Sum('deduction_prints'),
+            total_other=Sum('deduction_other'), total_deductions=Sum('total_deductions'),
+            total_net=Sum('net_payable'),
+        )
+        data = {k: str(v if v is not None else Decimal('0.00')) for k, v in agg.items()}
+        data['count'] = qs.count()
+        return Response(data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsDirection])
     def mark_paid(self, request, pk=None):
