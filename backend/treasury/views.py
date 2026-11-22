@@ -7,7 +7,8 @@ from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import ProtectedError
 from django.db.models import Sum, F, Q
 from django.utils import timezone
-from core.mixins import NodeImmutableForNonHQMixin
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from kiese.node_guard import NoNodeGuardMixin
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -214,7 +215,7 @@ def append_cashbook_entry(validate_balance=None, **entry_kwargs) -> CashbookEntr
     raise last_exc
 
 
-class LocalExpenseViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class LocalExpenseViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = LocalExpense.objects.select_related('node', 'gerant').all()
     serializer_class = LocalExpenseSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -227,6 +228,8 @@ class LocalExpenseViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         params = self.request.query_params
         month = params.get('month')
         year  = params.get('year')
@@ -263,7 +266,7 @@ class LocalExpenseViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         )
 
 
-class FacturierReportViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = FacturierReport.objects.select_related('node', 'facturier', 'validated_by').all()
     serializer_class = FacturierReportSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -280,6 +283,8 @@ class FacturierReportViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_update(self, serializer):
@@ -294,11 +299,37 @@ class FacturierReportViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
                             status=status.HTTP_403_FORBIDDEN)
         return super().destroy(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        # BUG-503 : pour un non-siège, `node` du corps est écrasé par le nœud
+        # de l'utilisateur AVANT validation (le champ fait partie de la
+        # contrainte unique (node, team, date), donc obligatoire côté DRF).
+        user = request.user
+        if hasattr(request.data, 'copy') and user.node_id and (
+                not user.can_access_all_nodes or not request.data.get('node')):
+            data = request.data.copy()
+            data['node'] = str(user.node_id)
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            return Response(serializer.data, status=status.HTTP_201_CREATED,
+                            headers=self.get_success_headers(serializer.data))
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
+        user = self.request.user
+        # BUG-503 : un non-siège ne peut créer un rapport que pour son nœud
+        # (`node` forgé ignoré) ; le siège indique la boulangerie.
+        if not user.can_access_all_nodes:
+            node = user.node
+        else:
+            node = serializer.validated_data.get('node') or user.node
+        if not node:
+            raise ValidationError({'detail': 'Boulangerie requise.'})
         obj = serializer.save(
-            facturier=self.request.user,
-            team=self.request.user.team,
-            node_origin=self.request.user.node.code if self.request.user.node else 'CLOUD',
+            node=node,
+            facturier=user,
+            team=user.team,
+            node_origin=node.code,
         )
         # If theoretical_cash not provided, mirror total_cash_sales
         if not obj.theoretical_cash:
@@ -393,7 +424,7 @@ _MAX_MONEY = Decimal('999999999999.99')
 _CLOSURE_MONEY_DEFER = ('physical_cash_total', 'cash_gap', 'net_cash')
 
 
-class CashClosureViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class CashClosureViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = CashClosure.objects.select_related('node', 'gerant').prefetch_related('cashbook_entries').all()
     serializer_class = CashClosureSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -417,6 +448,8 @@ class CashClosureViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         # BUG-201 : lecture robuste d'une clôture déjà corrompue (totaux hors
         # plage DecimalField) : jamais de 500 sur la liste ; la suppression
         # (destroy) reste possible car elle ne lit pas ces colonnes.
@@ -772,7 +805,7 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
         ])
 
 
-class DisbursementVoucherViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class DisbursementVoucherViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Bordereaux de versement — sorties de caisse Direction, financées par
     l'argent consolidé reçu de toutes les boulangeries. Chaque bordereau
@@ -938,7 +971,7 @@ class DirectionCashCountViewSet(
         )
 
 
-class JournalEntryViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Journal de Caisse par Boulangerie (§5.1.4).
     Supports filtering by node, date, month, year.
@@ -1213,7 +1246,7 @@ class JournalEntryViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         })
 
 
-class DailySavingsViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """
     Épargne journalière par boulangerie (§5.1.5).
     savings_amount is auto-computed: daily_revenue × savings_rate.

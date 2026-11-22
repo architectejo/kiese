@@ -15,7 +15,8 @@ Convention de rejeu identique à la migration 0018 : départ à quantité 0 et
 CUMP 0, ordre `created_at, pk`. La quantité du stock n'est JAMAIS modifiée ;
 si le rejeu ne retombe pas sur la quantité en base (stock initial saisi sans
 mouvement), un avertissement est affiché : le CUMP de la part non tracée
-ne peut pas être reconstitué.
+ne peut pas être reconstitué ; dans ce cas `--apply` IGNORE le stock (BUG-501)
+sauf avec `--force`.
 """
 from decimal import Decimal
 
@@ -63,6 +64,8 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--apply', action='store_true', help="Écrit les corrections en base.")
         parser.add_argument('--dry-run', action='store_true', help="Simulation (comportement par défaut).")
+        parser.add_argument('--force', action='store_true',
+                            help="Applique aussi aux stocks dont le rejeu ne retombe pas sur la quantité en base.")
         parser.add_argument('--node', default=None, help="Code d'une boulangerie (ex. K1).")
 
     def handle(self, *args, **opts):
@@ -101,11 +104,19 @@ class Command(BaseCommand):
                         f"  {label} : CUMP {old_avg} -> {new_avg} (écart {new_avg - old_avg:+}) ; "
                         f"{len(exits_to_fix)} sortie(s) à revaloriser"
                     )
-                if Decimal(str(stock.quantity)) != replay_qty:
+                untraced = Decimal(str(stock.quantity)) != replay_qty
+                if untraced:
                     self.stdout.write(self.style.WARNING(
                         f"    attention : quantité en base {stock.quantity} != quantité rejouée {replay_qty} "
                         f"(stock initial non tracé par des mouvements ; quantité NON modifiée)."
                     ))
+                    if apply and not opts['force'] and (new_avg != old_avg or exits_to_fix):
+                        self.stdout.write(self.style.WARNING(
+                            "    stock IGNORÉ : le rejeu partirait de 0 et écraserait un CUMP sain "
+                            "(BUG-501) ; --force pour appliquer malgré tout."
+                        ))
+                        changed -= 1
+                        continue
                 if apply and (new_avg != old_avg or exits_to_fix):
                     for m, price in exits_to_fix:
                         ConsumableMovement.objects.filter(pk=m.pk).update(unit_price=price)

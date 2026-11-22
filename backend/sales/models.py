@@ -247,6 +247,10 @@ class InvoiceLine(models.Model):
     # été réduite (livraison partielle ou non servi) ; `quantity` = servi.
     ordered_quantity = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Quantité commandée initiale"))
     unit_price = models.PositiveIntegerField(default=0,  verbose_name=_("Prix Unitaire (FC)"))
+    # BUG-508/363 : prix plein (catalogue) figé à la création de la ligne ; sert
+    # de base au prix soldé (75 %) et à la perte, indépendamment des changements
+    # de tarif ultérieurs. Nul seulement avant le premier enregistrement.
+    full_unit_price = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Prix plein figé (FC)"))
     line_total = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Total Ligne (FC)"))
 
     class Meta:
@@ -257,7 +261,9 @@ class InvoiceLine(models.Model):
         return f"{self.bread_price.label} × {self.quantity} = {self.line_total} FC"
 
     def save(self, *args, **kwargs):
-        catalog_price = self.bread_price.unit_price
+        if self.full_unit_price is None:
+            self.full_unit_price = self.bread_price.unit_price
+        catalog_price = self.full_unit_price
         if self.invoice.is_soldee:
             # BUG-092/BUG-096 : prix réduit à 75 % du catalogue pour une
             # VENTE SOLDE/VENTE CASH (CLAUDE.md §5.1). `unit_price` reste un
@@ -277,5 +283,5 @@ class InvoiceLine(models.Model):
     @property
     def loss(self):
         """BUG-092 : perte générée par cette ligne par rapport au prix catalogue."""
-        catalog_price = self.bread_price.unit_price
-        return Decimal(catalog_price - self.unit_price) * self.quantity
+        full = self.full_unit_price if self.full_unit_price is not None else self.bread_price.unit_price
+        return Decimal(full - self.unit_price) * self.quantity

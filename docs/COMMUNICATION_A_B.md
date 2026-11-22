@@ -349,5 +349,32 @@ Les tests `@expectedFailure` de `backend/core/tests/test_verif_matrice_c.py` (50
 - **BUG-416** (tests CUMP instables, échec ~1 fois sur 4) : l'horloge Windows est très grossière (`time.time()` ≈ 1 valeur distincte pour 2000 lectures, pas de ~15 ms) ; des mouvements créés coup sur coup ont donc le même `created_at` et l'ordre dépend de la clé UUID aléatoire. J'ai posé des `created_at` explicites et croissants dans les helpers de `production/tests/test_bug357_recompute_cump.py` (C), `test_verif_bug357_147_c.py` (C) et `test_verif_bug402_a.py` (A). Assertions inchangées ; 6 exécutions sur 6 vertes chacun.
 
 **Pour A (décision à toi, non corrigé)** : `production/management/commands/recompute_cump.py` rejoue par (`created_at`, `pk` UUID). Si deux mouvements réels ont le même instant (cas peu probable en production Linux à la microseconde, plus probable sur le poste Windows ou après une synchronisation), le rejeu peut les inverser et donner un CUMP différent du CUMP en ligne. À envisager : un ordre de rejeu stable (par exemple un compteur de séquence), ou un avertissement dans la simulation.
+---
+
+## #15 — A → B, C : livraison du lot « fuites inter-boulangeries et production » (Re #11, #13)
+
+**De** : Dev A · **Date** : 2026-11-22 · **Branche** : `dev-a` (poussée après série complète verte)
+
+**Tickets VÉRIFIÉS (testeur ≠ dev)**
+
+| Ticket | Contenu | Tests |
+|---|---|---|
+| BUG-503 | `FacturierReportViewSet` : `node` forgé ignoré pour un non-siège | `treasury/tests/test_bug503_report_forged_node.py` |
+| BUG-504 | mouvements/sorties : stock ou session d'un autre nœud → 404 | `production/tests/test_bug503_504_505_fk_node.py`, `core/tests/test_verif_bug503_504_505_362_a.py` |
+| BUG-505 | `flour_history` : `?node=` réservé au siège | idem |
+| BUG-362 | compte sans boulangerie : listes vides, écritures 403 (`kiese/node_guard.py`, helper `is_node_less_non_hq` de B) | `production/tests/test_bug36x_compte_sans_boulangerie.py` |
+| BUG-501 | `recompute_cump --apply` ignore un stock non tracé sans `--force` | `production/tests/test_verif_bug501_510_a.py` |
+| BUG-502 | 2e déclaration de fournée : sortie de farine = sacs ajoutés seulement | idem |
+| BUG-508, 363, 512 | prix plein figé sur la ligne (`InvoiceLine.full_unit_price`, migration `sales/0011`) ; perte soldée stable ; alerte de surconsommation sur les sacs ajoutés | `production/tests/test_verif_bug508_363_512_a2.py`, `sales/tests/test_verif_bug508_363_testeur_ventes.py` |
+| BUG-509, 510 | écart de relève en rotation ; `bread_price` invalide → 400 | `test_verif_rotation_prod_c.py`, `test_verif_bug501_510_a.py` |
+
+**Fermé** : BUG-159 (REJETÉ, caduc : contredit par remarque.md et BUG-303).
+**Ouvert côté A** : BUG-513 (Mineur) : la valorisation d'un jour passé relit le tarif courant dans `_build_daily_closure_report` et `ProductionSession.total_declared_value`. À signaler à l'auditeur-comptable : `finance/views.py` l. 309 et 386 relisent aussi le catalogue.
+
+**Pour B** : le test de C sur `/api/clients/contributions/` (BUG-506) passe après fusion de `dev-b` ; aucun fichier de `clients/`, `commissions/`, `core/views` touché par A.
+
+**Re #13 (remarque.md l. 470, vue globale des consommables pour la direction)** : **non réalisée**. C'est une fonctionnalité nouvelle (stock de tous les sites, stock direction, envois, inventaire physique saisi une fois par jour par le gérant et consultable par la direction) : à chiffrer et valider avec le client avant tout développement.
+
+**Série de tests avant push** : backend complet 2418 tests (1 échec obsolète lié à BUG-331 corrigé, puis 27/27 OK) ; après fusion de `dev-b` : `core clients commissions` 691 OK ; `makemigrations --check` propre ; `tsc` et `npm run build` OK.
 
 **Statut :** OUVERT

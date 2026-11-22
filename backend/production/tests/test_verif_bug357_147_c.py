@@ -250,7 +250,6 @@ class RecomputeCumpTests(TestCase):
         s.refresh_from_db()
         self.assertEqual(s.quantity, D('15.000'))
 
-    @expectedFailure
     def test_bug501_untraced_stock_cump_must_not_be_overwritten(self):
         """BUG-501 : sur un stock initial non tracé, --apply écrase un CUMP sain
         (66,6667 = (10x50 + 5x100)/15, aucun négatif jamais) par 100,0000 issu d'un
@@ -267,7 +266,6 @@ class RecomputeCumpTests(TestCase):
         s.refresh_from_db()
         self.assertEqual(s.average_unit_cost, healthy)
 
-    @expectedFailure
     def test_bug501_untraced_stock_exit_prices_must_not_be_zeroed(self):
         """BUG-501 (volet sorties) : une sortie valorisée à un CUMP légitime (stock
         initial 10 @ 50, sorties avant toute entrée tracée) est re-valorisée 0.00."""
@@ -280,6 +278,17 @@ class RecomputeCumpTests(TestCase):
         _run('--apply')
         out.refresh_from_db()
         self.assertEqual(out.unit_price, D('50.00'))
+
+    def test_bug501_force_applies_replay_on_untraced_stock(self):
+        """BUG-501 : --force reste possible (choix explicite de l'opérateur)."""
+        s = self.s1
+        ConsumableStock.objects.filter(pk=s.pk).update(quantity=D('10.000'), average_unit_cost=D('50.0000'))
+        s.refresh_from_db()
+        _mv(s, 'ENTRY', '5', '100')
+        text = _run('--apply', '--force')
+        s.refresh_from_db()
+        self.assertEqual(s.average_unit_cost, D('100.0000'))
+        self.assertNotIn('IGNORÉ', text)
 
 
 class Bug147Tests(TestCase):
@@ -351,7 +360,6 @@ class Bug147Tests(TestCase):
         self._post()
         self.assertEqual(ConsumableStock.objects.filter(node=self.k1, consumable_type='FLOUR').count(), 1)
 
-    @expectedFailure
     def test_bug502_second_declaration_same_day_decrements_only_added_sacks(self):
         """BUG-502 : deux déclarations de 2 sacs le même jour/équipe (BUG-142 : addition
         sur la session) doivent sortir 2 + 2 = 4 sacs ; `_record_consumable_exits` relit

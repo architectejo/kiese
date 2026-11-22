@@ -12,6 +12,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
+from core.mixins import is_node_less_non_hq
+from kiese.node_guard import NoNodeGuardMixin
 from core.models import Node, BreadPrice, Config
 from core.permissions import IsFacturier, IsLivreur, IsGerant, IsFacturierOrLivreur
 from core.utils import log_activity, create_notification, validate_requested_date as _validate_requested_date
@@ -200,6 +202,7 @@ def _warn_if_commission_period_locked(invoice, client):
 
 
 class InvoiceViewSet(
+    NoNodeGuardMixin,
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -252,6 +255,8 @@ class InvoiceViewSet(
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     # BUG-233 : liste blanche STRICTE des champs modifiables par PATCH
@@ -1197,6 +1202,8 @@ class InvoiceViewSet(
             if node_param and str(node_param) != str(user.node_id):
                 return Response({'detail': "Accès refusé : vous ne pouvez consulter que votre boulangerie."}, status=status.HTTP_403_FORBIDDEN)
             nodes = Node.objects.filter(pk=user.node_id)
+        elif is_node_less_non_hq(user):
+            nodes = Node.objects.none()  # compte sans boulangerie : rien
         elif node_param:
             try:
                 nodes = Node.objects.filter(pk=int(node_param))

@@ -335,11 +335,11 @@ class Bug176Tests(TestCase):
         return objs
 
     def test_expenses_identical_date_and_timestamp_pages_no_dup_no_gap(self):
-        """BUG-331 : `page_size` est ignoré (taille réelle = PAGE_SIZE 25), on
-        utilise donc 60 lignes pour obtenir 3 pages réelles."""
-        objs = self._mk_expenses(60, '2026-05-01', 'A')
+        """BUG-331 corrigé : `page_size` est honoré (2 par page) → 6 lignes
+        donnent 3 pages réelles."""
+        objs = self._mk_expenses(6, '2026-05-01', 'A')
         ids, pages, count = self._walk('/api/treasury/expenses/')
-        self.assertEqual(count, 60)
+        self.assertEqual(count, 6)
         self.assertEqual(pages, 3)
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(set(ids), {str(o.pk) for o in objs})

@@ -5,10 +5,11 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum, DecimalField, ExpressionWrapper, F
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from core.mixins import NodeImmutableForNonHQMixin
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from kiese.node_guard import NoNodeGuardMixin
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -203,10 +204,12 @@ def _get_or_create_consumable_stock(node, code):
     return stock
 
 
-def _record_consumable_exits(session, user, extra_consumables=None):
+def _record_consumable_exits(session, user, extra_consumables=None, flour_sacks=None):
     """
     Create ConsumableMovement EXIT records for all consumables used in a session.
-    - Flour is auto-derived from session.flour_sacks_used.
+    - Flour is auto-derived from session.flour_sacks_used, ou de `flour_sacks`
+      quand il est fourni (BUG-502 : sur une déclaration additionnelle du même
+      jour/équipe, seuls les sacs AJOUTÉS par la requête sortent du stock).
     - extra_consumables: list of {consumable_type, quantity} dicts for salt/yeast/oil.
     Each creation triggers ConsumableMovement.save() which decrements ConsumableStock
     (BUG-143, annule BUG-041 : la sortie n'est plus jamais refusée si elle dépasse le
@@ -218,7 +221,7 @@ def _record_consumable_exits(session, user, extra_consumables=None):
     from django.db import transaction
     node = session.node
     desc = f"Fournée Éq.{session.team} {session.date}"
-    entries = [('FLOUR', session.flour_sacks_used)]
+    entries = [('FLOUR', session.flour_sacks_used if flour_sacks is None else flour_sacks)]
     if extra_consumables:
         # `extra_consumables` est déjà validé/normalisé par
         # `_parse_consumables_used` (BUG-219) : quantités `Decimal` finies.
@@ -253,9 +256,12 @@ def _record_consumable_exits(session, user, extra_consumables=None):
 _OVERCONSUMPTION_FACTOR = 2
 
 
-def _check_overconsumption(session, processed_entries):
+def _check_overconsumption(session, processed_entries, sacks_added=None):
+    """BUG-512 : `processed_entries` = quantités de CETTE déclaration ; le ratio
+    se calcule donc sur les sacs ajoutés par cette déclaration (`sacks_added`),
+    pas sur le cumul de la session. Sans sacs ajoutés : repli sur le cumul."""
     from decimal import Decimal, InvalidOperation
-    sacks = Decimal(str(session.flour_sacks_used or 0))
+    sacks = Decimal(str(sacks_added or session.flour_sacks_used or 0))
     if sacks <= 0:
         return
     node = session.node
@@ -316,6 +322,9 @@ def _build_reconciliation_querysets(user, node_id=None, date=None, date_from=Non
         sessions_qs  = sessions_qs.filter(node=user.node)
         disposals_qs = disposals_qs.filter(node=user.node)
         invoices_qs  = invoices_qs.filter(node=user.node)
+    elif is_node_less_non_hq(user):
+        sessions_qs, disposals_qs, invoices_qs = (
+            sessions_qs.none(), disposals_qs.none(), invoices_qs.none())
     elif node_id:
         sessions_qs  = sessions_qs.filter(node_id=node_id)
         disposals_qs = disposals_qs.filter(node_id=node_id)
@@ -640,7 +649,7 @@ def _close_production_session(session, remaining_entries, request_user, record_s
     return {'result': result, 'nv_breads': nv_breads, 'is_anomaly': is_anomaly}
 
 
-class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ProductionSession.objects.select_related('node', 'declared_by').all()
     serializer_class = ProductionSessionSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -667,6 +676,8 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         params = self.request.query_params
         if params.get('date_from'):
             qs = qs.filter(date__gte=params['date_from'])
@@ -889,11 +900,12 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
             processed_entries = _record_consumable_exits(
                 session, user,
                 extra_consumables=extra_consumables,
+                flour_sacks=flour_add or 0,
             )
         except DjangoValidationError as exc:
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
 
-        _check_overconsumption(session, processed_entries)
+        _check_overconsumption(session, processed_entries, sacks_added=flour_add)
 
         # BUG-306 : fournée « en cours » (sacs seuls) — aucun pain encore
         # produit, l'écart n'a pas de sens avant la clôture : pas d'alerte.
@@ -1123,6 +1135,22 @@ class ProductionSessionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet
                 if not bp_id:
                     return Response(
                         {'detail': "« remaining » : catégorie de pain (bread_price) requise."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # BUG-510 : identifiant de catégorie entier borné uniquement
+                # (pas de chaîne non numérique, liste, objet, ni hors bornes).
+                if isinstance(bp_id, bool) or not isinstance(bp_id, (int, str)):
+                    return Response(
+                        {'detail': "« remaining » : catégorie de pain (bread_price) invalide."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                try:
+                    bp_id = int(bp_id)
+                except (TypeError, ValueError):
+                    bp_id = None
+                if bp_id is None or not (0 < bp_id < 2 ** 63):
+                    return Response(
+                        {'detail': "« remaining » : catégorie de pain (bread_price) invalide."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 # BUG-303 (remarque.md, 2026-11-19, postérieure à BUG-158 du
@@ -1394,7 +1422,7 @@ class ConsumableTypeViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableStockViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableStock.objects.select_related('node').all()
     serializer_class = ConsumableStockSerializer
     filter_backends  = [DjangoFilterBackend]
@@ -1433,6 +1461,8 @@ class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         les boulangeries d'un coup).
         """
         user = self.request.user
+        if is_node_less_non_hq(user):
+            return  # BUG-506/362 : compte sans boulangerie, aucun compte à créer
         if not user.can_access_all_nodes and user.node_id:
             target_nodes = [user.node]
         else:
@@ -1467,10 +1497,12 @@ class ConsumableStockViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
 
-class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = ConsumableMovement.objects.select_related('node', 'stock', 'session', 'recorded_by').all()
     serializer_class = ConsumableMovementSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -1484,24 +1516,25 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         if not user.can_access_all_nodes and user.node_id:
             # BUG-022 : aucun filtrage par nœud auparavant.
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
         from django.core.exceptions import ValidationError as DjangoValidationError
         user = self.request.user
+        stock = serializer.validated_data.get('stock')
         if not user.can_access_all_nodes:
-            # BUG-022 (écriture) : `serializer.validated_data.get('node')`
-            # donnait la priorité au payload — un GERANT non-HQ pouvait
-            # modifier un stock d'une autre boulangerie en forgeant `node`.
-            # On ignore toute valeur envoyée et on impose le nœud de
-            # l'utilisateur, comme pour ClientViewSet (BUG-025).
+            # BUG-022 (écriture) : on impose le nœud de l'utilisateur.
             node = user.node
+            # BUG-504 : le stock doit appartenir à ce nœud ; 404 sans fuite
+            # d'existence (même réponse qu'un stock inexistant).
+            if stock is not None and stock.node_id != node.pk:
+                raise NotFound('Stock introuvable.')
         else:
-            node = serializer.validated_data.get('node') or user.node
-            if node is None:
-                stock = serializer.validated_data.get('stock')
-                if stock:
-                    node = stock.node
+            node = serializer.validated_data.get('node') or (stock.node if stock else None) or user.node
+            if stock is not None and stock.node_id != node.pk:
+                raise ValidationError({'detail': 'Le stock ne correspond pas à la boulangerie indiquée.'})
         try:
             serializer.save(
                 recorded_by=user,
@@ -1530,10 +1563,13 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             stock__consumable_type='FLOUR',
         ).select_related('node', 'stock', 'recorded_by').order_by('-created_at')
 
-        if node_id:
-            qs = qs.filter(node_id=node_id)
-        elif not request.user.can_access_all_nodes and request.user.node_id:
+        # BUG-505 : `?node=` n'est honoré que pour le siège.
+        if not request.user.can_access_all_nodes and request.user.node_id:
             qs = qs.filter(node=request.user.node)
+        elif is_node_less_non_hq(request.user):
+            qs = qs.none()
+        elif node_id:
+            qs = qs.filter(node_id=node_id)
         if month:
             qs = qs.filter(created_at__month=month)
         if year:
@@ -1555,7 +1591,7 @@ class ConsumableMovementViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         ])
 
 
-class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     """Physical inventory counts per bakery per consumable."""
     queryset = ConsumableCount.objects.select_related('node', 'counted_by').all()
     serializer_class = ConsumableCountSerializer
@@ -1569,6 +1605,8 @@ class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
@@ -1598,7 +1636,7 @@ class ConsumableCountViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         )
 
 
-class BreadTransferViewSet(viewsets.ModelViewSet):
+class BreadTransferViewSet(NoNodeGuardMixin, viewsets.ModelViewSet):
     queryset = BreadTransfer.objects.select_related(
         'from_node', 'to_node', 'bread_price', 'initiated_by', 'confirmed_by'
     ).all()
@@ -1621,6 +1659,8 @@ class BreadTransferViewSet(viewsets.ModelViewSet):
             # où la sienne est impliquée, pas ceux entre deux autres nœuds.
             from django.db.models import Q
             qs = qs.filter(Q(from_node=user.node) | Q(to_node=user.node))
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def _check_node_involved(self, request, *allowed_nodes):
@@ -2016,6 +2056,8 @@ class BreadStockViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
 
@@ -2208,7 +2250,7 @@ class BreadStockByDateView(APIView):
         })
 
 
-class BreadDisposalViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
+class BreadDisposalViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = BreadDisposal.objects.select_related('node', 'session', 'bread_price').all()
     serializer_class = BreadDisposalSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
@@ -2221,6 +2263,8 @@ class BreadDisposalViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
         user = self.request.user
         if not user.can_access_all_nodes and user.node_id:
             qs = qs.filter(node=user.node)
+        elif is_node_less_non_hq(user):
+            qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
 
     def perform_create(self, serializer):
@@ -2335,6 +2379,15 @@ def _resolve_node(node_param):
     except (TypeError, ValueError):
         pass
     return Node.objects.filter(code__iexact=str(node_param)).first()
+
+
+def _full_price_from_frozen_soldee(line):
+    """BUG-508 : prix plein d'une ligne, lu sur la ligne (`full_unit_price`, figé
+    à la création) : indépendant des changements de tarif et de l'arrondi du
+    75 %. Repli (ligne jamais enregistrée) : tarif courant."""
+    if line.full_unit_price is not None:
+        return Decimal(line.full_unit_price)
+    return Decimal(line.bread_price.unit_price)
 
 
 def _build_daily_closure_report(node, report_date=None):
@@ -2471,7 +2524,7 @@ def _build_daily_closure_report(node, report_date=None):
         entry = regularisation_by_bp.setdefault(line.bread_price_id, {'qty': 0, 'fc': Decimal('0.00')})
         entry['qty'] += line.quantity or 0
         entry['fc'] += (
-            Decimal(line.quantity) * Decimal(line.bread_price.unit_price)
+            Decimal(line.quantity) * _full_price_from_frozen_soldee(line)
             if line.invoice.is_soldee else Decimal(line.line_total)
         )
 
@@ -2562,6 +2615,7 @@ def _build_daily_closure_report(node, report_date=None):
     # Absence de confirmation pour ce jour/équipe = comportement auto-dérivé
     # strictement inchangé (rétro-compatibilité totale).
     confirmed_reste_du_hier_by_team_bp = {}
+    day_team_confirmed_at_by_bp = {}  # BUG-509
     handover_confirmations = []
     # BUG-247 : reste de FIN DE JOURNÉE (rotation) = dernier reste déclaré de la
     # date, une fois TOUTES les sessions de la date clôturées ; tant qu'une
@@ -2587,6 +2641,8 @@ def _build_daily_closure_report(node, report_date=None):
             continue
         for line in confirmation.lines.all():
             confirmed_reste_du_hier_by_team_bp[(confirmation.team, line.bread_price_id)] = line.qty_confirmed
+            if rotation:
+                day_team_confirmed_at_by_bp[line.bread_price_id] = confirmation.confirmed_at
     confirmed_bp_ids_any_team = {bp_id for (_team, bp_id) in confirmed_reste_du_hier_by_team_bp}
     # BUG-304 : reste d'hier du JOUR (indépendant des équipes) hors rotation =
     # stock de départ confirmé le plus tôt dans la journée, sinon dernier reste
@@ -2694,6 +2750,12 @@ def _build_daily_closure_report(node, report_date=None):
             handover_adjust = 0
             for confirmed_at, qty_by_bp in handover_confirmations:
                 if bp_id not in qty_by_bp:
+                    continue
+                # BUG-509 : une confirmation de l'équipe de service du jour,
+                # POSTÉRIEURE à celle de relève, fait foi (dernière valeur
+                # confirmée) : l'écart de relève antérieur est déjà absorbé.
+                day_conf_at = day_team_confirmed_at_by_bp.get(bp_id)
+                if day_conf_at is not None and confirmed_at <= day_conf_at:
                     continue
                 before = (
                     DailyBreadStockSnapshot.objects

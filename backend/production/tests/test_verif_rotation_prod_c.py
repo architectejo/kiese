@@ -258,7 +258,6 @@ class Bug191Tests(_Base):
         self.assertFalse(r.data['needs_confirmation'], r.data)
         self.assertEqual(r.data['team'], 'A')
 
-    @expectedFailure  # BUG-509
     def test_reconfirmation_by_new_team_after_correction_is_not_double_adjusted(self):
         """API seule (la boîte ne se rouvre pas) : B confirme 8, corrigé en A, A confirme 9 : le départ
         de la journée doit valoir la dernière valeur confirmée (-9), pas un mélange (-7)."""
@@ -527,7 +526,6 @@ class Bug194Tests(_Base):
                     bad.append((body, r.status_code))
         return bad
 
-    @expectedFailure  # BUG-510
     def test_close_remaining_inner_types_never_500(self):
         self.assertEqual(self._close_500s(), [])
 
@@ -704,7 +702,6 @@ class Bug185Tests(_ReportBase):
         self.assertEqual(self._cat(r1, self.bp300)['regularisation']['fc'], '3000.00')
         self.assertEqual(self._cat(r0, self.bp300)['regularisation']['fc'], '0.00')
 
-    @expectedFailure  # BUG-508
     def test_rg_soldee_full_price_follows_frozen_price_after_tariff_change(self):
         """Une RG soldée est valorisée « prix plein ». Après un changement de tarif, le rapport d'une
         journée passée ne doit pas bouger (comme une RG non soldée, qui lit le prix figé)."""
