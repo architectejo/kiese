@@ -215,7 +215,8 @@ def build_outbound_payload(node_code):
         for i in invoices_qs
     ]
     invoice_lines = [
-        {'id': str(l.id), 'invoice': str(l.invoice_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity}
+        {'id': str(l.id), 'invoice': str(l.invoice_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity,
+         'unit_price': _dec(l.unit_price), 'full_unit_price': _dec(l.full_unit_price)}
         for i in invoices_qs for l in i.lines.all()
     ]
 
