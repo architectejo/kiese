@@ -353,7 +353,7 @@ class RotationDefaultsTests(_Base):
     def test_future_closure_date_refused_and_current_calendar_date_accepted(self):
         with Clock(J1, 3, 0):
             self.assertEqual(self.closure({'date': str(J1 + timedelta(days=1))}).status_code, 400)  # futur
-            self.assertEqual(self.closure({'date': str(J1)}).status_code, 201)   # jour calendaire courant (03:00)
+            self.assertEqual(self.closure({'date': str(J1), 'bills_50': 0}).status_code, 201)   # jour calendaire courant (03:00)
             self.assertEqual(self.closure({'date': str(J)}).status_code, 400)    # veille : passé sans réglage
 
 

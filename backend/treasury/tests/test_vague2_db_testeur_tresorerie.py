@@ -232,14 +232,14 @@ class DisputedTransferBlocksClosureTests(TestCase):
     def test_other_bakery_not_blocked(self):
         k4 = make_node(code='K4', name='LOMA')
         g4 = make_user('GERANT', node=k4, username='g_k4_tr')
-        r = _api(g4).post('/api/treasury/closures/', {'date': '2026-11-09'}, format='json')
+        r = _api(g4).post('/api/treasury/closures/', {'date': '2026-11-09', 'bills_50': 0}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
 
     def test_resolution_by_emitter_lifts_block(self):
         r = _api(self.g2).post(f'/api/production/transfers/{self.tr.id}/resolve_dispute/',
                                {'resolution': 'ALIGN_ON_RECEIVED', 'reason': 'ZZ recompte'}, format='json')
         self.assertEqual(r.status_code, 200, r.content)
-        r = _api(self.gerant).post('/api/treasury/closures/', {'date': '2026-11-09'}, format='json')
+        r = _api(self.gerant).post('/api/treasury/closures/', {'date': '2026-11-09', 'bills_50': 0}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(_api(self.comptable).post(
             f'/api/treasury/closures/{self.closure.id}/push_to_cashbook/').status_code, 201)
@@ -262,7 +262,7 @@ class DisputedTransferBlocksClosureTests(TestCase):
     def test_cancelled_transfer_does_not_block(self):
         self.tr.transfer_status = BreadTransfer.TransferStatus.CANCELLED
         self.tr.save()
-        self.assertEqual(_api(self.gerant).post('/api/treasury/closures/', {'date': '2026-11-09'}, format='json').status_code, 201)
+        self.assertEqual(_api(self.gerant).post('/api/treasury/closures/', {'date': '2026-11-09', 'bills_50': 0}, format='json').status_code, 201)
 
 
 class MidnightWindowTests(TestCase):
@@ -304,7 +304,7 @@ class MidnightWindowTests(TestCase):
     def test_closure_of_calendar_day_has_same_cash(self):
         node, gerant, r = self._setup(True)
         with mock.patch('django.utils.timezone.now', return_value=self.NOW_UTC):
-            r = _api(gerant).post('/api/treasury/closures/', {'date': '2026-11-13'}, format='json')
+            r = _api(gerant).post('/api/treasury/closures/', {'date': '2026-11-13', 'bills_50': 0}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(Decimal(r.json()['total_entries']), Decimal('1000'))
 

@@ -8,7 +8,7 @@ from django.db.models import ProtectedError
 from django.db.models import Sum, F, Q
 from django.utils import timezone
 from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
-from kiese.node_guard import NoNodeGuardMixin, resolve_node_param
+from kiese.node_guard import NoNodeGuardMixin, resolve_node_param, parse_date_param
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -64,6 +64,34 @@ def _hq_node_filter_id(raw):
     if bad is not None:
         raise ValidationError({'detail': bad.data['detail']})
     return node.pk
+
+
+def _body_node(raw, default):
+    """BUG-810 : `node` du corps d'une requête siège. Illisible ou inconnu -> 400
+    {"detail"} (jamais de ValueError -> 500). Vide -> `default`."""
+    if raw in (None, ''):
+        return default
+    node, bad = resolve_node_param(raw)
+    if bad is not None:
+        raise ValidationError({'detail': bad.data['detail']})
+    return node
+
+
+def _date_param(params, name):
+    """BUG-818 : filtre de période AAAA-MM-JJ -> date, ou None si absent ; 400 si illisible."""
+    raw = params.get(name)
+    if not raw:
+        return None
+    value, err = parse_date_param(raw, name)
+    if err:
+        raise ValidationError({'detail': err})
+    return value
+
+
+def _refuse_future_date(value, node, label):
+    """BUG-813/817 : une date future est toujours refusée (journée de travail du nœud)."""
+    if value is not None and value > work_date_for(node):
+        raise ValidationError({'detail': f"{label} ne peut pas être une date future ({value})."})
 
 
 def _default_work_date(request):
@@ -225,6 +253,15 @@ def append_cashbook_entry(validate_balance=None, **entry_kwargs) -> CashbookEntr
     raise last_exc
 
 
+def _refuse_if_closure_confirmed(node, day):
+    """BUG-813 : une dépense ne peut ni naître, ni changer, ni disparaître un jour dont la
+    clôture est confirmée (le net et l'écart confirmés par le comptable seraient périmés)."""
+    if day is not None and CashClosure.objects.filter(node=node, date=day, is_validated=True).exists():
+        raise ValidationError({'detail': (
+            f"La clôture de {node.code} du {day} est déjà confirmée : les dépenses de ce jour "
+            "ne peuvent plus être ajoutées, modifiées ni supprimées.")})
+
+
 class LocalExpenseViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
     queryset = LocalExpense.objects.select_related('node', 'gerant').all()
     serializer_class = LocalExpenseSerializer
@@ -260,20 +297,30 @@ class LocalExpenseViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         user = self.request.user
         node = user.node
         if user.can_access_all_nodes:
-            node_id = self.request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            node = _body_node(self.request.data.get('node'), node)
         if not node:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'node': 'Boulangerie requise. Sélectionnez une succursale dans le filtre.'})
+        # BUG-813 : date future refusée ; jour de clôture confirmée figé.
+        _refuse_future_date(serializer.validated_data.get('date'), node, "La date de la dépense")
+        _refuse_if_closure_confirmed(node, serializer.validated_data.get('date'))
         serializer.save(
             gerant=user,
             node=node,
             node_origin=node.code,
         )
+
+    def perform_update(self, serializer):
+        inst = serializer.instance
+        new_date = serializer.validated_data.get('date', inst.date)
+        _refuse_future_date(new_date, inst.node, "La date de la dépense")
+        _refuse_if_closure_confirmed(inst.node, inst.date)
+        _refuse_if_closure_confirmed(inst.node, new_date)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        _refuse_if_closure_confirmed(instance.node, instance.date)
+        instance.delete()
 
 
 class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
@@ -335,6 +382,9 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             node = serializer.validated_data.get('node') or user.node
         if not node:
             raise ValidationError({'detail': 'Boulangerie requise.'})
+        # BUG-812 : équipes A et B uniquement (CLAUDE.md 5.2).
+        if user.team not in ('A', 'B'):
+            raise ValidationError({'detail': "Équipe A ou B requise pour créer un rapport facturier."})
         # BUG-560 : l'unicité (node, team, date) est validée sur l'équipe du CORPS,
         # mais `team=user.team` est enregistrée : contrôler l'équipe réelle.
         report_date = serializer.validated_data.get('date')
@@ -382,12 +432,7 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         user = request.user
         node = user.node
         if user.can_access_all_nodes:
-            node_id = request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            node = _body_node(request.data.get('node'), node)
 
         requested_date_raw = request.data.get('date')
         if requested_date_raw:
@@ -440,6 +485,15 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
 # BUG-201 : borne des montants représentables (DecimalField 14,2).
 _MAX_MONEY = Decimal('999999999999.99')
 _CLOSURE_MONEY_DEFER = ('physical_cash_total', 'cash_gap', 'net_cash')
+_BILLS_FIELDS_NAMES = ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                       'bills_500', 'bills_200', 'bills_100', 'bills_50')
+
+
+def _check_closure_totals(total_entries, total_expenses):
+    """BUG-819 : les totaux calculés doivent rester représentables (DecimalField 14,2)."""
+    for label, value in (('des entrées', total_entries), ('des dépenses', total_expenses)):
+        if Decimal(value or 0) > _MAX_MONEY:
+            raise ValidationError({'detail': f"Clôture impossible : le total {label} du jour dépasse le montant maximal autorisé."})
 
 
 class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets.ModelViewSet):
@@ -486,12 +540,7 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         user = self.request.user
         node = user.node
         if user.can_access_all_nodes:
-            node_id = self.request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            node = _body_node(self.request.data.get('node'), node)
         if not node:
             raise ValidationError({'node': 'Boulangerie requise. Sélectionnez une succursale dans le filtre.'})
         target_date = serializer.validated_data.get('date', work_date_for(node))
@@ -536,6 +585,14 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         total_expenses = LocalExpense.objects.filter(
             node=node, date=target_date
         ).aggregate(s=Sum('amount'))['s'] or 0
+
+        # BUG-819 : somme hors plage DecimalField(14,2) -> 400 avant toute écriture.
+        _check_closure_totals(total_entries, total_expenses)
+
+        # BUG-811 (a) : la ventilation des billets est obligatoire (CLAUDE.md 5.5) :
+        # au moins une des 8 coupures doit figurer dans le corps (0 explicite accepté).
+        if not any(f in serializer.initial_data for f in _BILLS_FIELDS_NAMES):
+            raise ValidationError({'detail': "Le billetage est obligatoire : renseignez les 8 coupures (0 si aucun billet)."})
 
         try:
             with transaction.atomic():
@@ -628,19 +685,22 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         if date_error:
             raise ValidationError({'detail': date_error})
 
-        # Gérant resubmits after rejection — clear the rejection flag
-        closure = serializer.save(is_rejected=False, rejection_reason='')
-        # Re-aggregate in case expenses changed since creation
+        node = serializer.instance.node
         total_entries = FacturierReport.objects.filter(
-            node=closure.node, date=closure.date
+            node=node, date=target_date
         ).aggregate(s=Sum('total_cash_sales'))['s'] or 0
         total_expenses = LocalExpense.objects.filter(
-            node=closure.node, date=closure.date
+            node=node, date=target_date
         ).aggregate(s=Sum('amount'))['s'] or 0
-        closure.total_entries  = total_entries
-        closure.total_expenses = total_expenses
-        closure.compute_physical_cash()
-        closure.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'])
+        _check_closure_totals(total_entries, total_expenses)  # BUG-819
+
+        # Gérant resubmits after rejection — clear the rejection flag
+        with transaction.atomic():
+            closure = serializer.save(is_rejected=False, rejection_reason='')
+            closure.total_entries  = total_entries
+            closure.total_expenses = total_expenses
+            closure.compute_physical_cash()
+            closure.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'])
 
     @action(detail=True, methods=['post'], permission_classes=[IsHeadquarters])
     def validate(self, request, pk=None):
@@ -759,8 +819,8 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         params = self.request.query_params
-        date_from = params.get('date_from')
-        date_to   = params.get('date_to')
+        date_from = _date_param(params, 'date_from')
+        date_to   = _date_param(params, 'date_to')
         if date_from:
             qs = qs.filter(date__gte=date_from)
         if date_to:
@@ -805,8 +865,8 @@ class CashbookEntryViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def period_summary(self, request):
         """Aggregate cashbook by node for a date range."""
-        date_from = request.query_params.get('date_from', str(timezone.localdate().replace(day=1)))
-        date_to   = request.query_params.get('date_to',   str(timezone.localdate()))
+        date_from = _date_param(request.query_params, 'date_from') or timezone.localdate().replace(day=1)
+        date_to   = _date_param(request.query_params, 'date_to') or timezone.localdate()
         qs = self.get_queryset().filter(date__gte=date_from, date__lte=date_to)
         summary = qs.order_by().values('node__code', 'node__name').annotate(
             total_entries=Sum('entry_amount'),
@@ -836,6 +896,9 @@ class DisbursementVoucherViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, v
     filterset_fields = ['date']
     ordering         = ['-date', '-created_at', '-pk']  # BUG-172/176
     permission_classes = [IsHeadquarters]
+    # BUG-816 : ajout seul. Un bordereau est lié à une écriture hachée du livre
+    # (`source_bordereau`, `exit_amount`) : PUT/PATCH/DELETE rompraient la chaîne.
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def perform_create(self, serializer):
         from rest_framework.exceptions import ValidationError
@@ -888,8 +951,8 @@ class DisbursementVoucherViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, v
     @action(detail=False, methods=['get'], permission_classes=[IsHeadquarters])
     def final_report(self, request):
         """Bordereau final — synthèse imprimable des bordereaux d'une période + solde restant."""
-        date_from = request.query_params.get('date_from')
-        date_to   = request.query_params.get('date_to')
+        date_from = _date_param(request.query_params, 'date_from')
+        date_to   = _date_param(request.query_params, 'date_to')
         qs = self.get_queryset()
         if date_from:
             qs = qs.filter(date__gte=date_from)
@@ -1048,41 +1111,15 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         user = self.request.user
         node = user.node
         if user.can_access_all_nodes:
-            node_id = self.request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            node = _body_node(self.request.data.get('node'), node)
         if not node:
             raise ValidationError({'node': 'Boulangerie requise.'})
 
         target_date = serializer.validated_data.get('date', work_date_for(node))
         entry_amount = serializer.validated_data.get('entry_amount', Decimal('0'))
         exit_amount  = serializer.validated_data.get('exit_amount',  Decimal('0'))
-
-        # Determine month_carried (first entry this month = last balance of previous month)
-        prev_in_month = (
-            JournalEntry.objects
-            .filter(node=node, date__year=target_date.year, date__month=target_date.month)
-            .order_by('-date', '-created_at')
-            .first()
-        )
-
-        if prev_in_month:
-            month_carried   = prev_in_month.month_carried
-            running_balance = prev_in_month.running_balance + entry_amount - exit_amount
-        else:
-            # First entry this month: carry balance from last entry of previous month
-            prev_month_entry = (
-                JournalEntry.objects
-                .filter(node=node)
-                .exclude(date__year=target_date.year, date__month=target_date.month)
-                .order_by('-date', '-created_at')
-                .first()
-            )
-            month_carried   = prev_month_entry.running_balance if prev_month_entry else Decimal('0')
-            running_balance = month_carried + entry_amount - exit_amount
+        # BUG-817 (a) : date future refusée (le passé reste accepté, recalcul ci-dessous).
+        _refuse_future_date(target_date, node, "La date de l'écriture")
 
         imput = serializer.validated_data.get('imput')
 
@@ -1136,15 +1173,45 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
                         node_origin=node.code,
                     )
 
-        entry = serializer.save(
-            node=node,
-            recorded_by=user,
-            running_balance=running_balance,
-            month_carried=month_carried,
-            reconciled_closure=reconciled_closure,
-            is_reconciled=is_reconciled,
-            reconciliation_gap=reconciliation_gap,
-        )
+        # BUG-817 (b) : solde progressif calculé À LA DATE de la saisie (ordre du journal :
+        # date, created_at, pk), puis recalcul des écritures postérieures. Le journal n'est
+        # pas haché (la chaîne SHA-256 ne concerne que le livre de caisse direction) : ce
+        # recalcul ne peut donc pas casser une chaîne.
+        with transaction.atomic():
+            Node.objects.select_for_update().filter(pk=node.pk).first()  # sérialise les saisies du nœud
+            predecessor = (
+                JournalEntry.objects.filter(node=node, date__lte=target_date)
+                .order_by('-date', '-created_at', '-pk').first()
+            )
+            if predecessor is None:
+                month_carried, base = Decimal('0'), Decimal('0')
+            elif (predecessor.date.year, predecessor.date.month) == (target_date.year, target_date.month):
+                month_carried, base = predecessor.month_carried, predecessor.running_balance
+            else:
+                month_carried, base = predecessor.running_balance, predecessor.running_balance
+            running_balance = base + entry_amount - exit_amount
+            entry = serializer.save(
+                node=node,
+                recorded_by=user,
+                running_balance=running_balance,
+                month_carried=month_carried,
+                reconciled_closure=reconciled_closure,
+                is_reconciled=is_reconciled,
+                reconciliation_gap=reconciliation_gap,
+            )
+            later = list(
+                JournalEntry.objects.filter(node=node, date__gt=target_date)
+                .order_by('date', 'created_at', 'pk')
+            )
+            prev_date, bal, carried = target_date, running_balance, month_carried
+            for e in later:
+                if (e.date.year, e.date.month) != (prev_date.year, prev_date.month):
+                    carried = bal
+                bal = bal + e.entry_amount - e.exit_amount
+                e.month_carried, e.running_balance = carried, bal
+                prev_date = e.date
+            if later:
+                JournalEntry.objects.bulk_update(later, ['month_carried', 'running_balance'])
         if imput == 'CA':
             log_activity(
                 user, 'JOURNAL_CA_ENTRY',
@@ -1200,6 +1267,8 @@ class JournalEntryViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
                 {'detail': "Format de date invalide (attendu AAAA-MM-JJ)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if request.user.can_access_all_nodes:
+            node_id = _hq_node_filter_id(node_id)  # BUG-818 : 400 si illisible/inconnu
 
         closure = CashClosure.objects.defer(*_CLOSURE_MONEY_DEFER).filter(node_id=node_id, date=target_date).first()
         if not closure:
@@ -1313,17 +1382,14 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         user = self.request.user
         node = user.node
         if user.can_access_all_nodes:
-            node_id = self.request.data.get('node')
-            if node_id:
-                try:
-                    node = Node.objects.get(pk=node_id)
-                except Node.DoesNotExist:
-                    pass
+            node = _body_node(self.request.data.get('node'), node)
         if not node:
             raise DRFValidationError({'node': 'Boulangerie requise.'})
 
         daily_revenue  = serializer.validated_data.get('daily_revenue', Decimal('0'))
-        savings_rate   = serializer.validated_data.get('savings_rate') or Decimal(str(Config.get_instance().savings_rate))
+        savings_rate   = serializer.validated_data.get('savings_rate')
+        if savings_rate is None:  # BUG-814 : un taux 0 explicite est honoré
+            savings_rate = Decimal(str(Config.get_instance().savings_rate))
         savings_amount = (daily_revenue * savings_rate).quantize(Decimal('0.01'))
         date           = serializer.validated_data.get('date')
         flour_sacks    = serializer.validated_data.get('flour_sacks', Decimal('0'))
@@ -1344,6 +1410,11 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
         serializer.instance = obj
 
     def perform_update(self, serializer):
+        # BUG-815 : `validators = []` retire le contrôle d'unicité (node, date) du serializer.
+        new_date = serializer.validated_data.get('date', serializer.instance.date)
+        if DailySavings.objects.filter(node=serializer.instance.node, date=new_date).exclude(
+                pk=serializer.instance.pk).exists():
+            raise ValidationError({'detail': f"Une épargne existe déjà pour {serializer.instance.node.code} à la date {new_date}."})
         instance = serializer.save()
         daily_revenue  = instance.daily_revenue
         savings_rate   = instance.savings_rate
