@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
 from core.models import Config, Node, BreadPrice
-from core.permissions import IsGerant, IsHeadquarters, IsFacturier
+from core.permissions import IsGerant, IsGerantWriteNoAccountant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
 from core.workday import (
     work_date_for, work_time_info, current_team, team_for_work_date, team_at_day_start,
@@ -1527,7 +1527,8 @@ class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vi
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['node', 'movement_type', 'stock']
     ordering         = ['-created_at']
-    permission_classes = [IsGerant]
+    # BUG-706 : écriture interdite au COMPTABLE (lecture seule).
+    permission_classes = [IsGerantWriteNoAccountant]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -1538,6 +1539,16 @@ class ConsumableMovementViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vi
         elif is_node_less_non_hq(user):
             qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
         return qs
+
+    def perform_destroy(self, instance):
+        # BUG-707 : trace de la suppression (l'effet inverse sur le stock est
+        # appliqué par ConsumableMovement.delete, BUG-222).
+        desc = (f"Suppression mouvement {instance.movement_type} de {instance.quantity} "
+                f"(stock {instance.stock_id}, boulangerie {instance.node.code if instance.node_id else '-'}, "
+                f"mouvement {instance.pk})")
+        node_code = instance.node.code if instance.node_id else 'CLOUD'
+        super().perform_destroy(instance)
+        log_activity(self.request.user, 'Suppression mouvement de stock', desc, node_origin=node_code)
 
     def perform_create(self, serializer):
         from django.core.exceptions import ValidationError as DjangoValidationError

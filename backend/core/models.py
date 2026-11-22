@@ -574,10 +574,12 @@ class ColisDistribution(models.Model):
 
     def compute_total(self):
         from decimal import Decimal
+        # BUG-701 : les défauts d'une instance non rechargée sont des chaînes
+        # ('0.00') ; les convertir évite la concaténation de textes.
         self.total_value = (
-            (self.rice_value  or Decimal('0')) +
-            (self.meat_value  or Decimal('0')) +
-            (self.cash_amount or Decimal('0'))
+            Decimal(str(self.rice_value  or '0')) +
+            Decimal(str(self.meat_value  or '0')) +
+            Decimal(str(self.cash_amount or '0'))
         )
 
 

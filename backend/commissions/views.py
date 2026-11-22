@@ -54,7 +54,7 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                             status=status.HTTP_400_BAD_REQUEST)
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
+    @action(detail=False, methods=['get'], permission_classes=[IsHeadquarters])  # BUG-705 : siège uniquement
     def history(self, request):
         """Last N commission periods for a node with aggregates (total CM, net, paid)."""
         from core.mixins import parse_node_param
@@ -398,7 +398,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             )
         return Response(ClientCommissionSerializer(commission).data)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsGerant])
+    @action(detail=False, methods=['get'], permission_classes=[IsHeadquarters])  # BUG-705 : siège uniquement
     def payroll_listing(self, request):
         """Return unpaid commissions for a given period (for the pay register)."""
         period_id = request.query_params.get('period')
