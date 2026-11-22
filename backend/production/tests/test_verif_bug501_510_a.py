@@ -107,7 +107,6 @@ class Bug502CounterTests(TestCase):
         self.assertEqual(st.quantity, D('20') + net)
 
     # Point signalé par le dev : _check_overconsumption approximative.
-    @expectedFailure  # BUG-512
     def test_overconsumption_alert_on_second_declaration_uses_added_sacks(self):
         """Historique : 2 sacs / 100 g de sel (50 g/sac). Aujourd'hui : 1 sac + 50 g (RAS),
         puis 1 sac + 120 g (120 g/sac = 2,4x la moyenne, seuil 2x) => alerte attendue.
@@ -227,7 +226,6 @@ class Bug501CounterTests(TestCase):
 # BUG-508 / loss : rapport de clôture
 # --------------------------------------------------------------------------
 class Bug508CounterTests(R._ReportBase):
-    @expectedFailure  # BUG-508 (rouvert : arrondi 150/50 FC)
     def test_rg_soldee_with_price_150_stable_after_tariff_change(self):
         """150 FC -> prix figé 113 (112,5 arrondi) ; 113/0,75 = 150,67 -> 151 si le tarif a changé."""
         bp = make_bread_price('VR_150', 'Pain 150 VR', 150)
@@ -241,7 +239,6 @@ class Bug508CounterTests(R._ReportBase):
         self.assertEqual(before, '1500.00')
         self.assertEqual(after, before)
 
-    @expectedFailure  # BUG-508 (rouvert : arrondi 150/50 FC)
     def test_rg_soldee_with_price_50_stable_after_tariff_change(self):
         bp = make_bread_price('VR_50', 'Pain 50 VR', 50)
         with R._now(10):
@@ -273,7 +270,6 @@ class Bug508CounterTests(R._ReportBase):
             fc = self._cat(self._report(R.J), self.bp500)['regularisation']['fc']
         self.assertEqual(fc, '3000.00')
 
-    @expectedFailure  # BUG-363
     def test_soldee_loss_of_past_day_stable_after_tariff_change(self):
         """Vente soldée 10 x 300 : prix figé 225, perte 750. Après passage du tarif à 400,
         `InvoiceLine.loss` relit le catalogue : perte = (400-225) x 10 = 1750."""

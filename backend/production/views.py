@@ -256,9 +256,12 @@ def _record_consumable_exits(session, user, extra_consumables=None, flour_sacks=
 _OVERCONSUMPTION_FACTOR = 2
 
 
-def _check_overconsumption(session, processed_entries):
+def _check_overconsumption(session, processed_entries, sacks_added=None):
+    """BUG-512 : `processed_entries` = quantités de CETTE déclaration ; le ratio
+    se calcule donc sur les sacs ajoutés par cette déclaration (`sacks_added`),
+    pas sur le cumul de la session. Sans sacs ajoutés : repli sur le cumul."""
     from decimal import Decimal, InvalidOperation
-    sacks = Decimal(str(session.flour_sacks_used or 0))
+    sacks = Decimal(str(sacks_added or session.flour_sacks_used or 0))
     if sacks <= 0:
         return
     node = session.node
@@ -902,7 +905,7 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         except DjangoValidationError as exc:
             raise ValidationError({'detail': exc.messages[0] if hasattr(exc, 'messages') else str(exc)})
 
-        _check_overconsumption(session, processed_entries)
+        _check_overconsumption(session, processed_entries, sacks_added=flour_add)
 
         # BUG-306 : fournée « en cours » (sacs seuls) — aucun pain encore
         # produit, l'écart n'a pas de sens avant la clôture : pas d'alerte.
@@ -2379,21 +2382,12 @@ def _resolve_node(node_param):
 
 
 def _full_price_from_frozen_soldee(line):
-    """BUG-508 : prix plein d'une ligne soldée, déduit du prix FIGÉ (75 % arrondi
-    au franc, cf. `InvoiceLine.save`) pour que le rapport d'une journée passée ne
-    bouge pas après un changement de tarif. En cas d'ambiguïté d'arrondi (deux
-    prix pleins donnent le même prix figé), le tarif courant l'emporte s'il est
-    compatible, sinon on prend le plus proche de unit_price / 0,75."""
-    from sales.models import SOLDEE_PRICE_RATIO
-    frozen = Decimal(line.unit_price)
-
-    def _freeze(p):
-        return (Decimal(p) * SOLDEE_PRICE_RATIO).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-
-    catalog = Decimal(line.bread_price.unit_price)
-    if _freeze(catalog) == frozen:
-        return catalog
-    return (frozen / SOLDEE_PRICE_RATIO).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+    """BUG-508 : prix plein d'une ligne, lu sur la ligne (`full_unit_price`, figé
+    à la création) : indépendant des changements de tarif et de l'arrondi du
+    75 %. Repli (ligne jamais enregistrée) : tarif courant."""
+    if line.full_unit_price is not None:
+        return Decimal(line.full_unit_price)
+    return Decimal(line.bread_price.unit_price)
 
 
 def _build_daily_closure_report(node, report_date=None):

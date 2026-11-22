@@ -223,12 +223,10 @@ class Bug324Rejeu(Base):
     def test_valeurs_non_numeriques_rejetees(self):
         self._assert_rejected(['abc', '2.5', [1], {'a': 1}, float('nan'), '1e3'])
 
-    @expectedFailure
     def test_bug331_negatifs_et_enormes_rejetes_sans_exception(self):
         """BUG-331 : -3, inf, 10**30 -> IntegrityError/OverflowError/InvalidOperation (500)."""
         self._assert_rejected([-3, '-3', float('inf'), 10 ** 30])
 
-    @expectedFailure
     def test_bug332_non_entiers_et_booleens_rejetes(self):
         """BUG-332 : 2.5 tronque en 2 (ACCEPTED), True ignore en silence (ACCEPTED)."""
         self._assert_rejected([2.5, True])
