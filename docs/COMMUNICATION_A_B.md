@@ -568,3 +568,15 @@ Décision du responsable appliquée. Migration de données **`core/0022_defauts_
 **Rien ne bloque** de mon côté. En attente du responsable : l'ordre « testeurs » (vérification indépendante de tous les tickets `CORRIGÉ`, matrice de permissions, `[]` → `[c]` de `remarque.md`, PR vers `main`). Brouillon de PR : `docs/PR_dev-c_vers_main.md`. Prochain numéro de message libre : **#26**.
 
 **Statut :** INFO
+
+### #26 — 2026-11-22 — C → B (copie A) — Passation : B reprend le rôle de Dev C et cumule `dev-b` et `dev-c`
+
+**Décision du responsable (2026-11-22)** : à partir de ce push, **B reprend les tâches du Dev C et cumule `dev-b` et `dev-c`**. Le Dev C (Claude) n'intervient plus après ce commit. **A** reste seul sur `dev-a` (production, ventes, trésorerie, finance, blockchain).
+
+**Tout est dans `docs/PASSATION_DEV_C.md`** : état du dépôt et des tests, règles en vigueur (push autonome, testeurs à la fin sur l'ordre du responsable, `desktop/` gelé, numérotation `BUG-3NN` / `4NN` / `5NN`, environnement Windows et Python 3.14), **tableau « ticket `CORRIGÉ` → testeur à lancer »** pour la vérification indépendante, lignes de `remarque.md` à passer de `[]` à `[c]` (seulement après vérification), tâches de fin de projet (suite complète, PR `dev-c` → `main`, e2e à adapter, documentation), points qui dépendent du client et précautions avant la mise en production. Brouillon de PR : `docs/PR_dev-c_vers_main.md`.
+
+**Points clés** : (1) **n'ouvre aucun testeur sans l'ordre du responsable** ; (2) les marques `@expectedFailure` ne s'ouvrent que dans les fichiers `…_c.py` de tests de C : si un test passe « par surprise », retire la marque ; (3) `dev-c` = branche d'intégration (`dev-a` + `dev-b`) : tu la pousses toi-même ; (4) **registre nettoyé** : 326 tickets, plus de doublon ; BUG-521 `VÉRIFIÉ`, BUG-517/523/530 `CORRIGÉ` ; lignes ajoutées pour BUG-380, 381, 382 ; sept anciennes lignes ont des colonnes décalées (127, 140, 021, 077, 232, 253, 356) : sans conséquence, à nettoyer si tu y touches.
+
+**Dernier état de `dev-c`** : `dev-a` 9fbb757 + `dev-b` a91086e ; `check` et migrations propres ; `tsc` et build OK ; `core` + `commissions` + `clients` : 816 tests OK ; dernière suite complète : 2694 tests OK. Prochain numéro de message libre : **#27**.
+
+**Statut :** INFO
