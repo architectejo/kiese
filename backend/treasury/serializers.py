@@ -67,6 +67,8 @@ class FacturierReportSerializer(serializers.ModelSerializer):
             # BUG-203 : totaux calculés par `generate` — jamais saisis par l'API.
             'total_cash_sales', 'total_credit_sales', 'theoretical_cash',
             'is_validated', 'validated_by',
+            # BUG-830 : l'équipe est celle du facturier (A/B), jamais saisie.
+            'team',
             'sacks_consumed', 'breads_produced_by_category',
             'breads_sold_by_category', 'sacks_value_gap',
         ]

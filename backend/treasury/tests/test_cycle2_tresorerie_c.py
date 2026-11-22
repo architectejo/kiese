@@ -113,7 +113,6 @@ class V560(Base):
 class V810(Base):
     BADNODE = ('abc', [], {}, [1], {'a': 1}, True, 1.5, '1.5', '9' * 30, -1)
 
-    @expectedFailure
     def test_BUG_810_bool_float_node_in_body_never_creates(self):
         calls = [
             ('/api/treasury/closures/', {'date': str(today()), 'bills_50': 1}),
@@ -151,7 +150,6 @@ class V810(Base):
         self.assertEqual(r.status_code, 400)
         self.assertFalse(DisbursementVoucher.objects.exists())
 
-    @expectedFailure
     def test_BUG_830_report_team_patch_not_free(self):
         g = make_user('GERANT', self.n2, team='B')
         r = cl(g).post('/api/treasury/reports/', {'date': str(today()), 'team': 'A'}, format='json')
@@ -220,7 +218,6 @@ class V813(Base):
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.expense(self.g1, '5').status_code, 400)
 
-    @expectedFailure
     def test_BUG_830_report_date_patch_into_confirmed_day_changes_pushed_net_silently(self):
         """BUG-830 : un rapport facturier non valide peut etre re-date (PATCH date) sur un
         jour de cloture CONFIRMEE ; au versement le net/ecart deja confirmes changent sans trace."""
@@ -232,7 +229,6 @@ class V813(Base):
         r = cl(self.g1).patch(f'/api/treasury/reports/{rep.id}/', {'date': str(today())}, format='json')
         self.assertEqual(r.status_code, 400, 'un jour de cloture confirmee doit rester fige : %s' % r.content)
 
-    @expectedFailure
     def test_BUG_830b_report_cannot_be_deleted_on_confirmed_day(self):
         rep = self.report(self.n1, 'A', '5000')
         self.confirm()
@@ -261,7 +257,6 @@ class V814(Base):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(Dc(r.json()['savings_amount']), Dc('0'))
 
-    @expectedFailure
     def test_BUG_815_hq_patch_node_to_node_with_same_date_is_400_not_500(self):
         self.sav(self.g1)
         d2 = self.sav(self.g2).json()
@@ -275,7 +270,6 @@ class V814(Base):
         self.assertEqual(DailySavings.objects.get(node=self.n1).daily_revenue, Dc('5000'))
         self.assertEqual(cl(self.g2).get('/api/treasury/savings/').json()['count'] if isinstance(cl(self.g2).get('/api/treasury/savings/').json(), dict) else len(rows(cl(self.g2).get('/api/treasury/savings/'))), 0)
 
-    @expectedFailure
     def test_BUG_831_savings_future_date_refused(self):
         r = self.sav(self.g1, date=str(today() + timedelta(days=40)))
         self.assertEqual(r.status_code, 400, 'epargne datee dans le futur : %s' % r.status_code)
@@ -327,7 +321,6 @@ class V816(Base):
         for m in ('put', 'patch', 'delete'):
             self.assertEqual(getattr(cl(self.dirn), m)(u, {'bills_50': 9}, format='json').status_code, 405)
 
-    @expectedFailure
     def test_BUG_832_tamper_alerts_are_not_editable_or_deletable(self):
         a = TamperAlert.objects.create(node=self.n1, affected_model='CashbookEntry', description='alerte')
         u = f'/api/blockchain/alerts/{a.id}/'
@@ -393,7 +386,6 @@ class V817(Base):
         r = cl(self.dirn).post('/api/blockchain/snapshots/run_check/', {}, format='json')
         self.assertTrue(r.json()['all_intact'])
 
-    @expectedFailure
     def test_BUG_833_monthly_report_without_node_mixes_nodes_for_hq(self):
         """BUG-833 : sans ?node=, le siege obtient des totaux de TOUS les noeuds mais
         `final_balance`/`month_carried` de l'ecriture la plus recente d'un seul noeud."""
@@ -423,7 +415,6 @@ class V818(Base):
                         bad.append((u, k, b, r.status_code))
         self.assertEqual(bad, [])
 
-    @expectedFailure
     def test_BUG_818_generate_report_date_never_500(self):
         bad = []
         for b in self.BAD + (20261301, [], {}, True, '2026-02-30T10:00'):
@@ -448,7 +439,6 @@ class V818(Base):
                     bad.append((url, b, r.status_code))
         self.assertEqual(bad, [])
 
-    @expectedFailure
     def test_BUG_831_voucher_future_date_refused(self):
         fut = str(today() + timedelta(days=30))
         append_cashbook_entry(node=self.n1, date=today(), piece_number='VC-C1-1', imputation='7000',
@@ -467,7 +457,6 @@ class V819(Base):
         self.assertEqual(r.status_code, 400, r.content)
         self.assertFalse(CashClosure.objects.exists())
 
-    @expectedFailure
     def test_BUG_834_gap_overflow_with_max_expense_is_400_not_500(self):
         """BUG-835 : une seule depense de 999 999 999 999,99 FC + 50 FC de billets :
         net = -BIG, ecart = physique - net = BIG + 50 hors DecimalField(14,2)."""
@@ -475,7 +464,6 @@ class V819(Base):
         r = self.close(self.g1, {'bills_50': 1})
         self.assertLess(r.status_code, 500, 'depassement de l ecart : %s' % r.status_code)
 
-    @expectedFailure
     def test_BUG_834_push_two_max_closures_running_balance_overflow(self):
         """BUG-836 : deux versements de 999 999 999 999,99 FC : solde cumule hors plage -> 500 au
         2e versement (la 1re est bien ecrite)."""
@@ -534,7 +522,6 @@ class Integrite(Base):
         ps = cl(self.dirn).get('/api/treasury/cashbook/period_summary/?date_from=2000-01-01&date_to=2100-01-01').json()
         self.assertEqual(sum(Dc(x['total_entries']) for x in ps) - sum(Dc(x['total_exits']) for x in ps), last.running_balance)
 
-    @expectedFailure
     def test_BUG_835_direction_count_theoretical_balance_ignores_chain_order(self):
         """BUG-837 : versements pousses hors ordre chronologique (J+1 avant J). Le solde
         theorique d'un comptage a la date J+1 doit etre le cumul de toutes les ecritures
@@ -550,7 +537,6 @@ class Integrite(Base):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(Dc(r.json()['theoretical_balance']), Dc('15000'))
 
-    @expectedFailure
     def test_BUG_836_run_check_with_node_filter_blames_unrelated_node(self):
         self.chain3()
         last = CashbookEntry.chain_queryset().last()
@@ -560,7 +546,6 @@ class Integrite(Base):
         self.assertTrue(r['results'][0]['is_intact'], "le noeud %s n'a aucune ecriture altérée : %s" % (other.code, r['results'][0]))
         self.assertFalse(TamperAlert.objects.filter(node=other).exists())
 
-    @expectedFailure
     def test_BUG_836_repeated_checks_duplicate_alerts(self):
         self.chain3()
         e = CashbookEntry.chain_queryset()[0]
@@ -588,13 +573,11 @@ class Integrite(Base):
         a.refresh_from_db()
         self.assertEqual(a.resolved_by_id, self.dirn.id)
 
-    @expectedFailure
     def test_BUG_836_global_status_intact_with_zero_nodes_checked(self):
         gs = cl(self.dirn).get('/api/blockchain/snapshots/global_status/').json()
         self.assertEqual(gs['nodes_checked'], 0)
         self.assertIsNot(gs['all_intact'], True, 'aucune verification faite : "intact" est un faux positif')
 
-    @expectedFailure
     def test_BUG_837_activity_log_on_significant_treasury_actions(self):
         def n():
             return ActivityLog.objects.count()
@@ -617,7 +600,6 @@ class Integrite(Base):
         if n() == b: missing.append('alert resolve')
         self.assertEqual(missing, [])
 
-    @expectedFailure
     def test_BUG_838_no_n_plus_one_on_lists(self):
         def count(url, user):
             with CaptureQueriesContext(connection) as q:
@@ -652,7 +634,6 @@ class Integrite(Base):
 
 
 class Concurrence(Base):
-    @expectedFailure
     def test_BUG_839_stale_push_creates_double_versement(self):
         """BUG-841 : deux versements de la meme cloture (lecture perimee : la seconde requete a lu
         `cashbook_entries` avant que la premiere ait ecrit). Aucune garde ne tient dans la
@@ -671,7 +652,6 @@ class Concurrence(Base):
             pass
         self.assertEqual(CashbookEntry.objects.filter(source_closure_id=c['id']).count(), 1)
 
-    @expectedFailure
     def test_BUG_839_failed_append_leaves_orphan_voucher(self):
         """BUG-842 : si l'ecriture au livre echoue (autre chose qu'un refus de solde), le bon de
         decaissement deja enregistre reste sans ecriture (pas de transaction englobante)."""
@@ -682,7 +662,6 @@ class Concurrence(Base):
             r = cl(self.dirn).post('/api/treasury/vouchers/', {'date': str(today()), 'motif': 'm', 'bills_5000': 2}, format='json')
         self.assertEqual(DisbursementVoucher.objects.count(), 0, 'bon sans ecriture au livre (statut %s)' % r.status_code)
 
-    @expectedFailure
     def test_BUG_839_failed_append_leaves_closure_modified(self):
         """BUG-843 : `promote_closure_to_cashbook` recalcule et ENREGISTRE la cloture confirmee avant
         l'ecriture au livre, hors transaction : si l'ecriture echoue, la cloture confirmee reste
@@ -703,7 +682,6 @@ class Concurrence(Base):
         self.assertFalse(cc.cashbook_entries.exists())
         self.assertEqual(cc.net_cash, Dc('10000'), 'cloture confirmee modifiee sans versement : net=%s' % cc.net_cash)
 
-    @expectedFailure
     def test_BUG_839_validate_confirms_stale_totals_then_push_changes_them(self):
         """BUG-844 : une depense saisie apres la creation de la cloture (jour non encore confirme)
         n'est pas prise en compte a la confirmation ; le versement recalcule ensuite net et ecart de la
@@ -731,7 +709,6 @@ class Concurrence(Base):
 
 
 class ClotureMiseAJour(Base):
-    @expectedFailure
     def test_BUG_815_closure_patch_date_to_existing_day_is_400_not_500(self):
         """BUG-845 : PATCH de `date` d'une cloture infirmee vers le jour d'une autre cloture du meme
         noeud : IntegrityError non rattrapee dans perform_update -> 500."""

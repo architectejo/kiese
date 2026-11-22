@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from core.models import Node
 from core.permissions import IsHeadquarters
+from core.utils import log_activity, create_notification
 from kiese.node_guard import resolve_node_param
 from treasury.hashing import verify_cashbook_chain, check_cashbook_head
 from .models import TamperAlert, BlockchainSnapshot
@@ -86,13 +87,13 @@ def _verify_chain_for_node(node, chain_results=None, head_problem=None) -> dict:
     }
 
 
-class TamperAlertViewSet(viewsets.ModelViewSet):
-    queryset = TamperAlert.objects.all()
+class TamperAlertViewSet(viewsets.ReadOnlyModelViewSet):
+    """BUG-832 : lecture seule + action `resolve`. Une alerte de falsification est une
+    preuve : ni création, ni modification libre, ni suppression via l'API."""
+    queryset = TamperAlert.objects.select_related('node', 'resolved_by').all()  # BUG-838
     serializer_class = TamperAlertSerializer
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'resolve'):
-            return [IsHeadquarters()]
         return [IsHeadquarters()]
 
     def get_queryset(self):
@@ -117,11 +118,16 @@ class TamperAlertViewSet(viewsets.ModelViewSet):
         alert.resolved_by = request.user
         alert.resolved_at = timezone.now()
         alert.save(update_fields=['is_resolved', 'resolved_by', 'resolved_at'])
+        log_activity(  # BUG-837
+            request.user, "Résolution Alerte de Falsification",
+            f"Alerte {alert.node.code} ({alert.affected_model}) marquée résolue.",
+            node_origin=alert.node.code,
+        )
         return Response(TamperAlertSerializer(alert).data)
 
 
 class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = BlockchainSnapshot.objects.all()
+    queryset = BlockchainSnapshot.objects.select_related('node').all()  # BUG-838
     serializer_class = BlockchainSnapshotSerializer
     permission_classes = [IsHeadquarters]
 
@@ -160,7 +166,9 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         # L'anomalie de tête est imputée au nœud de la dernière écriture
         # connue (repli : premier nœud contrôlé).
         head_node = next((n for n in node_list if n.code == head_node_code), None)
-        if head_problem and head_node is None and node_list:
+        # BUG-836 (a) : le repli sur le premier nœud ne vaut que pour un contrôle de TOUS
+        # les nœuds ; avec `node=`, un nœud étranger à l'anomalie n'est jamais accusé.
+        if head_problem and head_node is None and node_list and not node_id:
             head_node = node_list[0]
 
         results = []
@@ -184,16 +192,25 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
             # Create tamper alert if chain broken
             if not stats['is_intact']:
+                description = (
+                    f"{stats['tampered_count']} écriture(s) falsifiée(s) détectée(s) "
+                    f"sur le nœud {node.name}. IDs: {', '.join(stats['tampered_ids'][:5])}"
+                    + (f" {stats['head_problem']}" if stats['head_problem'] else '')
+                )
+                affected_id = ', '.join(stats['tampered_ids'][:10])
+                # BUG-836 (b) : une falsification déjà signalée (alerte ouverte identique)
+                # n'est pas re-signalée à chaque vérification.
+                if TamperAlert.objects.filter(
+                        node=node, affected_model='CashbookEntry', affected_id=affected_id,
+                        description=description, is_resolved=False).exists():
+                    results.append(stats)
+                    continue
                 TamperAlert.objects.create(
                     node=node,
                     affected_model='CashbookEntry',
-                    affected_id=', '.join(stats['tampered_ids'][:10]),
+                    affected_id=affected_id,
                     severity=TamperAlert.Severity.HIGH,
-                    description=(
-                        f"{stats['tampered_count']} écriture(s) falsifiée(s) détectée(s) "
-                        f"sur le nœud {node.name}. IDs: {', '.join(stats['tampered_ids'][:5])}"
-                        + (f" {stats['head_problem']}" if stats['head_problem'] else '')
-                    ),
+                    description=description,
                 )
                 # Notify HQ admin.
                 #
@@ -212,7 +229,6 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
                 # vrai ciblage par rôle dépasse le périmètre BUG-001/002/003
                 # et est signalé au coordinateur dans le rapport plutôt que
                 # tranché ici.
-                from core.utils import create_notification
                 create_notification(
                     title=f"ALERTE BLOCKCHAIN — {node.name}",
                     message=(
@@ -225,6 +241,12 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
             results.append(stats)
 
+        log_activity(  # BUG-837
+            request.user, "Vérification d'intégrité du Livre de Caisse",
+            f"{len(results)} nœud(s) vérifié(s), "
+            f"{sum(1 for r in results if not r['is_intact'])} non intègre(s).",
+            node_origin='CLOUD',
+        )
         return Response({
             'checked_nodes': len(results),
             'check_date':    timezone.localdate(),
@@ -248,6 +270,8 @@ class BlockchainSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({
             'open_alerts':      open_alerts,
             'nodes_checked':    len(summaries),
-            'all_intact':       all(s['is_intact'] for s in summaries),
+            # BUG-836 (c) : aucune vérification effectuée = pas « intact » (all([]) est vrai).
+            'all_intact':       bool(summaries) and all(s['is_intact'] for s in summaries),
+            'never_checked':    not summaries,
             'node_snapshots':   summaries,
         })

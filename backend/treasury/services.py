@@ -14,6 +14,7 @@ DRF `push_to_cashbook`) ou reçue par `/api/sync/push/`.
 from collections import defaultdict
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -40,40 +41,47 @@ def promote_closure_to_cashbook(closure, acting_user=None, node_origin_override=
     exception en réponse appropriée (400 pour l'un, enregistrement
     `REJECTED` pour l'autre).
     """
-    if not closure.is_validated:
-        raise ClosureNotValidatedError(
-            "La clôture doit être validée avant d'être inscrite au livre de caisse."
-        )
-    if closure.cashbook_entries.exists():
-        raise ClosureAlreadyPromotedError(
-            "Cette clôture est déjà inscrite au livre de caisse."
-        )
+    # BUG-839 (a, b) : garde, recalcul et écriture dans UNE transaction, sous verrou de la
+    # clôture ; l'état est relu en base (jamais le cache de prefetch d'une requête périmée).
+    with transaction.atomic():
+        locked = CashClosure.objects.select_for_update().select_related('node').get(pk=closure.pk)
+        if not locked.is_validated:
+            raise ClosureNotValidatedError(
+                "La clôture doit être validée avant d'être inscrite au livre de caisse."
+            )
+        if CashbookEntry.objects.filter(source_closure=locked).exists():
+            raise ClosureAlreadyPromotedError(
+                "Cette clôture est déjà inscrite au livre de caisse."
+            )
 
-    # Re-aggregate in case reports were generated after closure creation
-    fresh_entries = FacturierReport.objects.filter(
-        node=closure.node, date=closure.date
-    ).aggregate(s=Sum('total_cash_sales'))['s'] or 0
-    fresh_expenses = LocalExpense.objects.filter(
-        node=closure.node, date=closure.date
-    ).aggregate(s=Sum('amount'))['s'] or 0
-    if fresh_entries != closure.total_entries or fresh_expenses != closure.total_expenses:
-        closure.total_entries = fresh_entries
-        closure.total_expenses = fresh_expenses
-        closure.compute_physical_cash()
-        closure.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'])
+        # Re-aggregate in case reports were generated after closure creation
+        fresh_entries = FacturierReport.objects.filter(
+            node=locked.node, date=locked.date
+        ).aggregate(s=Sum('total_cash_sales'))['s'] or 0
+        fresh_expenses = LocalExpense.objects.filter(
+            node=locked.node, date=locked.date
+        ).aggregate(s=Sum('amount'))['s'] or 0
+        if fresh_entries != locked.total_entries or fresh_expenses != locked.total_expenses:
+            locked.total_entries = fresh_entries
+            locked.total_expenses = fresh_expenses
+            locked.compute_physical_cash()
+            locked.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'])
 
-    piece = f"VC-{closure.node.code}-{closure.date.strftime('%Y%m%d')}"
-    entry = append_cashbook_entry(
-        node=closure.node,
-        date=closure.date,
-        piece_number=piece,
-        imputation='7000',
-        label=f"Versement Journalier {closure.node.code} {closure.node.name}",
-        entry_amount=closure.net_cash if closure.net_cash >= 0 else Decimal('0'),
-        exit_amount=abs(closure.net_cash) if closure.net_cash < 0 else Decimal('0'),
-        source_closure=closure,
-        node_origin=node_origin_override or closure.node.code,
-    )
+        piece = f"VC-{locked.node.code}-{locked.date.strftime('%Y%m%d')}"
+        entry = append_cashbook_entry(
+            node=locked.node,
+            date=locked.date,
+            piece_number=piece,
+            imputation='7000',
+            label=f"Versement Journalier {locked.node.code} {locked.node.name}",
+            entry_amount=locked.net_cash if locked.net_cash >= 0 else Decimal('0'),
+            exit_amount=abs(locked.net_cash) if locked.net_cash < 0 else Decimal('0'),
+            source_closure=locked,
+            node_origin=node_origin_override or locked.node.code,
+        )
+    # l'objet de l'appelant reflète l'état inscrit
+    for f in ('total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'):
+        setattr(closure, f, getattr(locked, f))
 
     log_activity(
         acting_user, "Écriture Livre de Caisse",
