@@ -16,9 +16,9 @@ Rédigé par le Dev B (qui a cumulé A, B et C pendant l'absence de C). A reste 
 | B1 | Alimentation du stock direction | petit formulaire « Approvisionner le stock direction » (ENTRY sur le stock du nœud `SIEGE`), sinon la vue globale (BUG-386/387) est inutilisable | 30–45 min |
 | B2 | Synchronisation de `ConsumableInventory` | enregistrer le modèle dans `sync/` (BUG-386, hors périmètre noté) | 45 min |
 | B3 | Corrections issues des tickets de C | tout `BUG-5NN` ouvert par C : B corrige avec ses propres tests, passe à `CORRIGÉ` | au fil de l'eau |
-| B4 | Documentation de livraison (B-7) | manuels par rôle, guide d'exploitation (sauvegarde, migrations, incidents), procès-verbal de recette ; **sans** guide d'installation desktop | 1–2 h |
-| B5 | Mise à jour de `docs/PR_dev-c_vers_main.md` | chiffres, migrations (`core/0021-0022`, `production/0027-0028`, `sales/0011-0012`, `blockchain/0002`), tickets | 20 min |
-| B6 | Série complète finale et push | trois groupes, `tsc`, build, `makemigrations --check` | 45 min |
+| B4 | Série complète finale et push | trois groupes, `tsc`, build, `makemigrations --check` | 45 min |
+
+**Reporté à la toute fin (décision du responsable)** : la documentation de livraison (B-7 : manuels par rôle, guide d'exploitation, procès-verbal de recette, sans guide desktop). Elle n'est attribuée à personne pour l'instant ; on la répartira de nouveau quand tout le reste sera terminé.
 
 ## Part de C (vérification indépendante) — **sur l'ordre du responsable**
 
@@ -31,7 +31,7 @@ L'ordre « testeurs » est nécessaire (règle #20/#26). Si le responsable relan
 | C3 | e2e sur un poste avec navigateur | `testeur-e2e` | rejouer 05, 31, 32, 33, 34 et 35 en `--repeat-each=5` ; contrôle visuel 360 / 768 / 1440 px |
 | C4 | `remarque.md` | — | `[]` → `[c]` **seulement** après `VÉRIFIÉ` ; lignes concernées : voir `PASSATION_DEV_C.md` §3.2 + ligne sur les consommables (BUG-386/387) |
 | C5 | Contrôle de cohérence finale | `relecteur-code`, `auditeur-comptable` | dette frontend, résultats financiers (BUG-513/518/520 en attente du client) |
-| C6 | PR `dev-c` → `main` | — | à ouvrir sur l'ordre du responsable, après C1 à C4 verts |
+| C6 | Mise à jour de `docs/PR_dev-c_vers_main.md` puis PR `dev-c` → `main` | — | brouillon : chiffres, migrations (`core/0021-0022`, `production/0027-0028`, `sales/0011-0012`, `blockchain/0002`), tickets ; la PR s'ouvre sur l'ordre du responsable, après C1 à C4 verts |
 
 ## Ce qui ne peut pas avancer (client)
 
@@ -39,12 +39,12 @@ BUG-411/507/253 (livreur), BUG-266/267/268 (commissions), BUG-513/518/520 (tarif
 
 ## Ordre conseillé et durée
 
-1. **B** : B1, B2, B6 partiel, push (environ 2 h).
+1. **B** : B1, B2, puis push (environ 1 h 30).
 2. **C** (en parallèle dès que B a poussé B1/B2, car la vérification porte sur du code stable) : C1 sur les tickets déjà `CORRIGÉ` (3–4 h), C2, C3.
-3. **B** : B4 et B5 pendant que C vérifie, puis B3 au fil des tickets de C.
+3. **B** : B3 au fil des tickets de C, puis B4 (série finale et push) quand C a fini.
 4. **C** : C4 et C6 en dernier.
 
-Durée totale réaliste : **6 à 8 heures** de travail d'agents, dont l'essentiel est du temps de séries de tests (30 à 45 min par série complète sur ce poste). Gain attendu : les deux flux (développement et vérification) tournent en parallèle au lieu de se suivre.
+Durée totale réaliste : **5 à 7 heures** de travail d'agents (sans la documentation, reportée), dont l'essentiel est du temps de séries de tests (30 à 45 min par série complète sur ce poste). Gain attendu : les deux flux (développement et vérification) tournent en parallèle au lieu de se suivre.
 
 ## Point d'attention pour C au démarrage
 
