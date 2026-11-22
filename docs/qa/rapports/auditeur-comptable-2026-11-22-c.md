@@ -158,3 +158,45 @@ Aucune anomalie nouvelle : la chaîne de 6 écritures du scénario (N-1 puis N, 
 
 ## 5. Limites
 Aucun test PostgreSQL (BUG-803 démontré par le schéma, pas par la valeur). Le scénario suppose le mois précédent complet et le même exercice : un seul exercice N et N-1 (pas de clôture d'exercice). Le DOC 1 n'est pas rejoué pour l'ajustement (suspicion notée sur BUG-801).
+
+---
+
+## Cycle test 2 (partie C, finance) - 2026-11-22
+
+Etat 3eb99d1, SQLite, `manage.py test finance` : 102 tests, OK, 9 echecs attendus (7 nouveaux + 2 anciens). `makemigrations --check` : aucun changement. `npx tsc --noEmit` : OK (0 erreur). Tests : `backend/finance/tests/test_audit_c_cycle2_c.py` (18 tests).
+
+### 1. Verification des corrections
+| Ticket | Verification | Resultat |
+|---|---|---|
+| BUG-800 | Scenario chiffre rejoue (N-1 : caisse 500 / creances 1 500 ; exercice vide = 0). Attaques : facture antidatee saisie apres, annulation d'une facture en attente, remboursement BP, dette sans facture | Cas nominal VERIFIE. Les reconstitutions fausses sont un defaut distinct : BUG-820 (Mineur) |
+| BUG-801 | Chaine -3 puis +1, ajustement sur 2 categories (CA par categorie signe) | VERIFIE |
+| BUG-802 | RG exclue ; ajustement d'une RG exclu du CA ; vente normale conservee | VERIFIE pour le CA. Meme faille cote commissions : BUG-821 |
+| BUG-803 | `sqlmigrate` avant/arriere : AlterField (table refaite, `INSERT ... SELECT` sans perte), dependance 0028, 4 decimales ; inverse = arrondi a 2 decimales (PostgreSQL), sans suppression de ligne ; aucune lecture de `unit_price` dans sync/frontend a 2 decimales | VERIFIE (valeur PostgreSQL non rejouable ici) |
+| BUG-806 | Arrondis cumules sur 4 types de consommables (CUMP a 4 decimales x quantite a 3) : chaque ligne, marge et resultat a 2 decimales, marge = CA - somme des lignes arrondies | VERIFIE |
+| BUG-807 | 4 endpoints + `comparative` + `previous_year` imbriques : toutes les feuilles monetaires sont des chaines `^-?\d+\.\d{2}$` (hors `year` et `revenue_growth_pct`, ratio). Frontend : `Finance.tsx` lit tout par `parseFloat` sur des `string` ; `tsc` propre | VERIFIE |
+
+Les `@expectedFailure` des tickets 800 a 807 etaient deja retires et `test_03`/`test_04` deja alignes (21006.90 / 793.10).
+
+### 2. DOC 1 : soupcon du correcteur infirme
+`Invoice.order_total` d'un ajustement est deja signe a la creation (`adjust` : `adjustment_sign * magnitude`). La colonne COMMANDE de DOC 1 et de `doc1_export` est juste (4 000 apres 10xGRAND puis -2). Le vrai defaut est sur les QUANTITES (BUG-822) : 12 au lieu de 8, dans DOC 1 et `ClientCommission.total_breads`.
+Note : l'ajustement est date du jour de saisie par defaut (mois suivant l'original) ; il faut passer `invoice_date` pour le rattacher au mois corrige.
+
+### 3. Nouveaux tickets
+| Ticket | Gravite | Resume |
+|---|---|---|
+| BUG-820 | Mineur | Bilan d'un exercice clos : tri par date de facture (facture antidatee, annulation apres coup) ; une dette sans facture est invisible. Piste : sommer les `DebtMovement` |
+| BUG-821 | Majeur | L'ajustement d'une RG (`special_code` vide) genere une CM (base 600, CM 150) |
+| BUG-822 | Mineur | Quantites d'un ajustement negatif additionnees (DOC 1, `total_breads`) |
+| BUG-823 | Mineur | DOC 1 : quantites limitees aux prix 200/300/500/1000 |
+| BUG-824 | Mineur | `adjust` ne met pas a jour `Client.total_breads_received` |
+Deja ouvert et toujours valable : BUG-520 (categories de CA codees en dur).
+
+### 4. Controles sans ecart
+- Remise annuelle : `remise = indice x tarif`, `total_payer = social + remise + merite` (conforme a adaptes.md 4.2) ; la remise 0,25 % mensuelle est affichee et non deduite (BUG-058/292) ; CLAUDE.md 5.3 (0,025 x volume) reste perime : contradiction deja signalee.
+- Commissions : CM = base x taux, base excluant soldees, exonerees, RG, taux 0, remboursements ; commission payee jamais recalculee.
+- Consommation vs achats : le cout = sorties `EXIT` au CUMP (Q-005), SIEGE exclu ; les entrees n'entrent pas dans le cout (decision client).
+- Cash-flow : inchange, isole par annee, solde de cloture = dernier solde du livre de l'annee.
+- Les points 804, 805, 808, 809 restent A CLARIFIER, non rouverts.
+
+### 5. Limites
+Aucun test PostgreSQL. Le bilan d'un exercice clos en janvier bascule de chemin de calcul (note du correcteur) : non rejoue a une date simulee.

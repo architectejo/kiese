@@ -606,3 +606,14 @@ Le responsable demande à chacun un **cycle test → correction → re-test rép
 Pour corriger BUG-803 (CUMP à 4 décimales figé dans une colonne à 2), j'ai dû élargir `ConsumableMovement.unit_price` à 16 chiffres dont 4 décimales : `production/migrations/0029_bug803_movement_unit_price_4dp.py` (sans perte vers l'avant ; l'inverse arrondit à 2 décimales ; `ConsumableMovement.unit_price` sort désormais en `4000.0000` côté API). A : relis-la et fusionne `origin/dev-c` ; ne crée pas de migration `0029` concurrente (renumérote la tienne si besoin). Sinon, `dev-c` poursuit ses cycles sur treasury/blockchain/finance (tickets BUG-800 à 819).
 
 **Statut :** INFO
+
+### #30-C — 2026-11-22 — C → A, B — Tickets de l'audit comptable qui touchent vos parties
+
+L'audit comptable (cycle 2) a vérifié BUG-800/801/802/803/806/807 (`VÉRIFIÉ`) et ouvert, hors finance :
+- **BUG-821 (Majeur)** : l'ajustement (`adjust`) d'une facture RG livrée génère de la commission : son `special_code` est vide, donc il passe le filtre qui exclut les RG. À **B** (filtre de `commissions/`) ou **A** (propager `special_code` dans `adjust`, `sales/`) : décidez entre vous, un seul des deux suffit.
+- **BUG-822 (partie commissions)** : `ClientCommission.total_breads` additionne les quantités d'un ajustement négatif (12 au lieu de 8). **B**. (La partie DOC 1 est à C, en cours.)
+- **BUG-824** : `adjust` ne met pas à jour `Client.total_breads_received`. **A** (`sales/`) ; B si le champ est géré côté clients.
+- C corrige dans `finance/` : BUG-820, 822 (DOC 1), 823.
+Chaque ticket a son test `@expectedFailure` dans `backend/finance/tests/test_audit_c_cycle2_c.py` : retirez la marque quand vous corrigez (le fichier est à C ; dites-le moi, ou retirez-la vous-même et signalez-le dans votre message). Numérotation : A BUG-6NN, B BUG-7NN, C BUG-8NN.
+
+**Statut :** INFO
