@@ -432,9 +432,14 @@ class V306ConcurrencyTests(TransactionTestCase):
                           "à rejouer sur PostgreSQL ; exactitude séquentielle couverte ailleurs.")
         self.assertEqual(sorted(results), [200, 200], results)
         s.refresh_from_db()
-        self.assertEqual(s.lines.get(bread_price=bp).quantity, 100)
-        self.assertEqual(s.total_fc_produced, 50000)
-        self.assertEqual(BreadStock.objects.get(node=node, bread_price=bp).qty_produced, 100)
+        # BUG-319 : la livraison n'écrit plus de ligne ni `qty_produced` ; seule la
+        # valeur livrée progresse (via F()) : 30x500 + 70x500 = 50 000, sans perte
+        # ni doublon malgré deux livraisons simultanées.
+        self.assertEqual(s.delivered_value_fc, 50000)
+        self.assertFalse(s.lines.filter(bread_price=bp).exists())
+        self.assertEqual(s.total_fc_produced, 0)
+        self.assertEqual(BreadStock.objects.get(node=node, bread_price=bp).qty_produced, 0)
+        self.assertEqual(BreadStock.objects.get(node=node, bread_price=bp).qty_sent, 100)
 
 
 class V304DayLevelTests(_Base):

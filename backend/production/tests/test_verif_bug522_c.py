@@ -128,6 +128,11 @@ class RoundTrip(Bug522Base):
                 data = dict(g.get(url).data)
                 data['notes'] = f'aller-retour {status}'
                 r = g.put(url, data, format='json')
+                if user.pk == self.u2['GERANT'].pk:
+                    # Changement de specification voulu BUG-624 : le fournisseur (K2) ne
+                    # modifie pas la demande en attente du demandeur ; il ne fait que repondre.
+                    self.assertEqual(r.status_code, 403, (status, user.role, r.content))
+                    continue
                 self.assertEqual(r.status_code, 200, (status, user.role, r.content))
                 t.refresh_from_db()
                 self.assertEqual((t.from_node_id, t.to_node_id, t.initiated_by_id),

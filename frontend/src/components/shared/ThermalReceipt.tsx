@@ -7,6 +7,8 @@ export interface ReceiptLine { label: string; qty: number; unitPrice: number }
 export interface ReceiptData {
   receiptNumber: string;
   boulangerie: string;
+  /** BUG-651 : code boulangerie (K1, B2…) fourni par l'API ; repli sur `boulangerie` (node_display). */
+  boulangerieCode?: string | null;
   agentName: string;
   team: string;
   clientCode: string;
@@ -109,6 +111,15 @@ export const ThermalReceipt: React.FC<{
   const tbl: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: rem(0.6) };
   // client_display from the API already carries "[code] Nom" — strip it so
   // the "[code] Nom" line below doesn't show the code twice.
+  // BUG-651 : montants en FC entiers (CLAUDE.md §4), arrondi explicite.
+  const fc = (n: number): string => Math.round(Number.isFinite(n) ? n : 0).toLocaleString('fr-FR');
+  const commissionFc = Math.round(receipt.orderTotal * receipt.commissionRate);
+  // BP négative = crédit en faveur du client (client épargne) : libellé adapté au signe.
+  const bpAfterLabel = receipt.newDebt < 0 ? 'CRÉDIT CLIENT (BP APRÈS)' : 'NOUVELLE DETTE (BP APRÈS)';
+  const bpAfterValue = receipt.newDebt < 0 ? Math.abs(receipt.newDebt) : receipt.newDebt;
+  const bakeryCode = receipt.boulangerieCode?.trim();
+  const bakeryLabel = bakeryCode && !receipt.boulangerie.includes(bakeryCode)
+    ? `[${bakeryCode}] ${receipt.boulangerie}` : receipt.boulangerie;
   const clientDisplayName = receipt.clientName.replace(/^\[[^\]]*\]\s*/, '');
 
   const handlePrint = async (): Promise<void> => {
@@ -173,7 +184,7 @@ export const ThermalReceipt: React.FC<{
         {/* ── En-tête ── */}
         <div style={{ textAlign: 'center', marginBottom: '4px' }}>
           <div style={{ fontSize: rem(0.82), fontWeight: 'bold', letterSpacing: '1px' }}>ETS. KIESE / BOULANGERIE</div>
-          <div style={{ fontSize: rem(0.58), fontWeight: 'bold', marginTop: '1px' }}>{receipt.boulangerie}</div>
+          <div style={{ fontSize: rem(0.58), fontWeight: 'bold', marginTop: '1px' }}>{bakeryLabel}</div>
           <div style={{ fontSize: rem(0.5), marginTop: '2px' }}>
             ID.Nat: 10-F4300-N85947U | Impôt: A1902266K | RCCM: 021-A-650
           </div>
@@ -263,7 +274,7 @@ export const ThermalReceipt: React.FC<{
             </tr>
             <tr>
               <td colSpan={3} style={cellR}>COMMISSION ({(receipt.commissionRate * 100).toFixed(0)}%){receipt.isSoldee ? ' [SOLDÉE]' : ''}</td>
-              <td style={cellR}>{(receipt.orderTotal * receipt.commissionRate).toLocaleString('fr-FR')}</td>
+              <td style={cellR}>{fc(commissionFc)} FC</td>
             </tr>
             {/* BUG-092/BUG-096 : perte de la vente soldée (-25% sur le prix catalogue) —
                 attendue par ce mécanisme, affichée en alerte discrète, pas alarmante. */}
@@ -281,11 +292,11 @@ export const ThermalReceipt: React.FC<{
           <tbody>
             <tr>
               <td style={cell}>BALANCE ANTÉRIEURE (BP)</td>
-              <td style={{ ...cellR, fontWeight: 'bold' }}>{receipt.debtBefore.toLocaleString('fr-FR')} FC</td>
+              <td style={{ ...cellR, fontWeight: 'bold' }}>{fc(receipt.debtBefore)} FC</td>
             </tr>
             <tr style={{ backgroundColor: '#e0e0e0' }}>
-              <td style={{ ...cell, fontWeight: 'bold' }}>NOUVELLE DETTE</td>
-              <td style={{ ...cellR, fontWeight: 'bold' }}>{receipt.newDebt.toLocaleString('fr-FR')} FC</td>
+              <td style={{ ...cell, fontWeight: 'bold' }}>{bpAfterLabel}</td>
+              <td style={{ ...cellR, fontWeight: 'bold' }}>{fc(bpAfterValue)} FC</td>
             </tr>
           </tbody>
         </table>

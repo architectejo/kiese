@@ -115,7 +115,10 @@ def _refresh_client_category(invoice):
 
 
 def _lock(invoice_pk):
-    return Invoice.objects.select_for_update().select_related('client', 'node').get(pk=invoice_pk)
+    # BUG-641 : `Invoice.client` est NULLABLE -> `select_related` produit un LEFT OUTER JOIN ;
+    # PostgreSQL refuse FOR UPDATE sur la face nullable d'une jointure externe.
+    # `of=('self',)` ne verrouille que la facture (ignoré sous SQLite).
+    return Invoice.objects.select_for_update(of=('self',)).select_related('client', 'node').get(pk=invoice_pk)
 
 
 def mark_not_served(invoice_pk, actor, reason='', auto=False):

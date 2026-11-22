@@ -15,6 +15,7 @@ import { useProgressiveList, extractApiError } from '@/hooks/useProgressiveList'
 const buildReceipt = (inv: Invoice): ReceiptData => ({
   receiptNumber: inv.receipt_number,
   boulangerie: inv.node_display || inv.node || '—',
+  boulangerieCode: inv.node_code ?? null,
   agentName: inv.facturier_display || 'Facturier',
   team: inv.team || '—',
   clientCode: inv.client_code || '—',

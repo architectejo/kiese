@@ -26,15 +26,17 @@ from .models import BreadStock, BreadTransfer, BreadTransferLine, _adjust_bread_
 
 def _resolve_destination(raw):
     """Boulangerie destinataire : clé primaire ou code (K1, B2…)."""
-    if raw is None or isinstance(raw, bool) or raw == '':
+    from kiese.node_guard import resolve_node_param
+
+    if raw is None or raw == '':
         raise ValidationError({'detail': "La boulangerie destinataire (to_node) est requise."})
-    node = None
-    try:
-        node = Node.objects.filter(pk=int(raw)).first()
-    except (TypeError, ValueError, OverflowError):
-        node = Node.objects.filter(code__iexact=str(raw).strip()).first()
-    if node is None:
-        raise ValidationError({'detail': f"Boulangerie destinataire introuvable ({raw})."})
+    # BUG-541 : bool / flottant / liste refusés (400) par le helper commun.
+    node, bad = resolve_node_param(raw)
+    if bad is not None:
+        raise ValidationError({'detail': f"Boulangerie destinataire introuvable ({str(raw)[:40]})."})
+    # BUG-540 : le nœud technique SIEGE et les boulangeries inactives ne reçoivent pas de pains.
+    if node.code == 'SIEGE' or not node.is_active:
+        raise ValidationError({'detail': f"« {node.code} » n'est pas une boulangerie destinataire valide."})
     return node
 
 
@@ -43,7 +45,7 @@ class DirectTransferMixin:
 
     @action(detail=False, methods=['post'], url_path='send')
     def send_direct(self, request):
-        from .views import _body_not_object_response, _strict_int  # évite l'import circulaire
+        from .views import _body_not_object_response, _strict_int, _strict_pk  # évite l'import circulaire
 
         user = request.user
         bad_body = _body_not_object_response(request)
@@ -69,7 +71,7 @@ class DirectTransferMixin:
                 raise ValidationError({'detail': "Chaque ligne doit être un objet {bread_price, quantity_sent}."})
             bp_id = ld.get('bread_price')
             try:
-                bp = BreadPrice.objects.get(pk=bp_id)
+                bp = BreadPrice.objects.get(pk=_strict_pk(bp_id, 'catégorie de pain'))
             except (BreadPrice.DoesNotExist, TypeError, ValueError, DjangoValidationError):
                 raise ValidationError({'detail': f"Catégorie de pain introuvable ({bp_id})."})
             qty = _strict_int(ld.get('quantity_sent'), f"quantité envoyée ({bp.label})", minimum=1)

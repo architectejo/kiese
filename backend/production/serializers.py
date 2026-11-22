@@ -3,6 +3,12 @@ from core.models import Node
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal
 
 
+# BUG-623 : plafond de la valeur produite par session (colonne entière 32 bits).
+MAX_SESSION_FC = 2_000_000_000
+MAX_DISPOSAL_QTY = 1_000_000
+MAX_DISPOSAL_VALUE = 9_999_999_999  # DecimalField(max_digits=12, decimal_places=2)
+
+
 class ProductionSessionLineSerializer(serializers.ModelSerializer):
     bread_price_display = serializers.StringRelatedField(source='bread_price', read_only=True)
     unit_price = serializers.IntegerField(source='bread_price.unit_price', read_only=True)
@@ -127,6 +133,38 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
         # existante (sauf si elle est déjà clôturée, cas traité là-bas avec
         # le bon message d'erreur). Ne plus bloquer ici, sous peine
         # d'empêcher perform_create() de même voir le payload.
+        # BUG-622 : lignes dupliquées (même catégorie) et changement de date/équipe
+        # vers une session existante -> 400 français au lieu d'une IntegrityError (500).
+        # BUG-623 : quantités / valeur agrégée bornées (colonne entière 32 bits).
+        lines = attrs.get('lines')
+        if lines is not None:
+            seen = set()
+            total_fc = 0
+            for line in lines:
+                bp = line.get('bread_price')
+                if bp.pk in seen:
+                    raise serializers.ValidationError({'detail': (
+                        f"La catégorie de pain « {bp.label} » figure plusieurs fois dans les lignes : "
+                        f"regroupez-la en une seule ligne."
+                    )})
+                seen.add(bp.pk)
+                total_fc += (line.get('quantity') or 0) * bp.unit_price
+            if total_fc > MAX_SESSION_FC:
+                raise serializers.ValidationError({'detail': (
+                    "Quantités trop grandes : la valeur produite dépasse la limite autorisée."
+                )})
+        inst = self.instance
+        if inst is not None and any(k in attrs for k in ('date', 'team', 'node')):
+            new_date = attrs.get('date', inst.date)
+            new_team = attrs.get('team', inst.team)
+            new_node = attrs.get('node') or inst.node
+            if ProductionSession.objects.filter(
+                node=new_node, team=new_team, date=new_date,
+            ).exclude(pk=inst.pk).exists():
+                raise serializers.ValidationError({'detail': (
+                    f"Une session existe déjà pour l'Équipe {new_team} le {new_date} "
+                    f"à la boulangerie {new_node.code}."
+                )})
         return attrs
 
     def create(self, validated_data):
@@ -390,5 +428,15 @@ class BreadDisposalSerializer(serializers.ModelSerializer):
         if quantity is not None and quantity < 0 and disposal_type != BreadDisposal.DisposalType.REMAINING:
             raise serializers.ValidationError({
                 'quantity': "La quantité ne peut pas être négative (sauf pour un reste du jour).",
+            })
+        # BUG-623 : quantité et valeur totale bornées (sinon OverflowError / InvalidOperation = 500).
+        unit_price = attrs.get('unit_price_sold', getattr(instance, 'unit_price_sold', 0)) or 0
+        if quantity is not None and abs(quantity) > MAX_DISPOSAL_QTY:
+            raise serializers.ValidationError({
+                'quantity': f"La quantité ne peut pas dépasser {MAX_DISPOSAL_QTY}.",
+            })
+        if quantity is not None and abs(quantity) * unit_price > MAX_DISPOSAL_VALUE:
+            raise serializers.ValidationError({
+                'unit_price_sold': "La valeur totale (quantité × prix unitaire) dépasse la limite autorisée.",
             })
         return attrs
