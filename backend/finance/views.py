@@ -176,6 +176,78 @@ def _doc1_add_quantities(agg, inv):
         agg[key] += sign * line.quantity
 
 
+def _csv_safe(value):
+    """BUG-853 : neutralise l'injection de formule (Excel/LibreOffice) dans une cellule texte."""
+    if isinstance(value, str) and value[:1] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + value
+    return value
+
+
+def _doc1_aggregate(node_id, month, year):
+    """Agrégat DOC 1 par client (partagé par `doc1_report` et `doc1_export`).
+
+    BUG-851 : une vente à CLIENT DIVERS (sans client) forme une ligne « CLIENT DIVERS ».
+    BUG-854 : « BP fin mois » = BP d'ouverture non tracée par facture + somme des `debt_delta`
+    des factures non annulées datées <= fin du mois (méthode BUG-820), donc indépendante de
+    l'ordre de saisie. BP d'ouverture = `current_debt` - somme de tous les `debt_delta` (dette
+    importée / reprise sans facture). Limite : une variation de `current_debt` sans facture
+    (ex. retenue hors facture) est traitée comme ouverture."""
+    import calendar
+    from decimal import Decimal
+    from sales.models import Invoice
+    from commissions.models import ClientCommission, CommissionPeriod
+
+    invoices = (
+        Invoice.objects
+        .filter(node_id=node_id, status='DELIVERED', invoice_date__month=month, invoice_date__year=year)
+        .select_related('client')
+        .prefetch_related('lines__bread_price')
+        .order_by('client__last_name', 'invoice_date')
+    )
+    try:
+        period = CommissionPeriod.objects.get(node_id=node_id, month=month, year=year)
+        cm_map = {str(cc.client_id): cc for cc in ClientCommission.objects.filter(period=period)}
+    except CommissionPeriod.DoesNotExist:
+        cm_map = {}
+
+    client_agg: dict = {}
+    for inv in invoices:
+        cid = str(inv.client_id) if inv.client_id else 'DIVERS'
+        if cid not in client_agg:
+            client_agg[cid] = {
+                'client': inv.client, 'client_id': inv.client_id,
+                'code': inv.client.code if inv.client_id else '',
+                'name': inv.client.full_name if inv.client_id else 'CLIENT DIVERS',
+                'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0, 'qty_other': 0,
+                'invoice_total': Decimal('0'),
+                'payment_amount': Decimal('0'),
+                'debt_after': Decimal('0'),
+            }
+        agg = client_agg[cid]
+        _doc1_add_quantities(agg, inv)
+        agg['invoice_total']  += inv.order_total
+        agg['payment_amount'] += inv.payment_amount
+
+    client_ids = [a['client_id'] for a in client_agg.values() if a['client_id']]
+    if client_ids:
+        month_end = datetime.date(int(year), int(month), calendar.monthrange(int(year), int(month))[1])
+        totals_all, totals_end = {}, {}
+        qs = (Invoice.objects.filter(client_id__in=client_ids).exclude(status='CANCELLED')
+              .select_related('adjusts'))
+        for inv in qs.iterator():
+            d = inv.debt_delta
+            totals_all[inv.client_id] = totals_all.get(inv.client_id, Decimal('0')) + d
+            if inv.invoice_date <= month_end:
+                totals_end[inv.client_id] = totals_end.get(inv.client_id, Decimal('0')) + d
+        for agg in client_agg.values():
+            c = agg['client']
+            if c is None:
+                continue
+            opening = c.current_debt - totals_all.get(c.pk, Decimal('0'))
+            agg['debt_after'] = opening + totals_end.get(c.pk, Decimal('0'))
+    return client_agg, cm_map
+
+
 def _balance_sheet_for_year(year: int) -> dict:
     from clients.models import Client
     from treasury.models import CashbookEntry
@@ -191,14 +263,15 @@ def _balance_sheet_for_year(year: int) -> dict:
     # Receivables (outstanding client debt)
     if is_past_year:
         # BUG-820 : BP à la clôture = somme des variations de BP (`debt_delta`) des factures
-        # non annulées / non expirées datées <= fin d'exercice. Contrairement à `debt_after` de
+        # non annulées datées <= fin d'exercice (BUG-850 : une facture « Non servi » reste comptée,
+        # son `debt_delta` vaut `-versement conservé`, comme `current_debt`). Contrairement à `debt_after` de
         # la « dernière facture », cette somme ne dépend ni de l'ordre de saisie (facture
         # antidatée) ni d'une annulation survenue après coup. Limite documentée : une dette
         # portée sans facture (import, reprise) n'apparaît pas dans un exercice clos.
         last_debt = {}
         qs = (Invoice.objects
               .filter(invoice_date__lte=year_end, client__is_active=True)
-              .exclude(status__in=['CANCELLED', 'NOT_SERVED'])
+              .exclude(status='CANCELLED')
               .select_related('adjusts', 'client'))
         for inv in qs.iterator():
             last_debt[inv.client_id] = last_debt.get(inv.client_id, Decimal('0')) + inv.debt_delta
@@ -362,48 +435,15 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             return err
         node_id = node.pk
 
-        invoices = (
-            Invoice.objects
-            .filter(node_id=node_id, status='DELIVERED', invoice_date__month=month, invoice_date__year=year)
-            .select_related('client')
-            .prefetch_related('lines__bread_price')
-            .order_by('client__last_name', 'invoice_date')
-        )
-        try:
-            period = CommissionPeriod.objects.get(node_id=node_id, month=month, year=year)
-            cm_map = {str(cc.client_id): cc for cc in ClientCommission.objects.filter(period=period)}
-        except CommissionPeriod.DoesNotExist:
-            cm_map = {}
-
-        # Aggregate by client
-        client_agg: dict = {}
-        for inv in invoices:
-            cid = str(inv.client_id)
-            if cid not in client_agg:
-                client_agg[cid] = {
-                    'client': inv.client,
-                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0, 'qty_other': 0,
-                    'invoice_total': Decimal('0'),
-                    'payment_amount': Decimal('0'),
-                    'debt_after': Decimal('0'),  # last invoice BP
-                    'last_date': inv.invoice_date,
-                }
-            agg = client_agg[cid]
-            _doc1_add_quantities(agg, inv)
-            agg['invoice_total']  += inv.order_total
-            agg['payment_amount'] += inv.payment_amount
-            # Keep the most recent debt_after as end-of-month BP
-            if inv.invoice_date >= agg['last_date']:
-                agg['debt_after'] = inv.debt_after
-                agg['last_date']  = inv.invoice_date
+        client_agg, cm_map = _doc1_aggregate(node_id, month, year)
 
         result = []
         for cid, agg in client_agg.items():
             cc = cm_map.get(cid)
             client = agg['client']
             result.append({
-                'client_code':     client.code,
-                'client_name':     client.full_name,
+                'client_code':     agg['code'],
+                'client_name':     agg['name'],
                 'qty_200':         agg['qty_200'],
                 'qty_300':         agg['qty_300'],
                 'qty_500':         agg['qty_500'],
@@ -412,7 +452,7 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
                 'invoice_total':   str(agg['invoice_total']),
                 'payment_amount':  str(agg['payment_amount']),
                 'debt_after':      str(agg['debt_after']),
-                'commission_rate': str(cc.commission_rate if cc else client.commission_rate),
+                'commission_rate': str(cc.commission_rate if cc else (client.commission_rate if client else 0)),
                 'cm_amount':       str(cc.commission_gross if cc else 0),
             })
         # Sort by client name
@@ -441,41 +481,9 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
             return err
         node_id = node.pk
 
-        invoices = (
-            Invoice.objects
-            .filter(node_id=node_id, status='DELIVERED', invoice_date__month=month, invoice_date__year=year)
-            .select_related('client')
-            .prefetch_related('lines__bread_price')
-            .order_by('client__last_name', 'invoice_date')
-        )
-        try:
-            period = CommissionPeriod.objects.get(node_id=node_id, month=month, year=year)
-            cm_map = {str(cc.client_id): cc for cc in ClientCommission.objects.filter(period=period)}
-        except CommissionPeriod.DoesNotExist:
-            cm_map = {}
+        client_agg, cm_map = _doc1_aggregate(node_id, month, year)
 
-        # Aggregate by client
-        client_agg: dict = {}
-        for inv in invoices:
-            cid = str(inv.client_id)
-            if cid not in client_agg:
-                client_agg[cid] = {
-                    'client': inv.client,
-                    'qty_200': 0, 'qty_300': 0, 'qty_500': 0, 'qty_1000': 0, 'qty_other': 0,
-                    'invoice_total': Decimal('0'),
-                    'payment_amount': Decimal('0'),
-                    'debt_after': Decimal('0'),
-                    'last_date': inv.invoice_date,
-                }
-            agg = client_agg[cid]
-            _doc1_add_quantities(agg, inv)
-            agg['invoice_total']  += inv.order_total
-            agg['payment_amount'] += inv.payment_amount
-            if inv.invoice_date >= agg['last_date']:
-                agg['debt_after'] = inv.debt_after
-                agg['last_date']  = inv.invoice_date
-
-        rows_sorted = sorted(client_agg.values(), key=lambda a: a['client'].full_name)
+        rows_sorted = sorted(client_agg.values(), key=lambda a: a['name'])
 
         header = ['CODE', 'CLIENT', 'QTÉ 200', 'QTÉ 300', 'QTÉ 500', 'QTÉ 1000', 'QTÉ AUTRES',
                   'COMMANDE (FC)', 'PAIEMENT (FC)', 'BP FIN MOIS (FC)', 'TAUX CM', 'CM (FC)']
@@ -483,16 +491,15 @@ class FinancialYearViewSet(viewsets.ModelViewSet):
         def _rows():
             yield header
             for agg in rows_sorted:
-                cid = str(agg['client'].id)
-                cc  = cm_map.get(cid)
+                cc  = cm_map.get(str(agg['client_id'])) if agg['client_id'] else None
                 yield [
-                    agg['client'].code,
-                    agg['client'].full_name,
+                    _csv_safe(agg['code']),
+                    _csv_safe(agg['name']),
                     agg['qty_200'], agg['qty_300'], agg['qty_500'], agg['qty_1000'], agg['qty_other'],
                     str(agg['invoice_total']),
                     str(agg['payment_amount']),
                     str(agg['debt_after']),
-                    str(cc.commission_rate if cc else agg['client'].commission_rate),
+                    str(cc.commission_rate if cc else (agg['client'].commission_rate if agg['client'] else 0)),
                     str(cc.commission_gross if cc else 0),
                 ]
 

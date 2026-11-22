@@ -200,3 +200,39 @@ Deja ouvert et toujours valable : BUG-520 (categories de CA codees en dur).
 
 ### 5. Limites
 Aucun test PostgreSQL. Le bilan d'un exercice clos en janvier bascule de chemin de calcul (note du correcteur) : non rejoue a une date simulee.
+
+---
+
+## Cycle test 3 (partie C, finance) - 2026-11-22
+
+Etat 206b87a, SQLite. `manage.py test finance` (sans --parallel) : 132 tests, OK, 12 echecs attendus (5 anciens + 7 nouveaux). `makemigrations --check` : aucun changement. `npx tsc --noEmit` : 0 erreur ; `npm run build` : OK. Tests : `backend/finance/tests/test_audit_c_cycle3_c.py` (32 tests, donnees fictives).
+
+### 1. Verification
+| Ticket | Resultat |
+|---|---|
+| BUG-820 | VERIFIE pour ses cas (facture antidatee saisie apres, annulation d'une facture en attente, ajustement negatif, remboursement, livraison partielle, NS code CREDIT/RG/soldee, facture apres fin d'exercice exclue, deux exercices clos isoles). Angle nouveau : une facture « Non servi » (manuel ou expiration) est exclue alors que son versement conserve reduit la BP (BP -1 000, bilan 0) : BUG-850 |
+| BUG-822 (DOC 1) | VERIFIE : rapport et export CSV soustraient l'ajustement negatif (8 au lieu de 12), y compris sur un prix hors tarif ; ajustement positif d'une RG compte dans les quantites. `total_breads` des commissions reste a B (statut inchange) |
+| BUG-823 | VERIFIE backend (`qty_other`, colonne CSV « QTE AUTRES ») et frontend (colonne « Autres » : en-tete, cellules, totaux alignes, `?? 0`, `tsc`/`build` verts). Limite : « Autres » n'a pas de prix unitaire, COMMANDE ne se rapproche pas par quantite x prix |
+
+### 2. Scenario chiffre du cycle 1 apres les corrections de tresorerie (BUG-810 a 839)
+`MonthScenarioTests` (CA 29 050, cout farine 21 006,90, commissions payees 3 950, depenses 3 300, resultat 793,10, livre 23 600, cash-flow N-1/N) reste vert. Rejeu additionnel (`Verif3TreasuryReplay`) : depense sur un jour de cloture confirmee refusee, cloture sans billetage refusee, depense datee du futur refusee, double versement refuse : compte de resultat, caisse du bilan et nombre d'ecritures/clotures inchanges ; caisse du bilan = solde de cloture du cash-flow ; actif = creances + caisse. Aucun ecart.
+
+### 3. Nouveaux ecarts
+| Ticket | Gravite | Resume |
+|---|---|---|
+| BUG-850 | Mineur | Bilan d'un exercice clos : factures « Non servi » exclues, versement conserve ignore |
+| BUG-851 | Majeur | DOC 1 (rapport + export) : HTTP 500 si une vente CLIENT DIVERS est livree dans le mois |
+| BUG-852 | Mineur | `FinancialYear.year` non valide : 0 accepte puis 500 sur les 4 etats |
+| BUG-853 | Mineur | Export CSV DOC 1 : injection de formule (`=`) via nom de client |
+| BUG-854 | Mineur | DOC 1 « BP fin mois » faux avec facture antidatee (meme famille que BUG-820) |
+
+### 4. Controles sans ecart
+- Permissions : ADMIN, DIRECTION, COMPTABLE = 200 sur les 4 etats, `summary`, DOC 1 (rapport/export) et la liste des exercices ; gerant et facturier = 403 partout, ecriture/suppression d'exercice = 403 ; anonyme refuse.
+- N/N-1 : `previous_year` / `*_prev` identiques au calcul direct ; croissance -50 % verifiee ; sortie de farine a 00:30 heure locale rattachee a N (fuseau Kinshasa) ; facture du 31/12 en N-1.
+- Performances : nombre de requetes de `doc1_report`, `doc1_export`, `comparative`, `balance_sheet` (exercice clos) et `summary` identique pour 2 et 8 clients (ajustements inclus) : pas de N+1.
+- Fuite de noeud : aucune nouvelle (cycle 2 inchange).
+- `is_closed` d'un exercice n'est pas un verrou (documentaire), caracterise.
+- Points 804, 805, 808, 809 : non rouverts.
+
+### 5. Limites
+SQLite uniquement (ordre des factures de meme date de DOC 1 non garanti ailleurs, BUG-854). Pas de rendu PDF cote finance (aucun endpoint PDF). Frontend verifie par types et build, pas visuellement.
