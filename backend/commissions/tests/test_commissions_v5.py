@@ -164,7 +164,6 @@ class RetenueUniqueHorlogeGrossiere(Base5):
         r.refresh_from_db()
         self.assertEqual(r.deduction_debt, D('10000.00'))
 
-    @expectedFailure  # BUG-1009
     def test_BUG_1009_suppression_de_la_ligne_qui_retient_perd_la_retenue_sans_alerte(self):
         for n in self.ns:
             self.gen(n)

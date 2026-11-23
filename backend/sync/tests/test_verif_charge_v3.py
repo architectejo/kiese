@@ -356,7 +356,6 @@ class CommissionsVerif(TestCase):
         row1 = ClientCommission.objects.get(period__node=self.n1, client=self.c)
         self.assertEqual(row1.deduction_debt, D('10000.00'))
 
-    @expectedFailure  # BUG-783
     def test_suppression_de_la_ligne_retenante_puis_regeneration(self):
         self.gen(self.n3)
         self.gen(self.n1)

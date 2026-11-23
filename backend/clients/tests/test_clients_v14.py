@@ -149,7 +149,6 @@ class IsActive(Base14):
         self.assertTrue(Client.objects.get(pk=c.pk).is_active)  # BUG-780 : ligne ignoree, rattrapee ensuite
 
     # --- pagination d'un pull INCREMENTAL ---
-    @expectedFailure  # BUG-1008
     def test_BUG_1008_pull_incremental_pagine_ne_perd_pas_les_inactifs_des_pages_suivantes(self):
         cs = [self.mk(self.k3, f'Inc{i}', 'Paginee') for i in range(9)]
         first = self.get(self.k1)

@@ -317,7 +317,7 @@ class PushView(APIView):
         return Response({'batch_id': str(batch_id), 'results': results, 'replayed': False})
 
 
-def _parse_cursor(request, param_name):
+def _parse_cursor(request, param_name, allow_future=False):
     raw = request.query_params.get(param_name)
     if not raw:
         return None
@@ -335,7 +335,12 @@ def _parse_cursor(request, param_name):
             raise ParseError(f"Paramètre « {param_name} » invalide : date/heure hors plage.")
     # BUG-785 : curseur dans le futur (Cloud restauré, horloge déréglée) =
     # traité comme absent (pull complet), jamais « 0 client à jamais ».
-    if parsed > timezone.now():
+    # BUG-1008 : sauf page de pagination (client_after_id) dont le curseur est l'updated_at d'une
+    # vraie ligne, légèrement dans le futur en cas de décalage d'horloge (tolérance 1 h) : la rejeter
+    # ferait reboucler sur la page 1. Un curseur très lointain reste traité comme absent.
+    from datetime import timedelta
+    limit = timezone.now() + (timedelta(hours=1) if allow_future else timedelta(0))
+    if parsed > limit:
         return None
     return parsed
 
@@ -366,7 +371,8 @@ class PullView(APIView):
         now = timezone.now()
 
         since_config = _parse_cursor(request, 'since_config')
-        since_client_debt = _parse_cursor(request, 'since_client_debt')
+        since_client_debt = _parse_cursor(
+            request, 'since_client_debt', allow_future=bool(request.query_params.get('client_after_id')))
 
         payload = {'server_time': now.isoformat()}
 
@@ -407,8 +413,10 @@ class PullView(APIView):
         # BUG-999 : au pull incrémentiel (pas au pull complet ni aux pages suivantes d'une marche
         # initiale), un client d'un autre nœud devenu INACTIF depuis le curseur redescend pour être
         # désactivé localement ; le curseur `updated_at` filtre ci-dessous. Jamais au pull initial.
-        if (node.code != 'SIEGE' and since_client_debt is not None
-                and not request.query_params.get('client_after_id')):
+        # BUG-1008 : le périmètre vaut pour TOUTES les pages d'un pull à curseur (pages 2+ incluses,
+        # elles portent `client_after_id`). Sur une marche initiale, une page 2+ peut donc livrer
+        # un inactif d'un autre nœud : le poste l'ignore s'il ne le connaît pas (jamais créé).
+        if node.code != 'SIEGE' and since_client_debt is not None:
             scope |= Q(is_active=False)
         client_qs = Client.objects.filter(scope).select_related('node')
         # Curseur composite (updated_at, id) : pagination stable même à égalité d'horodatage.

@@ -233,9 +233,14 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             # différentes ne s'exécutent plus en parallèle pour un même client.
             with transaction.atomic():
                 Client.objects.select_for_update().filter(pk=client_id).first()
+                # BUG-1009 : « déjà retenu » = une AUTRE ligne du mois PORTE réellement la retenue
+                # (dette ou cotisation non nulle, payée ou non). Si la ligne porteuse a été supprimée,
+                # les lignes restantes à 0 ne comptent pas : la ligne (re)créée reporte la retenue.
                 deja_retenu = ClientCommission.objects.filter(
                     client_id=client_id, period__month=month, period__year=year,
-                ).exclude(period=period).exists()
+                ).exclude(period=period).filter(
+                    ~Q(deduction_debt=0) | ~Q(deduction_social=0),
+                ).exists()
                 debt_default = Decimal('0.00') if deja_retenu else Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
                 social_default = Decimal('0.00') if deja_retenu else cotisation
 
@@ -258,6 +263,9 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                     earlier = ClientCommission.objects.filter(
                         client_id=client_id, period__month=month, period__year=year,
                     ).exclude(pk=commission.pk).filter(
+                        # BUG-1009 : seule une ligne qui PORTE la retenue peut nous la faire céder.
+                        ~Q(deduction_debt=0) | ~Q(deduction_social=0),
+                    ).filter(
                         Q(created_at__lt=commission.created_at)
                         # BUG-1005 : à horodatage égal (horloge grossière, Windows), l'ordre des UUID
                         # ne dit rien de l'ordre de création : une ligne qui retient déjà gagne.
