@@ -147,6 +147,7 @@ export const App: React.FC = () => {
         <Route 
           path="/dashboard" 
           element={
+            // Page d'atterrissage après connexion : ouverte à tous les rôles (FACTURIER/LIVREUR y arrivent).
             <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
               <Dashboard />
             </ProtectedRoute>
@@ -157,7 +158,8 @@ export const App: React.FC = () => {
         <Route 
           path="/clients" 
           element={
-            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
+            // BUG-1115 : même garde que le menu (COMPTABLE exclu), LIVREUR = FACTURIER (Q-027).
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER', 'LIVREUR'].includes(u.role)}>
               <Clients />
             </ProtectedRoute>
           } 
@@ -175,7 +177,8 @@ export const App: React.FC = () => {
         <Route 
           path="/production" 
           element={
-            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
+            // BUG-1115 : même garde que le menu ; FACTURIER/LIVREUR/COMPTABLE refusés.
+            <ProtectedRoute isAllowed={(u) => ['ADMIN', 'DIRECTION', 'GERANT'].includes(u.role)}>
               <Production />
             </ProtectedRoute>
           } 

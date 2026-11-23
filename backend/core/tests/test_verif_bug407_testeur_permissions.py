@@ -59,6 +59,12 @@ class Bug407RouteGuardsTests(SimpleTestCase):
         for path, roles in app.items():
             if roles is None or path not in nav:
                 continue
+            if path == '/dashboard':
+                # BUG-1115 : page d'atterrissage apres connexion (FACTURIER/LIVREUR y arrivent) ;
+                # la garde peut etre plus ouverte que le menu, jamais plus restreinte.
+                with self.subTest(path=path):
+                    self.assertTrue(set(nav[path]) <= set(roles))
+                continue
             with self.subTest(path=path):
                 self.assertEqual(sorted(roles), sorted(nav[path]))
 
