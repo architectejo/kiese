@@ -177,6 +177,17 @@ class Node(models.Model):
             "par défaut (comportement historique)."
         )
     )
+    block_sales_after_closure = models.BooleanField(
+        default=False,
+        db_default=False,
+        verbose_name=_("Bloquer les ventes après l'heure de clôture"),
+        help_text=_(
+            "BUG-973 (remarque.md l.464/488) : si activé, la facturation de "
+            "cette boulangerie est bloquée à partir de `handover_time` (= heure "
+            "de clôture) jusqu'à la validation de la clôture du jour par la "
+            "direction. Désactivé par défaut."
+        )
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

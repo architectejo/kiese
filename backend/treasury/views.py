@@ -1643,3 +1643,31 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
             'total_savings': str(totals['total_savings'] or 0),
             'by_node': by_node,
         })
+
+
+from rest_framework.views import APIView as _APIView
+
+
+class ClosureStatusView(_APIView):
+    """GET /api/treasury/closure-status/ : état du verrou de vente (BUG-973), lecture seule.
+    `?node=<code|uuid>` réservé aux profils multi-boulangeries ; sinon nœud de l'utilisateur."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .closure_lock import closure_status
+        user = request.user
+        node = user.node if user.node_id else None
+        param = request.query_params.get('node')
+        if param:
+            if not user.can_access_all_nodes:
+                return Response({'detail': "Accès refusé : vous ne pouvez consulter que votre boulangerie."},
+                                status=status.HTTP_403_FORBIDDEN)
+            node = Node.objects.filter(code=param).first()
+            if node is None:
+                try:
+                    node = Node.objects.filter(pk=param).first()
+                except Exception:
+                    node = None
+            if node is None:
+                return Response({'detail': "Boulangerie introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(closure_status(node))

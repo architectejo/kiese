@@ -574,6 +574,19 @@ class InvoiceViewSet(
         if not is_debt_repayment and len(lines_data) == 0:
             return Response({'detail': 'Au moins une ligne de pain est requise.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # BUG-973 (remarque.md l.464/488) : après l'heure de clôture, plus de vente
+        # tant que la direction n'a pas validé la clôture du jour. Ni les
+        # remboursements BP ni les ventes rétroactives ne sont concernés.
+        if not is_debt_repayment and not is_backdated_invoice:
+            from treasury.closure_lock import sales_blocked_for, SALES_BLOCKED_DETAIL
+            if sales_blocked_for(node):
+                create_notification(
+                    title=f"Ventes bloquées — {node.code}",
+                    message=f"Tentative de vente par {request.user.username} après l'heure de clôture, clôture du jour non validée.",
+                    severity='WARNING', node_origin=node.code,
+                )
+                return Response({'detail': SALES_BLOCKED_DETAIL}, status=status.HTTP_403_FORBIDDEN)
+
         payment_amount = data['payment_amount']
 
         # BUG-177 : NS (non servi) et RG (régularisation) — écritures de

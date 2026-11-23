@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     LocalExpenseViewSet, FacturierReportViewSet,
     CashClosureViewSet, CashbookEntryViewSet, JournalEntryViewSet, DailySavingsViewSet,
-    DisbursementVoucherViewSet, DirectionCashCountViewSet,
+    DisbursementVoucherViewSet, DirectionCashCountViewSet, ClosureStatusView,
 )
 
 router = DefaultRouter()
@@ -19,5 +19,6 @@ router.register(r'vouchers',  DisbursementVoucherViewSet, basename='disbursement
 router.register(r'direction-cash-counts', DirectionCashCountViewSet, basename='direction-cash-count')
 
 urlpatterns = [
+    path('closure-status/', ClosureStatusView.as_view(), name='closure-status'),
     path('', include(router.urls)),
 ]
