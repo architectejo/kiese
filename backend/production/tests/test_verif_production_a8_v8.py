@@ -213,12 +213,32 @@ class V8MovementPush(PushBase):
         self.assertEqual(self._m(quantity='99999999999')[1][0], 'REJECTED')
         self.assertEqual(self._m(node=self.k2.code)[1][0], 'REJECTED')
 
-    def test_BUG_907_negative_entry_refused_and_stock_untouched(self):
+    def test_BUG_907_negative_entry_accepted_parity_with_rest(self):
+        # INVERSION (BUG-1020) : ce test s'appelait `..._negative_entry_refused_and_stock_untouched`
+        # et encodait le refus de `ENTRY -5` au push (ancien ticket BUG-907). Il est anterieur a la
+        # decision client BUG-216 (mouvements negatifs ou nuls acceptes, stock negatif autorise) qui
+        # regit la voie REST. Decision du coordinateur : meme comportement au push et en REST,
+        # pour ENTRY comme pour EXIT. On verifie donc l'acceptation ET la parite de stock final.
         self._m(quantity='10')
         d, res = self._m(quantity='-5')
-        self.assertEqual(res[0], 'REJECTED')
-        self.assertEqual(self._qty(), Dc('10'))
-        self.assertFalse(ConsumableMovement.objects.filter(pk=d['id']).exists())
+        self.assertEqual(res[0], 'ACCEPTED', res)
+        self.assertEqual(self._qty(), Dc('5'))
+        self.assertTrue(ConsumableMovement.objects.filter(pk=d['id']).exists())
+        # meme sequence en REST (autre consommable du meme noeud) -> meme stock final
+        rest = cl(self.g1)
+        stock = ConsumableStock.objects.get_or_create(
+            node=self.k1, consumable_type='PEPR', defaults={'unit': 'kg', 'node_origin': self.k1.code})[0]
+        for q in ('10', '-5'):
+            r = rest.post('/api/production/movements/', {
+                'stock': str(stock.pk), 'movement_type': 'ENTRY', 'quantity': q, 'unit_price': '10'}, format='json')
+            self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(ConsumableStock.objects.get(pk=stock.pk).quantity, self._qty())
+        # nul accepte aussi ; EXIT negatif idem (parite)
+        self.assertEqual(self._m(quantity='0')[1][0], 'ACCEPTED')
+        self.assertEqual(self._m(movement_type='EXIT', quantity='-2')[1][0], 'ACCEPTED')
+        self.assertEqual(self._qty(), Dc('7'))
+        # bornes de magnitude conservees
+        self.assertEqual(self._m(quantity='-99999999999')[1][0], 'REJECTED')
 
     def test_BUG_907_non_ascii_quantity_refused(self):
         d, res = self._m(quantity=AR)

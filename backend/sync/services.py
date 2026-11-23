@@ -2648,11 +2648,10 @@ def _check_consumable_movement(node, record):
         return "« unit » invalide"
     if record.get('quantity') not in (None, ''):
         try:
-            # BUG-1019 : une SORTIE négative (restitution de farine...) ou nulle est acceptée comme
-            # en REST (décision client BUG-216). Une ENTRÉE négative reste refusée (test BUG-907 :
-            # `ENTRY -5` rejetée ; écart résiduel documenté avec REST qui l'accepte).
-            low = None if record.get('movement_type') == 'EXIT' else Decimal('0')
-            _prod_decimal(record['quantity'], 'quantity', 3, minimum=low, max_digits=10)
+            # BUG-1020 (inverse BUG-907, qui refusait `ENTRY -5`) : mouvements négatifs ou nuls
+            # acceptés pour ENTRY comme pour EXIT, identique à REST (décision client BUG-216 ;
+            # stock négatif autorisé). Seules les bornes de magnitude restent contrôlées.
+            _prod_decimal(record['quantity'], 'quantity', 3, minimum=None, max_digits=10)
         except ValueError as exc:
             return str(exc)
     if record.get('unit_price') not in (None, ''):
