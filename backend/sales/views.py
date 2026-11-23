@@ -1012,6 +1012,13 @@ class InvoiceViewSet(
                     _adjust_bread_stock(invoice.node, bps[bp_id], sent=-qty)
         invoice.status = Invoice.Status.CANCELLED
         invoice.save(update_fields=['status'])
+        # BUG-890 : les ajustements liés (créés LIVRÉS) sont neutralisés avec la mère
+        # (leur part de BP/stock/compteur est déjà incluse dans le net restitué ci-dessus) :
+        # ils n'apparaissent plus dans bread_summary / daily_summary.
+        if adjustments:
+            Invoice.objects.filter(pk__in=[a.pk for a in adjustments]).exclude(
+                status=Invoice.Status.CANCELLED
+            ).update(status=Invoice.Status.CANCELLED)
         if invoice.client_id:
             # BUG-665 : la BP vient d'être rétablie -> catégorie recalculée.
             client.refresh_from_db()

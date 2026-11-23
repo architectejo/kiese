@@ -86,7 +86,6 @@ class Verifs(Base):
         r = self._bs()
         self.assertEqual((r['grand_total_qty'], r['grand_total_fc']), (12, 3600), r)
 
-    @expectedFailure
     def test_BUG_890_ajustement_sur_facture_en_attente_annulee_ne_fausse_pas_les_resumes(self):
         """BUG-890 : l'ajustement d'une facture EN ATTENTE est cree LIVRE ; si la facture mere est annulee
         l'ajustement reste : bread_summary -2 pains, daily_summary CREDIT -600 / 1 livraison fantome."""
