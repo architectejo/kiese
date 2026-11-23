@@ -3013,6 +3013,7 @@ def _build_daily_closure_report(node, report_date=None):
         non_vendu_entry = disp.get(BreadDisposal.DisposalType.UNSOLD, {'quantity': 0, 'fc': '0.00'})
         declasses_entry = disp.get(BreadDisposal.DisposalType.DECLASSED, {'quantity': 0, 'fc': '0.00'})
         sorties_gratuites_entry = disp.get(BreadDisposal.DisposalType.FREE_DIST, {'quantity': 0, 'fc': '0.00'})
+        soldes_declares_entry = disp.get(BreadDisposal.DisposalType.SOLD_DISCOUNT, {'quantity': 0, 'fc': '0.00'})
 
         # FACTURE MVM INTERNE (Q-006, réponse client 2026-11-02 — preuve
         # audit `K6!L21 = SUM(L8:L20)`) : ce n'est PAS une facture séparée
@@ -3032,6 +3033,8 @@ def _build_daily_closure_report(node, report_date=None):
             - non_servi_fc + reg_fc  # BUG-177 : NS retranchée (signe du classeur)
             + soldee_fc  # VENTE CASH + VENTE SOLDE : un seul bucket existant (is_soldee)
             + _m(non_vendu_entry['fc']) + _m(declasses_entry['fc'])
+            # BUG-1201 : soldes declares en disposition (R5 du produit derive).
+            + _m(soldes_declares_entry['fc'])
             # EXCEDENT PAINS + MANQUANT PAINS : non modélisés par catégorie (0)
         )
 
@@ -3076,6 +3079,7 @@ def _build_daily_closure_report(node, report_date=None):
             'non_vendu_nv':       {'quantity': non_vendu_entry['quantity'], 'fc': non_vendu_entry['fc']},
             'declasses':          {'quantity': declasses_entry['quantity'], 'fc': declasses_entry['fc']},
             'sorties_gratuites':  {'quantity': sorties_gratuites_entry['quantity'], 'fc': sorties_gratuites_entry['fc']},
+            'soldes_declares':    {'quantity': soldes_declares_entry['quantity'], 'fc': soldes_declares_entry['fc']},
         })
 
         total_ns_status_fc += ns_status_fc

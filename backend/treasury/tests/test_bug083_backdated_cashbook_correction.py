@@ -79,11 +79,31 @@ class RetroactiveDeliveryOnLockedClosureTests(TransactionTestCase):
         # Jour D largement dans le passé par rapport à "aujourd'hui".
         self.day = date.today() - timedelta(days=20)
 
-    def _lock_day(self):
+    def _create_pending_retroactive_invoice(self, qty):
+        """Changement de spécification voulu : BUG-988. Une NOUVELLE vente antidatée
+        sur une clôture déjà confirmée est refusée (403). La facture antidatée doit
+        donc être créée AVANT la confirmation de la clôture (en attente de
+        livraison, donc sans effet sur les totaux) ; seule sa LIVRAISON tardive
+        tombe ensuite sur la clôture verrouillée — ce que BUG-083 protège."""
+        create = self.api_fact.post('/api/sales/invoices/', {
+            'client': str(self.client_obj.pk),
+            'payment_type': 'CASH',
+            'payment_amount': str(qty * self.bread.unit_price),
+            'invoice_date': str(self.day),
+            'lines': [{'bread_price': self.bread.pk, 'quantity': qty}],
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.content)
+        return create.data['id']
+
+    def _lock_day(self, pending_qty=None):
         """Construit l'historique normal du jour D : facture livrée, rapport
         Niveau 1 généré, clôture Niveau 2 créée + validée + poussée au Livre
-        de Caisse — exactement l'état « verrouillé » visé par le ticket."""
+        de Caisse — exactement l'état « verrouillé » visé par le ticket.
+        Si `pending_qty` est donné, une facture antidatée en attente de
+        livraison est créée avant la confirmation (BUG-988)."""
         _deliver_same_day(self.node, self.facA, self.client_obj, self.bread, 5, self.day)
+        if pending_qty:
+            self.pending_invoice_id = self._create_pending_retroactive_invoice(pending_qty)
 
         gen = self.api_gerant.post('/api/treasury/reports/generate/', {'date': str(self.day)}, format='json')
         self.assertEqual(gen.status_code, 200, gen.content)
@@ -105,28 +125,38 @@ class RetroactiveDeliveryOnLockedClosureTests(TransactionTestCase):
         closure.refresh_from_db()
         return closure
 
-    def _add_retroactive_invoice(self, qty=2):
-        """Nouvelle facture, créée ET livrée via l'API, datée du jour D déjà
-        verrouillé — exactement le scénario que le signal BUG-036 bloquait
-        avant ce ticket."""
-        create = self.api_fact.post('/api/sales/invoices/', {
-            'client': str(self.client_obj.pk),
-            'payment_type': 'CASH',
-            'payment_amount': str(qty * self.bread.unit_price),
-            'invoice_date': str(self.day),
-            'lines': [{'bread_price': self.bread.pk, 'quantity': qty}],
-        }, format='json')
-        self.assertEqual(create.status_code, 201, create.content)
-        invoice_id = create.data['id']
-
+    def _deliver_retroactively(self):
+        """Livraison tardive de la facture antidatée créée avant la confirmation
+        de la clôture."""
         deliver = self.api_fact.post(
-            f'/api/sales/invoices/{invoice_id}/deliver/', {'delivered_at': str(self.day)}, format='json'
+            f'/api/sales/invoices/{self.pending_invoice_id}/deliver/',
+            {'delivered_at': str(self.day)}, format='json'
         )
         self.assertEqual(deliver.status_code, 200, deliver.content)
-        return Invoice.objects.get(pk=invoice_id)
+        return Invoice.objects.get(pk=self.pending_invoice_id)
+
+    def test_new_backdated_sale_on_confirmed_closure_is_refused(self):
+        # Changement de spécification voulu : BUG-988.
+        self._lock_day()
+        count_before = Invoice.objects.count()
+        resp = self.api_fact.post('/api/sales/invoices/', {
+            'client': str(self.client_obj.pk),
+            'payment_type': 'CASH',
+            'payment_amount': '600.00',
+            'invoice_date': str(self.day),
+            'lines': [{'bread_price': self.bread.pk, 'quantity': 2}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 403, resp.content)
+        self.assertEqual(
+            resp.data['detail'],
+            f"Vente refusée : la clôture du {self.day} est déjà confirmée par la direction, "
+            "aucune vente ne peut plus y être ajoutée.",
+        )
+        self.assertEqual(Invoice.objects.count(), count_before)
 
     def test_retroactive_delivery_never_mutates_an_existing_cashbook_entry(self):
-        closure = self._lock_day()
+        # Changement de spécification voulu : BUG-988 (facture créée avant la confirmation).
+        closure = self._lock_day(pending_qty=2)
         original_entry = CashbookEntry.objects.get(source_closure=closure, is_correction=False)
 
         # Empreinte complète de TOUTES les écritures existantes avant la
@@ -137,7 +167,7 @@ class RetroactiveDeliveryOnLockedClosureTests(TransactionTestCase):
         }
         self.assertEqual(len(before_snapshot), 1)
 
-        new_invoice = self._add_retroactive_invoice(qty=2)  # +600 FC cash
+        new_invoice = self._deliver_retroactively()  # +600 FC cash
 
         after_entries = list(CashbookEntry.objects.all())
         after_snapshot = {
@@ -178,10 +208,11 @@ class RetroactiveDeliveryOnLockedClosureTests(TransactionTestCase):
         self.assertTrue(all(is_valid for _e, _h, is_valid in results), "Chaîne de hash rompue par la correction.")
 
     def test_closure_display_totals_are_reopened_without_touching_the_ledger(self):
-        closure = self._lock_day()
+        # Changement de spécification voulu : BUG-988 (facture créée avant la confirmation).
+        closure = self._lock_day(pending_qty=2)
         original_net_cash = closure.net_cash  # valeur telle que poussée au Livre de Caisse
 
-        self._add_retroactive_invoice(qty=2)  # +600 FC
+        self._deliver_retroactively()  # +600 FC
 
         closure.refresh_from_db()
         self.assertEqual(
@@ -196,9 +227,10 @@ class RetroactiveDeliveryOnLockedClosureTests(TransactionTestCase):
 
     def test_notification_created_for_the_correction(self):
         from core.models import SystemNotification
-        self._lock_day()
+        # Changement de spécification voulu : BUG-988 (facture créée avant la confirmation).
+        self._lock_day(pending_qty=1)
         count_before = SystemNotification.objects.count()
-        self._add_retroactive_invoice(qty=1)
+        self._deliver_retroactively()
         self.assertGreater(SystemNotification.objects.count(), count_before)
         self.assertTrue(
             SystemNotification.objects.filter(severity='DANGER').exists(),
@@ -227,19 +259,22 @@ class RetroactiveDeliveryOnValidatedButNotPushedClosureTests(TransactionTestCase
         self.day = date.today() - timedelta(days=15)
 
     def test_no_cashbook_entry_created_when_closure_not_yet_pushed(self):
+        # Changement de spécification voulu : BUG-988 — la facture antidatée est créée
+        # AVANT la confirmation de la clôture, puis livrée après.
         _deliver_same_day(self.node, self.facA, self.client_obj, self.bread, 5, self.day)
+        create_inv = self.api_fact.post('/api/sales/invoices/', {
+            'client': str(self.client_obj.pk), 'payment_type': 'CASH', 'payment_amount': '300.00',
+            'invoice_date': str(self.day),
+            'lines': [{'bread_price': self.bread.pk, 'quantity': 1}],
+        }, format='json')
+        self.assertEqual(create_inv.status_code, 201, create_inv.content)
+        invoice_id = create_inv.data['id']
         self.api_gerant.post('/api/treasury/reports/generate/', {'date': str(self.day)}, format='json')
         create = self.api_gerant.post('/api/treasury/closures/', {'date': str(self.day), 'bills_500': 3}, format='json')
         closure = CashClosure.objects.get(pk=create.data['id'])
         self.api_comptable.post(f'/api/treasury/closures/{closure.id}/validate/', {}, format='json')
         # Volontairement PAS de push_to_cashbook ici.
 
-        create_inv = self.api_fact.post('/api/sales/invoices/', {
-            'client': str(self.client_obj.pk), 'payment_type': 'CASH', 'payment_amount': '300.00',
-            'invoice_date': str(self.day),
-            'lines': [{'bread_price': self.bread.pk, 'quantity': 1}],
-        }, format='json')
-        invoice_id = create_inv.data['id']
         deliver = self.api_fact.post(
             f'/api/sales/invoices/{invoice_id}/deliver/', {'delivered_at': str(self.day)}, format='json'
         )

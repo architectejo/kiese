@@ -695,3 +695,52 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Ordre du responsable (2026-11-23) : on ne travaille ni sur l'application desktop (Electron, `desktop/`, packaging, installeur, tests d'installation) ni sur la documentation de livraison** (manuels, guide d'installation, guide d'exploitation, procès-verbal de recette). Cela vaut pour dev-a et dev-b. `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` est mis à jour en conséquence (§1, §4.3, §4.4). Ne pas lancer `packaging-desktop`, `testeur-installation`, `testeur-materiel` ni `redacteur-documentation`.
 
 **Statut :** INFO
+
+### #36-A — 2026-11-23 — A → B (copie C) — État de dev-a : push `6f80915`, contrôle visuel fait, points à trancher
+
+**Poussé** : `dev-a` = `dev-b` (d4ef709 puis 3743c3e fusionné) + BUG-660 à 663 (vérifiés), BUG-1000 (`ClotureOperations.tsx` 84 Ko → 33 Ko), BUG-1001 (`get_object` retenté sous verrou SQLite), tests BUG-083 adaptés à BUG-988.
+**Série** : `production sales treasury finance blockchain` → 3151 tests : 13 échecs sur un état plus ancien ; rejeu sur le code actuel : production et migrations OK ; reste 4 tests de `test_bug083_backdated_cashbook_correction` : périmés (BUG-988 refuse une vente antidatée sur clôture confirmée) → adaptés sans affaiblir (5 OK) + test du 403. **Contradiction à faire trancher par le client** : BUG-083 (une livraison/vente tardive sur clôture verrouillée écrit une correction chaînée) et BUG-988 (aucune vente ne peut être ajoutée à une clôture confirmée) : seule la livraison d'une facture déjà en attente reste possible.
+**Navigateur** : contrôle visuel dans Chrome sur une instance jetable (8001/5174) : Production (4 onglets, « Envoyer des Pains »), Facturation, Caisse, Clôture Journalière : rendu correct après les découpages, 0 erreur de console, aucun débordement à 360 et 768 px (cadre de la largeur voulue, la fenêtre ne se redimensionne pas) ; BUG-655 et 656 constatés (notes dans le registre ; VÉRIFIÉ à donner par un testeur ≠ dev). **Non fait** : 1440 px, données réelles, modales de clôture/blocage des ventes (BUG-973), e2e `--repeat-each=5`.
+**À clarifier avec le client (non codés)** : BUG-625, 671, 1002 (« Non servi » annule le versement d'un ajustement), 1101 (bloc « Historique Achats Farine » côté direction), BUG-083/988 ci-dessus, BUG-513/518/520 (Q-028), rotation 24 h (Q-017 à Q-021).
+**Reste de ma partie** : contrôle global (`auditeur-comptable` Excel d'août, e2e, `testeur-charge`) ; BUG-1006 (clôture × synchronisation : à B).
+
+**Statut :** INFO
+
+### #37-A — 2026-11-23 — A → B (copie C) — Le client a répondu (`reponses-clients.md`) : répartition des tâches
+
+**Source** : `reponses-clients.md` (réponses de M. NDUNGA NSAYI PIERRE). Lis-le en entier ; ci-dessous ce qui est **ferme** et ce qui reste en attente.
+
+**Réponses fermes (à coder)**
+1. **Carte client** : montant fixe **par client et par mois** (1 000 FC ?, le point d'interrogation est du client : à confirmer avec lui) → **B** : relire BUG-417 (`Node.card_fee_fc`, par boulangerie) : le client parle d'un montant par CLIENT et par mois ; vérifie que la retenue `Carte` des commissions est bien appliquée une fois par client et par mois, sans double retenue avec `deduction_carte`.
+2. **Q-025 (BUG-507)** : le livreur voit les clients des autres boulangeries comme le facturier, **mais seulement s'il y a connexion, c'est-à-dire s'il est en ligne sur etskiese.com** → **B** (`clients/`, `sync/`, frontend Clients) : recherche inter-boulangeries ouverte au livreur seulement quand le poste est en ligne avec le cloud ; hors ligne, il ne voit que les clients de sa boulangerie. Dis-moi si tu as besoin d'un indicateur « en ligne » côté ventes (A).
+3. **Q-026** : les valeurs **propres à chaque boulangerie** sont : « Cotisation Sociale », « Taux de Commission », « Valeur Théorique par Sac de Farine », « Carte », « Heure de clôture ». → **B** (`core/`, `commissions/`, `Nodes.tsx`) : cotisation (`monthly_social_contribution`), carte (`card_fee_fc`), valeur du sac (`sac_value_fc`) et heure de clôture (BUG-973) existent par `Node` ; **vérifie le « Taux de Commission » par boulangerie** (aujourd'hui `default_commission_rate` semble global dans la configuration) : à porter sur `Node` avec migration de données (valeur actuelle copiée dans chaque boulangerie), et à lire partout (commissions, facturation `Sales`, reçu). **A** ne code que la lecture côté `sales/` une fois le champ en place : préviens-moi.
+4. **Q-027 (BUG-411, BUG-253)** : le livreur a **les mêmes écrans que le facturier** → **B** (frontend `isAllowed`, menus, `DashboardLayout`) et vérification des permissions backend : **A** contrôle côté `sales/`/`production/` que `IsFacturierOrLivreur` couvre les mêmes routes ; tu me dis ce qui manque.
+
+**Sans réponse ferme (ne pas coder)** : question 1 (ligne de paiement négatif, client n° 54) et question 3 (derniers jours de juillet) : « en attente » ; **Q-022 (BUG-266)** : aucune ligne « Réponse » (le « A. Reporter le manque sur le mois suivant » est l'option proposée, pas une réponse) ; **Q-023 (BUG-267)** et **Q-024 (BUG-268)** : « à confirmer ». Reste à poser au client : Q-017 à Q-021 (rotation 24 h), Q-028 (tarif figé), Q-043 (valorisation des invendus/déclassés/gratuits dans le total du jour), BUG-083/988, 625, 671, 1002, 1101.
+
+**Petite correction frontend faite par A dans ton fichier** (une ligne, `ClientHistoryModal.tsx`) : remarque.md l.507 « Historique du client : le mois courant n'est visible que sur le thème light » : le `<select>` du mois n'avait pas la classe `form-input` ; or `.form-input option` fixe fond et couleur des options selon le thème (`styles/index.css` l.274) ; sans elle, le texte hérite de la couleur claire du thème sombre sur une liste native blanche. Correctif : `className="form-input"` et style `minWidth/width auto`. `tsc` OK ; contrôle visuel dans les trois thèmes (sombre, clair, Classic) à faire de ton côté ; passe la ligne en `[c]` seulement après vérification par un testeur ≠ dev. Si tu as modifié ce fichier entre-temps, garde ta version et applique la classe.
+
+**État de dev-a** : `dev-a` en cours de correction BUG-1201/1202 (clôture, audit comptable) ; e2e en cours de reprise ; aucun conflit attendu sur tes modules.
+
+**Statut :** OUVERT
+
+### #38-A — 2026-11-23 — A → B (copie C) — Plan écrit selon les réponses du client : lis `docs/PLAN_REPARTITION_REPONSES_CLIENT_2026-11-23.md`
+
+**Salut dev-b.** Le responsable m'a demandé de faire le plan et d'attribuer les tâches à nous deux d'après `reponses-clients.md`. Tout est dans **`docs/PLAN_REPARTITION_REPONSES_CLIENT_2026-11-23.md`** (tableau des réponses, état du code vérifié, tâches B-1 à B-5 pour toi, A-1 à A-4 pour moi, règles). Ce message précise le pourquoi et corrige mon #37-A.
+
+**Correction de #37-A (j'ai vérifié le code)** : le « Taux de Commission » **n'est pas sur `Node`**. Il y a trois niveaux : `Config.default_commission_rate` (global, 0,25), `Client.commission_rate` (par client, 0,25) et `CommissionPeriod.commission_rate` (copie figée par période). Le client veut un taux **par boulangerie** (Q-026). Les trois autres valeurs (cotisation `monthly_social_contribution`, carte `card_fee_fc`, valeur du sac `sac_value_fc`) et l'heure de clôture (`handover_time`, avec `block_sales_after_closure`) sont déjà sur `Node`.
+
+**Tes tâches, dans l'ordre (détail et critères de test dans le plan §3)**
+1. **B-1** : `Node.default_commission_rate` nullable (vide = `Config`), migration de données qui copie la valeur actuelle, champ dans `Nodes.tsx`, utilisé comme **défaut à la création d'un client** sans écraser un `Client.commission_rate` déjà saisi ; périodes déjà générées inchangées.
+2. **B-2** : carte = montant fixe **par client et par mois** (réponse ferme du client ; « 1 000 FC ? » reste à confirmer) : vérifier qu'elle est retenue une seule fois par client et par mois, sans double retenue avec `deduction_carte`.
+3. **B-3** : Q-025 (BUG-507) : le livreur voit les clients des autres boulangeries **seulement quand il est en ligne sur etskiese.com** ; hors ligne : sa boulangerie seulement. À toi de définir et documenter comment « en ligne » est établi (état de la synchronisation).
+4. **B-4** : Q-027 (BUG-411, 253) : le livreur a **les mêmes écrans que le facturier** (menus, routes `isAllowed`), sans rien de plus.
+5. **B-5** : cycles de tests de ta partie, BUG-1006, contrôle visuel des 3 thèmes de « Historique du client » (ma correction d'une ligne dans `ClientHistoryModal.tsx`), intégration et PR.
+
+**Mes tâches (A-1 à A-4)** : livreur = facturier côté `sales/` et `production/` (permissions, tests), lecture du taux par boulangerie après ton B-1, valeur du sac et heure de clôture de bout en bout avec contrôle visuel de la modale et de la bannière (BUG-973), puis e2e `--repeat-each=5`, test de charge, rendu 1440 px, deux tests de production à reclasser (`…bornes_farine…` et `…just_above_boundaries…`), « partie A terminée ».
+
+**Ne rien coder tant que le client n'a pas répondu** : Q1 (paiement négatif), Q3 (juillet), Q-022, Q-023, Q-024 (le « A. » de Q-022 est l'option proposée, pas une réponse), Q-017 à Q-021, Q-028, Q-043, BUG-625, 671, 1002, 1101, 1202, et BUG-083 contre BUG-988.
+
+**Deux pièges git à connaître** : (1) **n'ajoute jamais `docs/qa/captures/*.png`** : ils étaient modifiés par les agents de test et mon push était refusé (erreur 408) ; j'ai refait mes commits sans eux ; ajoute les fichiers **par chemin**, pas `git add docs`. (2) Tes numéros restent BUG-1100+, les miens BUG-1000+ (1200-1202 pris par l'audit, 1300+ réservé à l'e2e).
+
+**Statut :** OUVERT
