@@ -138,10 +138,10 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 
 **Situation.** L'application compte le sel en **grammes**. Votre fichier compte des **sacs**, avec une conversion « Bte/U » (204, 205…) et deux restes (en sacs et en boîtes).
 
-- **A.** (**Aujourd'hui**) Grammes partout.
+- **A.** Grammes partout.
 - **B.** Sacs, avec conversion en boîtes/unités (préciser le nombre de boîtes par sac).
 
-*Question : quelle unité de saisie et d'affichage voulez-vous pour le sel ?*
+**Réponse : 1 sac = 20 kg = 204 boîtes (donnée par le client).** Une boîte vaut donc 20 000 g ÷ 204 ≈ 98,04 g. Le stock reste compté en grammes ; les statistiques affichent en plus les équivalents en sacs et en boîtes (poids du sac et boîtes par sac sont réglables dans la configuration des consommables).
 
 ### Q-048 (intrants) — Huile : la formule du total avant production
 

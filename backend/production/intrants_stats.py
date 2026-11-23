@@ -8,7 +8,7 @@ technique SIEGE), une ligne TOTAUX. Colonnes : stock initial, entree, sortie, to
 production, consommation du jour, solde comptable, reference production (sacs de farine du jour),
 indice de consommation, reste declare (inventaire physique du jour), ecart.
 
-Reutilise les donnees existantes (aucun nouveau modele) : `ConsumableStock` (stock courant),
+Reutilise les donnees existantes : `ConsumableStock` (stock courant),
 `ConsumableMovement` (entrees/sorties), `ProductionSession` (sacs), `ConsumableInventory` +
 `ConsumableCount` (reste declare). Tout est en `Decimal`, arrondi a l'ecriture (3 decimales pour les
 quantites, 4 pour l'indice) ; jamais de `float`.
@@ -27,12 +27,16 @@ Definitions (jour J, noeud N, intrant T) :
 - reste declare = quantite physique de l'inventaire du jour (None si absent) ;
 - ecart = reste declare - solde comptable (None si non declare : jamais l'oppose du solde).
 
-HYPOTHESES (questions client Q-044 a Q-050 en attente, NON tranchees ici) : formule
+SEL (reponse ferme du client) : 1 sac de sel = 20 kg = 204 boites, donc 1 boite = 20 000 g / 204
+(~98,0392 g). Le stock reste STOCKE en grammes ; la reponse ajoute, pour type=SALT, les equivalents
+`*_bags` (sacs, 3 decimales) et `*_units` (boites, 1 decimale), calcules sur la valeur exacte en
+grammes (aucun arrondi intermediaire), et un objet `conversion`. La conversion vient de
+`ConsumableType.bag_weight_g` / `units_per_bag` ; si l'un des deux manque, les equivalents sont null.
+
+HYPOTHESES (questions client Q-045 a Q-050 en attente, NON tranchees ici) : formule
 `initial + entree - sortie` pour tous les intrants (le tableur de l'huile ecrit `entree x sortie`),
-unites actuelles de l'application (farine en sacs, levure en paquets, huile en litres, sel en
-grammes ; la conversion sacs/boites `Bte/U` du sel n'est pas appliquee), signe de l'ecart =
-declare - comptable, colonne « ok » du sel ignoree, ligne TOTAUX = boulangeries + D1 (ecart et
-reste declare totalises sur les seules lignes declarees). Ces hypotheses sont renvoyees dans le JSON.
+signe de l'ecart = declare - comptable, colonne « ok » du sel ignoree, ligne TOTAUX = boulangeries
++ D1 (ecart et reste declare totalises sur les seules lignes declarees). Renvoyees dans le JSON.
 """
 import re
 from datetime import date as date_cls
@@ -53,10 +57,11 @@ from .models import (ConsumableCount, ConsumableInventory, ConsumableMovement, C
 
 SIEGE_CODE = 'SIEGE'
 ZERO = Decimal('0')
+Q1 = Decimal('0.1')
 Q3 = Decimal('0.001')
 Q4 = Decimal('0.0001')
 
-# Intrants geres. SALT et OIL : structure seulement (regles ambigues, voir hypotheses).
+# Intrants geres. OIL : structure seulement (regles ambigues, voir hypotheses).
 SUPPORTED_TYPES = {
     'FLOUR': ('Farine', 'sacs'),
     'YEAST': ('Levure', 'paquets'),
@@ -64,11 +69,16 @@ SUPPORTED_TYPES = {
     'SALT': ('Sel', 'g'),
 }
 
+# Colonnes quantitatives convertibles en sacs / boites (sel).
+CONVERTIBLE_KEYS = ('initial', 'entry', 'exit', 'total_before_production', 'consumption',
+                    'balance', 'declared_remaining', 'gap')
+
 HYPOTHESES = [
     "Total avant production = stock initial + entrée − sortie pour tous les intrants (huile comprise : "
     "la formule « entrée × sortie » du tableur n'est pas reprise).",
-    "Unités de l'application : farine en sacs, levure en paquets, huile en litres, sel en grammes "
-    "(la conversion sacs/boîtes « Bte/U » du sel n'est pas appliquée).",
+    "Unités de l'application : farine en sacs, levure en paquets, huile en litres, sel stocké en grammes.",
+    "Sel (règle du client) : 1 sac = 20 kg = 204 boîtes, soit 1 boîte = 20 000 g ÷ 204 ≈ 98,0392 g ; "
+    "les équivalents en sacs et en boîtes sont calculés sur les grammes exacts, sans arrondi intermédiaire.",
     "Écart = reste déclaré − solde comptable ; vide (null) si le reste n'est pas déclaré.",
     "La colonne « ok » du tableur n'est pas reprise.",
     "Indice de consommation = consommation ÷ sacs de farine utilisés le même jour ; vide (null) "
@@ -76,6 +86,10 @@ HYPOTHESES = [
     "La ligne TOTAUX additionne les boulangeries affichées et D1 ; le reste déclaré et l'écart "
     "totalisent uniquement les lignes déclarées.",
 ]
+HYPOTHESE_SEL_NON_CONFIGURE = (
+    "Conversion du sel non configurée (poids d'un sac et nombre de boîtes par sac non renseignés) : "
+    "les équivalents en sacs et en boîtes sont vides (null)."
+)
 
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
@@ -181,13 +195,34 @@ def _build(initial, entry, exit_, consumption, reference, declared):
     }
 
 
-def _serialize(row, **ident):
+def salt_conversion(ctype):
+    """Retourne (bag_weight_g, units_per_bag) en Decimal, ou None si non configure / invalide."""
+    if ctype is None or ctype.bag_weight_g is None or not ctype.units_per_bag:
+        return None
+    w = Decimal(ctype.bag_weight_g)
+    u = Decimal(ctype.units_per_bag)
+    if w <= 0 or u <= 0:
+        return None
+    return w, u
+
+
+def _serialize(row, conv=None, salt=False, **ident):
     out = dict(ident)
     for key in ('initial', 'entry', 'exit', 'total_before_production', 'consumption', 'balance',
                 'production_reference', 'declared_remaining', 'gap'):
         out[key] = _q3(row[key])
     idx = row['consumption_index']
     out['consumption_index'] = None if idx is None else str(idx.quantize(Q4))
+    if salt:
+        for key in CONVERTIBLE_KEYS:
+            g = row[key]
+            if g is None or conv is None:
+                out[key + '_bags'] = None
+                out[key + '_units'] = None
+            else:
+                w, u = conv
+                out[key + '_bags'] = str((g / w).quantize(Q3))
+                out[key + '_units'] = str((g * u / w).quantize(Q1))
     return out
 
 
@@ -240,18 +275,36 @@ class IntrantsStatsView(APIView):
         nodes = bakeries + ([siege] if siege else [])
         computed = compute_rows(day, code, nodes) if nodes else []
 
-        rows = []
-        for n, r in zip(nodes, computed):
-            rows.append(_serialize(r, node=n.pk, code='D1' if n.code == SIEGE_CODE else n.code,
-                                   name=n.name, is_direction=n.code == SIEGE_CODE))
         label, unit = SUPPORTED_TYPES[code]
         ctype = ConsumableType.objects.filter(code=code).first()
         if ctype is not None:
             label, unit = ctype.label, ctype.unit or unit
-        return Response({
+
+        salt = code == 'SALT'
+        conv = salt_conversion(ctype) if salt else None
+
+        rows = []
+        for n, r in zip(nodes, computed):
+            rows.append(_serialize(r, conv, salt, node=n.pk,
+                                   code='D1' if n.code == SIEGE_CODE else n.code,
+                                   name=n.name, is_direction=n.code == SIEGE_CODE))
+        hypotheses = list(HYPOTHESES)
+        payload = {
             'date': day.isoformat(), 'type': code, 'label': label, 'unit': unit,
-            'hypotheses': HYPOTHESES,
-            'rows': rows,
-            'totals': _serialize(_totals(computed), node=None, code='TOTAUX', name='TOTAUX',
-                                 is_direction=False),
-        })
+        }
+        if salt:
+            if conv is None:
+                hypotheses.append(HYPOTHESE_SEL_NON_CONFIGURE)
+                payload['conversion'] = {'bag_weight_g': None, 'units_per_bag': None,
+                                         'unit_weight_g': None}
+            else:
+                w, u = conv
+                payload['conversion'] = {
+                    'bag_weight_g': str(w.quantize(Q3)), 'units_per_bag': int(u),
+                    'unit_weight_g': str((w / u).quantize(Q4)),
+                }
+        payload['hypotheses'] = hypotheses
+        payload['rows'] = rows
+        payload['totals'] = _serialize(_totals(computed), conv, salt, node=None, code='TOTAUX',
+                                       name='TOTAUX', is_direction=False)
+        return Response(payload)

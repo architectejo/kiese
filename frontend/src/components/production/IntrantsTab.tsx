@@ -5,6 +5,7 @@ import type { UserProfile } from '@/store/authStore';
 import { STOCK_ICONS, displayStock } from './productionHelpers';
 import { GlobalConsumablesSection } from './GlobalConsumablesSection';
 import { PhysicalInventoryForm } from './PhysicalInventoryForm';
+import { IntrantsStatsTab } from './IntrantsStatsTab';
 
 export interface IntrantsTabProps {
   stocks: ConsumableStock[];
@@ -22,14 +23,25 @@ export interface IntrantsTabProps {
 }
 
 export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, setShowApproModal, countValues, setCountValues, countError, countSubmitting, lastCounts, user, currentNodeLabel, hasLowStock, handleInventoryCount }) => {
+  const [subTab, setSubTab] = React.useState<'stocks' | 'stats'>('stocks');
   const role = user?.role;
   const isGlobalViewer = role === 'ADMIN' || role === 'DIRECTION' || role === 'COMPTABLE';
   const isGerant = role === 'GERANT';
   // BUG-656 : la direction ne voit que la vue globale (orientation, approvisionnement du stock
   // direction, inventaire physique par boulangerie), sans la section « Stocks Consommables (§3.2) ».
-  if (isGlobalViewer) return <GlobalConsumablesSection role={role} />;
+  // BUG-1061 : sous-onglet « Statistiques » (siège + gérant ; masqué pour facturier/livreur).
+  const canSeeStats = isGlobalViewer || isGerant;
+  const subTabBar = canSeeStats && (
+    <div role="tablist" style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+      <button role="tab" aria-selected={subTab === 'stocks'} onClick={() => setSubTab('stocks')} className={`btn ${subTab === 'stocks' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 12px', fontSize: '0.72rem' }}>Stocks</button>
+      <button role="tab" aria-selected={subTab === 'stats'} onClick={() => setSubTab('stats')} className={`btn ${subTab === 'stats' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 12px', fontSize: '0.72rem' }}>Statistiques</button>
+    </div>
+  );
+  if (canSeeStats && subTab === 'stats') return <>{subTabBar}<IntrantsStatsTab canFilterNode={isGlobalViewer} /></>;
+  if (isGlobalViewer) return <>{subTabBar}<GlobalConsumablesSection role={role} /></>;
   return (
     <>
+      {subTabBar}
         <div className="glass-card" style={{ padding: '14px', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h2 style={{ fontSize: '0.88rem', fontWeight: 800 }}>

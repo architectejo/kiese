@@ -600,6 +600,14 @@ class ConsumableType(models.Model):
     label = models.CharField(max_length=100, verbose_name=_("Libellé"))
     unit  = models.CharField(max_length=20, blank=True, default='', verbose_name=_("Unité"))
     is_active = models.BooleanField(default=True, verbose_name=_("Actif"))
+    # BUG-1060 : conversion sac -> boites (sel : 1 sac = 20 kg = 204 boites, reponse ferme du client).
+    # Le stock reste en `unit` (grammes pour le sel) ; la masse d'une boite n'est PAS stockee
+    # (= bag_weight_g / units_per_bag, calculee sans arrondi intermediaire).
+    bag_weight_g = models.DecimalField(
+        max_digits=12, decimal_places=3, null=True, blank=True,
+        verbose_name=_("Poids d'un sac (g)"))
+    units_per_bag = models.PositiveIntegerField(
+        null=True, blank=True, verbose_name=_("Boîtes par sac"))
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

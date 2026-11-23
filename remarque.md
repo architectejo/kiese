@@ -472,9 +472,6 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 [] Dans "Production & Stocks" section "Intrants — Stocks Consommables (§3.2)" La direction doit avoir une vu globale pour les stocks de toute les boulangerie, quantité des Farine, Huile (Litre), Sel (g), Levure (Paquet 450 g) et les stocks disponible à la direction, il peut orienter(envoyer) une certaine quantité à des boulangéries, "Inventaire Physique" c'est le gérant qui le saisit, une fois saisi il ne peut pas modifier le même jours, il doit attandre le jour d'après mais il peut ajouter un commentaire, et la direction peut voir "Inventaire Physique" en cliquant sur une boulangerie une boite modale doit s'ouvrir avec les détails
 
 
-
-_______________________________________________________________
-
 [] Dans "Clôture Journalière" section "Décomposition par Catégorie de Pain" pas besoin d'afficher ce genre de texte:
 "
     Régularisation : pains ajoutés ou retirés par les factures de régularisation (code RG) et par les corrections de commande (ajustements), à leur prix plein.

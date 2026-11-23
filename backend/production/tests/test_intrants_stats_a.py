@@ -243,3 +243,96 @@ class Parametres(Intrants):
         r = self.get(self.u['DIRECTION'], type='flour')
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['date'], TODAY.isoformat())
+
+
+class Sel(Intrants):
+    """Regle ferme du client : 1 sac de sel = 20 kg = 204 boites (valeurs fictives)."""
+
+    def configure(self):
+        ConsumableType.objects.filter(code='SALT').update(
+            bag_weight_g=D('20000'), units_per_bag=204)
+
+    def salt_row(self, **kw):
+        r = self.get(self.u['DIRECTION'], type='SALT', date=TODAY.isoformat())
+        self.assertEqual(r.status_code, 200)
+        return r, self.row(r, 'P1')
+
+    def test_one_bag_is_204_boxes(self):
+        self.configure()
+        stock(self.k1, 'SALT', '20000')
+        r, p1 = self.salt_row()
+        self.assertEqual(p1['initial'], '20000.000')  # reste stocke en grammes
+        self.assertEqual((p1['initial_bags'], p1['initial_units']), ('1.000', '204.0'))
+        self.assertEqual(r.data['conversion'], {
+            'bag_weight_g': '20000.000', 'units_per_bag': 204, 'unit_weight_g': '98.0392'})
+        self.assertEqual(r.data['totals']['initial_units'], '204.0')
+        self.assertIsNone(p1['declared_remaining_bags'])  # non declare -> null
+        self.assertIsNone(p1['gap_units'])
+
+    def test_98_grams_is_about_one_box_no_early_rounding(self):
+        self.configure()
+        stock(self.k1, 'SALT', '98')
+        _, p1 = self.salt_row()
+        self.assertEqual(p1['initial_units'], '1.0')     # 98 x 204 / 20000 = 0,9996
+        self.assertEqual(p1['initial_bags'], '0.005')    # 98 / 20000 = 0,0049
+
+    def test_partial_bag_and_flows(self):
+        self.configure()
+        st = stock(self.k1, 'SALT', '30000')
+        move(self.k1, st, 'ENTRY', '10000')
+        move(self.k1, st, 'EXIT', '5000')
+        declare(self.k1, 'SALT', '25000')
+        r, p1 = self.salt_row()
+        # initial 30000 ; entree 10000 ; sortie 5000 ; total 35000 = solde ; declare 25000
+        self.assertEqual((p1['initial_bags'], p1['initial_units']), ('1.500', '306.0'))
+        self.assertEqual((p1['entry_bags'], p1['entry_units']), ('0.500', '102.0'))
+        self.assertEqual((p1['exit_bags'], p1['exit_units']), ('0.250', '51.0'))
+        self.assertEqual((p1['balance_bags'], p1['balance_units']), ('1.750', '357.0'))
+        self.assertEqual((p1['declared_remaining_bags'], p1['declared_remaining_units']),
+                         ('1.250', '255.0'))
+        self.assertEqual((p1['gap'], p1['gap_bags'], p1['gap_units']), ('-10000.000', '-0.500', '-102.0'))
+        self.assertEqual(r.data['totals']['balance_units'], '357.0')
+
+    def test_not_configured_gives_null_and_explicit_hypothesis(self):
+        ConsumableType.objects.filter(code='SALT').update(bag_weight_g=None, units_per_bag=None)
+        stock(self.k1, 'SALT', '20000')
+        r, p1 = self.salt_row()
+        self.assertEqual(p1['initial'], '20000.000')
+        self.assertIsNone(p1['initial_bags'])
+        self.assertIsNone(p1['initial_units'])
+        self.assertIsNone(r.data['totals']['initial_bags'])
+        self.assertEqual(r.data['conversion'], {
+            'bag_weight_g': None, 'units_per_bag': None, 'unit_weight_g': None})
+        self.assertTrue(any('non configurée' in h for h in r.data['hypotheses']))
+        self.assertFalse(any('non appliquée' in h for h in r.data['hypotheses']))
+
+    def test_other_types_have_no_conversion_fields(self):
+        stock(self.k1, 'YEAST', '3')
+        r = self.get(self.u['DIRECTION'], type='YEAST', date=TODAY.isoformat())
+        self.assertNotIn('conversion', r.data)
+        self.assertNotIn('initial_bags', self.row(r, 'P1'))
+
+    def test_rights_unchanged_for_salt(self):
+        self.configure()
+        for role in ('ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'):
+            self.assertEqual(self.get(self.u[role], type='SALT').status_code, 200, role)
+        for role in ('FACTURIER', 'LIVREUR'):
+            self.assertEqual(self.get(self.u[role], type='SALT').status_code, 403, role)
+        g = self.get(self.u['GERANT'], type='SALT')
+        self.assertEqual([x['code'] for x in g.data['rows']], ['P1'])
+
+    def test_type_api_exposes_and_validates_fields(self):
+        ct = ConsumableType.objects.get(code='SALT')
+        url = f'/api/production/consumable-types/{ct.pk}/'
+        r = cl(self.u['GERANT']).get(url)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('bag_weight_g', r.data)
+        self.assertEqual(cl(self.u['GERANT']).patch(
+            url, {'bag_weight_g': '20000', 'units_per_bag': 204}, format='json').status_code, 403)
+        ok = cl(self.u['DIRECTION']).patch(
+            url, {'bag_weight_g': '20000', 'units_per_bag': 204}, format='json')
+        self.assertEqual(ok.status_code, 200, ok.data)
+        bad = cl(self.u['DIRECTION']).patch(url, {'units_per_bag': 0}, format='json')
+        self.assertEqual(bad.status_code, 400)
+        half = cl(self.u['DIRECTION']).patch(url, {'bag_weight_g': None}, format='json')
+        self.assertEqual(half.status_code, 400)  # un seul des deux champs
