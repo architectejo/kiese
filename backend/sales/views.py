@@ -873,6 +873,11 @@ class InvoiceViewSet(
             served[lid] = qty_int
         return served, None
 
+    def _get_object_retry(self):
+        # BUG-1001 : la résolution de l'objet (get_queryset + check_object_permissions) est
+        # retentée sur verrou SQLite ; 404/403 restent propagés tels quels.
+        return _retry_on_lock(self.get_object)
+
     @action(detail=True, methods=['post'], permission_classes=[IsFacturierOrLivreur])
     def deliver(self, request, pk=None):
         # BUG-650 : retentative bornée sur verrou SQLite (une transaction par tentative).
@@ -888,7 +893,7 @@ class InvoiceViewSet(
         (`initial_order_total`, `ordered_quantity`). Statut déjà NOT_SERVED -> 409.
 
         BUG-053 : la séquence est atomique (voir `sales.services.deliver_invoice`)."""
-        invoice = self.get_object()
+        invoice = self._get_object_retry()
         if invoice.special_code == Invoice.SpecialCode.NS:
             return Response(
                 {'detail': "Une facture « Non Servi » ne peut pas être livrée : aucun pain n'a été remis."},
@@ -985,7 +990,7 @@ class InvoiceViewSet(
         encaissement sur la BP (facture à commande 0). Statut terminal ; la
         ligne n'est jamais supprimée. Facture hors statut PENDING -> 409.
         """
-        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        invoice = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
         reason = request.data.get('reason', '')
         if reason is None:
             reason = ''
@@ -1002,7 +1007,7 @@ class InvoiceViewSet(
     @action(detail=True, methods=['post'], permission_classes=[IsFacturier])
     def cancel(self, request, pk=None):
         """Gérant or Facturier can cancel a PENDING order. Restores bread stock and reverses client debt."""
-        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        invoice = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
         return _retry_on_lock(lambda: self._cancel_once(request, invoice.pk))
 
     @transaction.atomic
@@ -1101,7 +1106,7 @@ class InvoiceViewSet(
           date rétroactive, puisque corriger une période déjà close est
           précisément le scénario visé par ce ticket.
         """
-        original = self.get_object()  # filtre par nœud (404 hors périmètre)
+        original = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
         # BUG-663 : même retentative bornée que deliver/cancel (SQLite verrouillé).
         return _retry_on_lock(lambda: self._adjust_once(request, original.pk))
 
