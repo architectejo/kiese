@@ -77,7 +77,8 @@ class ClientCreateSerializer(ClientBoundsMixin, serializers.ModelSerializer):
         extra_kwargs = {'node': {'required': False}}
 
 
-class SocialContributionSerializer(serializers.ModelSerializer):
+class SocialContributionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     client_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -108,7 +109,8 @@ class SocialContributionSerializer(serializers.ModelSerializer):
         return f"[{obj.client.code}] {obj.client.full_name}"
 
 
-class SocialDistributionLineSerializer(serializers.ModelSerializer):
+class SocialDistributionLineSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     client_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -167,7 +169,8 @@ class SocialDistributionLineSerializer(serializers.ModelSerializer):
         return f"[{obj.client.code}] {obj.client.full_name}"
 
 
-class SocialDistributionSerializer(serializers.ModelSerializer):
+class SocialDistributionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     node_display = serializers.StringRelatedField(source='node', read_only=True)
     lines        = SocialDistributionLineSerializer(many=True, read_only=True)
 

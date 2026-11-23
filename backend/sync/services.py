@@ -1560,14 +1560,23 @@ def _push_facturier_report(node, record):
     # `facturier` est NULL (rapport poussé) : une seule vacation (boulangerie,
     # équipe, jour), sinon la clôture compterait les ventes en double.
     report_date = _date.fromisoformat(record['date'])
-    if FacturierReport.objects.filter(node=bakery, team=record.get('team', ''), date=report_date).exists():
+    # d27 : REST autorise deux facturiers distincts sur la même vacation ; on ne
+    # rejette que le doublon du même facturier (ou indéterminé des deux côtés).
+    from django.contrib.auth import get_user_model
+    pushed_fact = record.get('facturier')
+    fact_id = None
+    if pushed_fact not in (None, '') and _strict_uuid(pushed_fact):
+        fact_id = get_user_model().objects.filter(pk=pushed_fact).values_list('pk', flat=True).first()
+    duplicate = FacturierReport.objects.filter(
+        node=bakery, team=record.get('team', ''), date=report_date, facturier_id=fact_id).exists()
+    if duplicate:
         return _record_result(
             record_id, False,
             f"un rapport existe déjà pour {bakery.code}, équipe {record.get('team')}, à la date {report_date}")
 
     report = FacturierReport(
         id=record_id, node=bakery, team=record.get('team', ''),
-        date=report_date,
+        date=report_date, facturier_id=fact_id,
         total_cash_sales=_to_decimal(record.get('total_cash_sales')),
         total_credit_sales=_to_decimal(record.get('total_credit_sales')),
         theoretical_cash=_to_decimal(record.get('theoretical_cash')),
@@ -1797,7 +1806,7 @@ def _push_social_distribution_line(node, record):
             ('total_payer', existing.total_payer),
         ):
             if field in record:
-                value = record[field] if field == 'indice' else _to_decimal(record[field], default)
+                value = int(record[field]) if field == 'indice' else _to_decimal(record[field], default)
                 if value != getattr(existing, field):
                     setattr(existing, field, value)
                     changed_fields.append(field)
@@ -1806,6 +1815,10 @@ def _push_social_distribution_line(node, record):
                 setattr(existing, field, record[field])
                 changed_fields.append(field)
         if changed_fields:
+            # BUG-918 : remise et total_payer sont calculés côté serveur (comme REST).
+            existing.distribution = distribution
+            existing.compute()
+            changed_fields = list(dict.fromkeys(changed_fields + ['remise', 'total_payer']))
             existing.save(update_fields=changed_fields, _sync_bypass=True)
         return _record_result(record_id, True)
 
@@ -1817,7 +1830,7 @@ def _push_social_distribution_line(node, record):
 
     line = SocialDistributionLine(
         id=record_id, distribution=distribution, client=client,
-        indice=record.get('indice', 0),
+        indice=int(record.get('indice') or 0),
         total_social=_to_decimal(record.get('total_social')),
         remise=_to_decimal(record.get('remise')),
         merite=_to_decimal(record.get('merite')),
@@ -1826,6 +1839,7 @@ def _push_social_distribution_line(node, record):
         form=record.get('form', 'especes'),
         node_origin=record.get('node_origin', node.code),
     )
+    line.compute()  # BUG-918 : remise / total_payer jamais pris tels que poussés
     line.save(_sync_bypass=True)
     return _record_result(record_id, True)
 
@@ -2174,6 +2188,89 @@ def _check_facturier_report(node, record):
     return _check_day(node, record)  # BUG-912
 
 
+def _check_client(node, record):
+    # BUG-916 : mêmes bornes que ClientBoundsMixin (REST).
+    from clients.models import Client
+    known = record.get('id') not in (None, '') and Client.objects.filter(pk=record['id']).exists()
+    if known:
+        return None  # client connu : le handler tranche (no-op / non propriétaire)
+    for name in ('first_name', 'last_name'):
+        val = record.get(name)
+        if not isinstance(val, str) or not val.strip():
+            return f"« {name} » obligatoire"
+    reason = _check_amounts(record, (('cotisation_sociale', 2, Decimal('0'), 10),))
+    if reason:
+        return reason
+    for name, places, low, high in (
+        ('commission_rate', 2, Decimal('0'), MAX_SYNC_COMMISSION_RATE),
+        ('credit_limit', 2, Decimal('0'), Decimal('10000000')),
+    ):
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _sync_decimal(record[name], name, places, low, high)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_social_contribution(node, record):
+    # BUG-917 : montant >= 0, mois 1-12, client de la boulangerie du jeton.
+    from clients.models import Client
+    if record.get('amount') not in (None, ''):
+        try:
+            _sync_decimal(record['amount'], 'amount', 2, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('month') not in (None, ''):
+        try:
+            _sync_int(record['month'], 'month', 1, 12)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('year') not in (None, ''):
+        try:
+            _sync_int(record['year'], 'year', 2000, 2200)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('client') not in (None, ''):
+        owner = Client.objects.filter(pk=record['client']).values_list('node_id', flat=True).first()             if _strict_uuid(record['client']) else None
+        if owner is not None and owner != node.pk:
+            return "ce client n'appartient pas à la boulangerie indiquée"
+    return None
+
+
+def _check_social_distribution(node, record):
+    if record.get('tarif') not in (None, ''):
+        try:
+            _sync_decimal(record['tarif'], 'tarif', 2, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('year') not in (None, ''):
+        try:
+            _sync_int(record['year'], 'year', 2000, 2200)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_social_distribution_line(node, record):
+    # BUG-918 : indice 0-12, mérite / total >= 0, client du même nœud (comme REST).
+    from clients.models import Client
+    if record.get('indice') not in (None, ''):
+        try:
+            _sync_int(record['indice'], 'indice', 0, 12)
+        except ValueError as exc:
+            return str(exc)
+    reason = _check_amounts(record, (('merite', 2, Decimal('0'), 8), ('total_social', 2, Decimal('0'), 8)))
+    if reason:
+        return reason
+    if record.get('client') not in (None, ''):
+        owner = Client.objects.filter(pk=record['client']).values_list('node_id', flat=True).first()             if _strict_uuid(record['client']) else None
+        if owner is not None and owner != node.pk:
+            return "ce client n'appartient pas à la boulangerie de la distribution"
+    return None
+
+
 def _check_cash_closure(node, record):
     zero = Decimal('0')
     reason = _check_amounts(record, (('total_entries', 2, zero, 14), ('total_expenses', 2, zero, 14)))
@@ -2194,6 +2291,10 @@ def _check_disbursement_voucher(node, record):
 
 
 _STRICT_CHECKS = {
+    'clients.Client': _check_client,
+    'clients.SocialContribution': _check_social_contribution,
+    'clients.SocialDistribution': _check_social_distribution,
+    'clients.SocialDistributionLine': _check_social_distribution_line,
     'treasury.FacturierReport': _check_facturier_report,
     'treasury.CashClosure': _check_cash_closure,
     'treasury.DisbursementVoucher': _check_disbursement_voucher,

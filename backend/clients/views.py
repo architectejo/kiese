@@ -650,6 +650,8 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         try:
             if isinstance(month, (bool, list, dict, float)) or isinstance(year, (bool, list, dict, float)):
                 raise ValueError
+            if not (str(month).isascii() and str(year).isascii()):  # BUG-915
+                raise ValueError
             month = int(str(month).strip())
             year = int(str(year).strip())
         except (TypeError, ValueError):

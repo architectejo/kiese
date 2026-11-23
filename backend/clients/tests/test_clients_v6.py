@@ -188,14 +188,12 @@ class AsciiRest(Base):
         super().setUp()
         self.c1 = self.mk(self.k1, 'A', 'A')
 
-    @expectedFailure  # BUG-915
     def test_BUG_915_cotisation_montant_chiffres_arabes_refuse(self):
         r = api(self.g1).post(CONTRIB, {'client': str(self.c1.id), 'node': self.k1.pk, 'month': 5,
                                         'year': 2026, 'amount': '٣٠٠٠'}, format='json')
         self.assertEqual(r.status_code, 400, r.data)
         self.assertFalse(SocialContribution.objects.filter(client=self.c1).exists())
 
-    @expectedFailure  # BUG-915
     def test_BUG_915_distribution_tarif_et_ligne_chiffres_arabes_refuses(self):
         r = api(self.direction).post(DISTRIB, {'node': self.k1.pk, 'year': 2026, 'tarif': '٧٠٠'}, format='json')
         self.assertEqual(r.status_code, 400, r.data)
@@ -206,7 +204,6 @@ class AsciiRest(Base):
         self.assertEqual(r.status_code, 400, r.data)
         self.assertFalse(SocialDistributionLine.objects.exists())
 
-    @expectedFailure  # BUG-915
     def test_BUG_915_bulk_create_month_et_generate_chiffres_non_ascii_refuses(self):
         r = api(self.g1).post(CONTRIB + 'bulk_create_month/', {'node': str(self.k1.pk), 'month': '１１',
                                                                'year': 2026}, format='json')
@@ -306,7 +303,6 @@ class PushSync(Base):
         rec.update(kw)
         return rec
 
-    @expectedFailure  # BUG-916
     def test_BUG_916_push_client_taux_commission_hors_borne_rejete(self):
         for rate in ('0.95', '5.00', '-0.10'):
             rec = self._client_rec(commission_rate=rate)
@@ -314,7 +310,6 @@ class PushSync(Base):
             self.assertEqual(r['status'], 'REJECTED', (rate, r))
             self.assertFalse(Client.objects.filter(pk=rec['id']).exists(), rate)
 
-    @expectedFailure  # BUG-916
     def test_BUG_916_push_client_plafond_negatif_ou_superieur_a_10_millions_rejete(self):
         for limit in ('-5000', '99999999999.00', '10000000.01'):
             rec = self._client_rec(credit_limit=limit)
@@ -322,7 +317,6 @@ class PushSync(Base):
             self.assertEqual(r['status'], 'REJECTED', (limit, r))
             self.assertFalse(Client.objects.filter(pk=rec['id']).exists(), limit)
 
-    @expectedFailure  # BUG-916
     def test_BUG_916_push_client_cotisation_negative_ou_noms_vides_rejetes(self):
         for kw in ({'cotisation_sociale': '-100'}, {'first_name': ''}, {'last_name': ''}):
             rec = self._client_rec(**kw)
@@ -330,7 +324,6 @@ class PushSync(Base):
             self.assertEqual(r['status'], 'REJECTED', (kw, r))
             self.assertFalse(Client.objects.filter(pk=rec['id']).exists(), kw)
 
-    @expectedFailure  # BUG-917
     def test_BUG_917_push_cotisation_montant_negatif_ou_mois_hors_borne_rejete(self):
         for kw in ({'amount': '-2000'}, {'month': 13}, {'month': 99}):
             rec = {'id': str(uuid.uuid4()), 'client': str(self.own.id), 'node': 'K1', 'month': 3, 'year': 2026,
@@ -340,7 +333,6 @@ class PushSync(Base):
             self.assertEqual(r['status'], 'REJECTED', (kw, r))
             self.assertFalse(SocialContribution.objects.filter(pk=rec['id']).exists(), kw)
 
-    @expectedFailure  # BUG-917
     def test_BUG_917_push_modif_cotisation_existante_montant_negatif_rejetee(self):
         sc = SocialContribution.objects.create(client=self.own, node=self.k1, month=3, year=2026, amount=D('2000'))
         r = push(self.n1, 'clients.SocialContribution', {'id': str(sc.pk), 'amount': '-2000'})
@@ -348,7 +340,6 @@ class PushSync(Base):
         sc.refresh_from_db()
         self.assertEqual(sc.amount, D('2000.00'))
 
-    @expectedFailure  # BUG-917
     def test_BUG_917_push_cotisation_pour_client_d_une_autre_boulangerie_rejete(self):
         # REST : « Ce client n'appartient pas a la boulangerie indiquee » (BUG-249)
         rec = {'id': str(uuid.uuid4()), 'client': str(self.foreign.id), 'node': 'K1', 'month': 3, 'year': 2026,
@@ -357,7 +348,6 @@ class PushSync(Base):
         self.assertEqual(r['status'], 'REJECTED', r)
         self.assertFalse(SocialContribution.objects.filter(pk=rec['id']).exists())
 
-    @expectedFailure  # BUG-918
     def test_BUG_918_push_ligne_distribution_indice_merite_et_client_hors_regles(self):
         did = str(uuid.uuid4())
         self.assertEqual(push(self.n1, 'clients.SocialDistribution', {'id': did, 'node': 'K1', 'year': 2026,
@@ -372,7 +362,6 @@ class PushSync(Base):
             self.assertEqual(r['status'], 'REJECTED', (kw, r))
             self.assertFalse(SocialDistributionLine.objects.filter(pk=rec['id']).exists(), kw)
 
-    @expectedFailure  # BUG-918
     def test_BUG_918_push_ligne_total_a_recevoir_incoherent_non_stocke_tel_quel(self):
         # REST : remise et total_payer sont calcules (read-only) : remise = indice x tarif.
         did = str(uuid.uuid4())
