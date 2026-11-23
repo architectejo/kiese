@@ -325,6 +325,12 @@ def _apply_client_identity_push(existing, record, node):
     reference = existing.identity_updated_at
     if reference is None and not DebtMovement.objects.filter(client_id=existing.pk).exists():
         reference = existing.updated_at
+    # BUG-981 : horodatage du poste au-delà de la tolérance de dérive (5 min dans le futur) :
+    # l'édition reste appliquée (ne pas empoisonner le Cloud, cf. clamp ci-dessous) mais
+    # l'écrasement est TRACÉ avec les valeurs écrasées.
+    from datetime import timedelta as _td
+    from django.utils import timezone as _tz
+    future_drift = sent_at is not None and sent_at > _tz.now() + _td(minutes=5)
     if sent_at is not None and reference is not None and sent_at < reference:
         # BUG-969 : perte tracée (journal de conflits + notification), statut ACCEPTED
         # conservé pour que le poste marque l'enregistrement synchronisé.
@@ -341,12 +347,19 @@ def _apply_client_identity_push(existing, record, node):
         if not any(_differs(n) for n in ('first_name', 'last_name', 'phone', 'address', 'notes', 'credit_limit',
                                           'commission_rate', 'cotisation_sociale', 'client_type')):
             return _record_result(record_id, True)
-        _log_conflict(
+        conflict = _log_conflict(
             node, 'clients.Client', record_id, 'IDENTITE_OBSOLETE',
             f"Modification d'identité du client {existing.code} poussée par {node.code} ignorée : "
             f"plus ancienne que la version du Cloud ({reference.isoformat()}).")
+        conflict.refresh_from_db()
         try:
+            from core.models import SystemNotification
             from core.utils import create_notification
+            # BUG-982 : une notification par client et par conflit ouvert, pas une par push.
+            if conflict.occurrences > 1 and SystemNotification.objects.filter(
+                    title="Modification de client ignorée", node_origin=node.code,
+                    message__contains=f"client {existing.code} ").exists():
+                return _record_result(record_id, True)
             create_notification(
                 title="Modification de client ignorée",
                 message=(f"La modification du client {existing.code} faite sur {node.code} est plus ancienne "
@@ -391,6 +404,12 @@ def _apply_client_identity_push(existing, record, node):
     with transaction.atomic():
         locked = Client.objects.select_for_update().get(pk=existing.pk)
         old_category = locked.category
+        if future_drift:
+            overwritten = ", ".join(f"{k}: {getattr(locked, k)!r} -> {v!r}" for k, v in changes.items())
+            _log_conflict(
+                node, 'clients.Client', record_id, 'HORLOGE_POSTE_EN_AVANCE',
+                f"Édition du client {locked.code} poussée par {node.code} avec un horodatage dans le futur "
+                f"({sent_at.isoformat()}) : appliquée, valeurs écrasées conservées ici — {overwritten}.")
         for k, v in changes.items():
             setattr(locked, k, v)
         fields = list(changes)
@@ -918,6 +937,42 @@ def _push_cash_closure(node, record):
 
     if existing.node_id != node.pk:
         return _record_result(record_id, False, "clôture d'une autre boulangerie refusée")
+
+    if existing.is_rejected and not existing.is_validated:
+        # BUG-983 : resoumission d'une clôture infirmée (même règle que REST
+        # `perform_update`, BUG-034/860) : seul un contenu CORRIGÉ (billetage ou
+        # totaux différents) lève le rejet ; un simple rejeu ne le lève jamais.
+        # La clôture n'est jamais confirmée par le poste (BUG-971).
+        try:
+            bills = _bills_kwargs(record)
+        except ValueError as exc:
+            return _record_result(record_id, False, str(exc))
+        entries = (_to_decimal(record.get('total_entries'))
+                   if record.get('total_entries') not in (None, '') else existing.total_entries)
+        expenses = (_to_decimal(record.get('total_expenses'))
+                    if record.get('total_expenses') not in (None, '') else existing.total_expenses)
+        changed = (any(getattr(existing, n) != v for n, v in bills.items())
+                   or entries != existing.total_entries or expenses != existing.total_expenses)
+        if changed:
+            with transaction.atomic():
+                locked = type(existing).objects.select_for_update().get(pk=existing.pk)
+                if locked.is_rejected and not locked.is_validated:
+                    for n, v in bills.items():
+                        setattr(locked, n, v)
+                    locked.total_entries, locked.total_expenses = entries, expenses
+                    if isinstance(record.get('notes'), str):
+                        locked.notes = record['notes']
+                    locked.compute_physical_cash()
+                    locked.is_rejected, locked.rejection_reason = False, ''
+                    locked.save(update_fields=[*bills, 'total_entries', 'total_expenses', 'notes', 'net_cash',
+                                               'physical_cash_total', 'cash_gap', 'is_rejected',
+                                               'rejection_reason', 'updated_at'], _sync_bypass=True)
+                    from core.utils import log_activity
+                    log_activity(None, "Resoumission Clôture de Caisse",
+                                 f"Clôture {locked.node.code} {locked.date} resoumise par le poste — "
+                                 f"Compté: {locked.physical_cash_total} FC · Écart: {locked.cash_gap} FC.",
+                                 node_origin=locked.node.code)
+            existing.refresh_from_db()
 
     if existing.is_validated and not existing.cashbook_entries.exists():
         from treasury.views import _unresolved_incoming_transfer_gap
@@ -2852,7 +2907,8 @@ def process_push_batch(node, records_by_model):
             if model_label == 'clients.Client' and isinstance(record, dict) and record.get('id'):
                 # BUG-972 : dans un même lot, un id déjà traité plus haut = rejeu (le premier
                 # enregistrement gagne). Un AUTRE lot peut modifier l'identité (BUG-941).
-                rid_key = str(record['id'])
+                _u = _strict_uuid(record['id'])  # BUG-984 : forme normalisée (casse, tirets, accolades)
+                rid_key = str(_u) if _u is not None else str(record['id'])
                 if rid_key in seen_ids:
                     model_results.append(_record_result(record['id'], True))
                     continue

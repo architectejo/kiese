@@ -6,7 +6,6 @@ Donnees fictives. Code applicatif non modifie.
 import uuid
 from datetime import timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -120,7 +119,6 @@ class V971_Flux(Base13):
         self.assertEqual(CashbookEntry.objects.count(), 0)
 
     # ---- defaut voisin : la resoumission apres rejet n'atteint jamais le cloud
-    @expectedFailure
     def test_BUG_983_resoumission_apres_rejet_poussee_par_le_poste(self):
         """REST : seule une cloture infirmee peut etre modifiee puis resoumise (perform_update,
         BUG-034). En mode synchronise, le handler push ignore tout enregistrement existant : la
@@ -134,7 +132,6 @@ class V971_Flux(Base13):
         c = CashClosure.objects.get(pk=rec['id'])
         self.assertEqual((c.bills_5000, c.is_rejected), (2, False), "resoumission ignoree, rejet toujours actif")
 
-    @expectedFailure
     def test_BUG_983_pull_redescend_l_etat_des_clotures_du_poste(self):
         """Le poste doit connaitre la confirmation / le rejet (et son motif) pour que le gerant
         agisse ; le pull ne porte aucune information de cloture."""
@@ -237,7 +234,6 @@ class V970_972_Sync(Base13):
         self.assertIn('IDENTITE_OBSOLETE', body)
         self.assertEqual(push_client(self.raw1).get('/api/sync/status/').data['unresolved_conflicts'], 1)
 
-    @expectedFailure
     def test_BUG_982_pushs_obsoletes_repetes_ne_creent_pas_une_notification_chacun(self):
         """BUG-723 : une seule ligne de conflit non resolue, `occurrences` incrementee. Mais la
         notification WARNING est recreee a chaque push obsolete : un noeud defaillant inonde le
@@ -261,7 +257,6 @@ class V970_972_Sync(Base13):
         self.assertTrue(SyncConflictLog.objects.filter(conflict_type='IDENTITE_OBSOLETE', object_id=str(c.pk)).exists(),
                         "perte non tracee")
 
-    @expectedFailure
     def test_BUG_981_derive_poste_en_avance_ecrase_l_edition_cloud_sans_trace(self):
         """Horloge du poste en avance de 2 h : une edition du poste anterieure (en temps reel) a
         celle du Cloud porte une version plus recente, s'impose et ecrase le plafond de la direction.
@@ -304,7 +299,6 @@ class V970_972_Sync(Base13):
         self.assertEqual(Client.objects.get(pk=a['id']).first_name, 'Premier')
         self.assertEqual(Client.objects.filter(pk=a['id']).count(), 1)
 
-    @expectedFailure
     def test_BUG_984_meme_id_casse_ou_format_different_est_le_meme_client(self):
         """BUG-972 (1) contourne : `process_push_batch` dedoublonne sur la chaine brute AVANT la
         normalisation UUID du preflight ; l'id en majuscules, sans tirets ou entre accolades passe

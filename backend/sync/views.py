@@ -295,6 +295,15 @@ class PullView(APIView):
                     'transfer': str(t.id), 'bread_price': l.bread_price_id,
                     'quantity_sent': l.quantity_sent, 'quantity_received': l.quantity_received,
                 })
+        # BUG-983 : état des clôtures DU POSTE UNIQUEMENT (confirmée / infirmée + motif / versée),
+        # pour que le gérant sache qu'il doit recompter. Lecture seule : aucun montant.
+        from treasury.models import CashClosure
+        payload['closures'] = [
+            {'id': str(c.id), 'date': c.date.isoformat(), 'is_validated': c.is_validated,
+             'is_rejected': c.is_rejected, 'rejection_reason': c.rejection_reason,
+             'is_paid': c.cashbook_entries.exists()}
+            for c in CashClosure.objects.filter(node=node, date__gte=(now - timedelta(days=60)).date())
+        ]
         payload['transfers'] = transfers
         payload['transfer_lines'] = transfer_lines
         # BUG-975/976 : identité du poste pour que l'application locale sache s'il est

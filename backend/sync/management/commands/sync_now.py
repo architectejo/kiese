@@ -685,6 +685,35 @@ def _apply_pulled_transfers(transfers, lines, local_code=None):
                         severity='WARNING', node_origin=t_code)
 
 
+def _apply_pulled_closures(closures, local_code):
+    """BUG-983 : applique l'état (confirmée / infirmée + motif) des clôtures de CE poste,
+    sans jamais toucher aux montants ni au billetage. Entrées invalides ignorées. Une
+    resoumission locale pas encore poussée n'est pas ré-infirmée par un pull plus ancien."""
+    from django.db import transaction
+
+    from sync.services import _strict_uuid
+    from treasury.models import CashClosure
+
+    if not isinstance(closures, list):
+        return
+    for item in closures:
+        if not isinstance(item, dict):
+            continue
+        cid = _strict_uuid(item.get('id'))
+        validated, rejected = item.get('is_validated'), item.get('is_rejected')
+        reason = item.get('rejection_reason', '')
+        if cid is None or not isinstance(validated, bool) or not isinstance(rejected, bool)                 or not isinstance(reason, str):
+            continue
+        with transaction.atomic():
+            local = CashClosure.objects.select_for_update().filter(pk=cid).first()
+            if local is None or (local_code and local.node.code != local_code):
+                continue
+            if not local.is_synced and not local.is_rejected and rejected and not validated:
+                continue  # resoumission locale en attente de push
+            CashClosure.objects.filter(pk=cid).update(
+                is_validated=validated, is_rejected=rejected, rejection_reason=reason[:2000])
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -705,6 +734,8 @@ def apply_pull_response(payload):
     if isinstance(payload, dict):
         _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'),
                                 _local_node_code(payload))
+    if isinstance(payload, dict):
+        _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return
