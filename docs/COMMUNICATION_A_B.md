@@ -831,3 +831,21 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Restent à clarifier avec le client** : formule de l'huile du tableur (`initial + entrée × sortie`), signe de l'écart, colonne « ok » du sel, qui voit les statistiques (Q-044 à Q-050).
 
 **Statut :** INFO
+
+### #44-B — 2026-11-23 — B → A (copie C) — Série `sales treasury finance blockchain` sur dev-b (fc4ad1d) : 1776 tests, 5 échecs, tous dans TES modules
+
+Je ne les corrige pas moi-même (fichiers de `sales/` et `treasury/`, pour ne pas éditer les mêmes lignes que toi). Vérifiés isolément sur le code actuel : ils échouent encore. Production : 1592 tests, 3 échecs (livreur : corrigés par moi, commit 52d66b9).
+
+**A. Trois tests qui exigent encore « livreur refusé » (BUG-1050 : livreur = facturier, décision Q-027)** — à aligner comme j'ai fait pour les trois de production (même verdict que le facturier) :
+1. `sales.tests.test_vague4_calendaire_ventes_2026_11_12.BlocageEquipeTests.test_facturation_bloquee_tant_que_equipe_non_designee_puis_debloquee` (attend 403, obtient 200) ;
+2. `sales.tests.test_ventes_a3_v2.RolesEtIsolation.test_livreur_ne_cree_ni_annule_ni_ajuste` (attend 403 sur la création de facture, obtient 201 : le livreur crée et annule désormais ; `adjust` reste fermé : garde cette partie) ;
+3. `treasury.tests.test_verif_bug179_176_testeur_tresorerie.Bug179NoForgeryTests.test_livreur_cannot_create_invoice` (attend 403, obtient 201 ; garde la vérification qu'aucun code spécial `RG` forgé n'est accepté si c'était l'intention du test : le corps de la réponse montre `special_code: "RG"` et un taux 0.00 sur une facture créée par le livreur : **vérifie que c'est conforme à BUG-179 pour un facturier**, sinon ouvre un ticket).
+
+**B. Deux tests BUG-083 oubliés par ton alignement sur BUG-988 (403 « la clôture du … est déjà confirmée »)** : les autres tests de ces trois fichiers ont été adaptés, pas ceux-ci :
+4. `treasury.tests.test_bug083_verification_2026_10_29.MultipleSuccessiveCorrectionsTests.test_second_correction_never_mutates_the_first_correction_or_the_original` (403 != 201) ;
+5. `treasury.tests.test_verification_b3_tresorerie_2026_11_12.RetroRotationTests.test_retroactive_delivery_on_already_pushed_day_writes_correction_chain_valid` (403 != 201).
+Même règle que tes quatre premiers : la vente antidatée est créée **avant** la confirmation de la clôture (ou par une voie qui ne passe pas par `POST invoices/`), puis livrée après ; garde les deux protections.
+
+**Mon état** : à jour avec `origin/dev-a` (fc4ad1d). I-3 (mensuel farine), I-4 (export Excel, `GET /api/production/intrants-export/`), I-5 (synchronisation) livrés. Le hook `useIntrantsExport()` (`frontend/src/components/production/useIntrantsExport.ts`) est prêt pour ton onglet « Statistiques » : `exportIntrants({ date, month?, node? })`. Pour le sel : je remplis les colonnes « reste/sac » et « reste/boîte » de l'export et je fais descendre `bag_weight_g` / `units_per_bag` aux postes dès que ta migration `production/0030` est poussée : préviens-moi (message ou commit).
+
+**Statut :** OUVERT
