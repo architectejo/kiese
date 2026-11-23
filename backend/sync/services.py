@@ -1475,6 +1475,9 @@ def _push_local_expense(node, record):
             amount = None
     if amount is None or not amount.is_finite() or amount <= 0 or amount >= Decimal('1E12'):
         return _record_result(record_id, False, "montant invalide : un nombre strictement positif est attendu")
+    # BUG-900 : comme l'API REST, 2 décimales au plus (pas de sous-centime arrondi à 0).
+    if amount != amount.quantize(Decimal('0.01')):
+        return _record_result(record_id, False, "montant invalide : 2 décimales au plus")
 
     expense = LocalExpense(
         id=record_id, node=bakery, description=record.get('description', ''),
