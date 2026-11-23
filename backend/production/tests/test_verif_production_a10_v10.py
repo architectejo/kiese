@@ -69,7 +69,6 @@ class A10InvoiceLineIds(A10Base):
             st = push(self.a1, LBL_IL, self.il(i1, self.b5, 2, bad))[0]
             self.assertIn(st, ('ACCEPTED', 'REJECTED'), bad)  # jamais 500
 
-    @expectedFailure
     def test_BUG_940_id_non_numerique_rejoue_ne_duplique_pas_la_ligne(self):
         i1, _ = self.two_invoices()
         for bad in ('abc', '7.0', '-3', None):
@@ -96,7 +95,6 @@ class A10InvoiceLineIds(A10Base):
         self.assertEqual(st, 'REJECTED')
         self.assertEqual(InvoiceLine.objects.get(pk=7).quantity, 3)
 
-    @expectedFailure
     def test_BUG_938_deux_categories_meme_facture_collision_id_ne_se_melangent_pas(self):
         """K1 a la ligne 7 (facture A). K2 pousse, pour sa facture B, la ligne locale 7 (pain 3) puis la ligne
         locale 8 (pain 5). La ligne 7 de K2 recoit la PK cloud auto (8) ; la ligne locale 8 est alors prise
@@ -215,7 +213,6 @@ class A10SessionLines(A10Base):
             self.assertEqual(push(self.a1, LBL_L, {'session': s['id'], 'bread_price': self.b5.pk, 'quantity': q})[0],
                              'REJECTED', q)
 
-    @expectedFailure
     def test_BUG_939_flour_sacks_used_modifie_localement_propage_au_cloud(self):
         """Une fournee ouverte deja synchronisee voit sa farine corrigee/augmentee sur le poste (declaration
         additionnelle du jour) : le cloud garde l'ancienne valeur (seule la cloture est appliquee) alors que

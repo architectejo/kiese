@@ -542,17 +542,37 @@ def _resolve_invoice_line(record_id, record):
 
     invoice_uuid = _strict_uuid(record.get('invoice'))
     line = None
-    if record_id not in (None, '') and str(record_id).strip().isdigit() and str(record_id).isascii():
+    id_valid = (record_id not in (None, '') and not isinstance(record_id, bool)
+                and str(record_id).strip().isdigit() and str(record_id).isascii())
+    if id_valid:
         line = InvoiceLine.objects.filter(pk=int(str(record_id).strip())).first()
+    bp = _bread_price_or_none(record.get('bread_price'))
+
+    def natural():
+        # Clé naturelle (facture, catégorie[, prix net]) : BUG-938/940.
+        if invoice_uuid is None or bp is None:
+            return None
+        qs = InvoiceLine.objects.filter(invoice_id=invoice_uuid, bread_price=bp).order_by('pk')
+        price = record.get('unit_price')
+        if price is not None:
+            exact = _parse_line_price(price)
+            if exact is not None:
+                match = qs.filter(unit_price=exact).first()
+                if match is not None:
+                    return match
+        return qs.first()
+
+    if not id_valid:
+        return natural()    # BUG-940 : id absent / non numérique -> idempotent
     if line is None:
         return None     # id libre : nouvelle ligne (créée avec cet id)
-    if invoice_uuid is None or line.invoice_id == invoice_uuid:
+    if invoice_uuid is None:
         return line
-    # id déjà pris par la ligne d'une AUTRE facture : collision entre postes.
-    bp = _bread_price_or_none(record.get('bread_price'))
-    if bp is None:
-        return None
-    return InvoiceLine.objects.filter(invoice_id=invoice_uuid, bread_price=bp).order_by('pk').first()
+    if line.invoice_id == invoice_uuid and (bp is None or line.bread_price_id == bp.pk):
+        return line
+    # id pris par la ligne d'une autre facture, ou d'une autre catégorie de la
+    # même facture (BUG-938) : collision d'id entre postes, on n'écrase pas.
+    return natural()
 
 
 def _push_invoice_line(node, record):
@@ -807,6 +827,27 @@ def _push_production_session(node, record):
         # Transition idempotente is_closed False→True uniquement (comme
         # Invoice.status) : jamais de régression closed→ouvert.
         changed_fields = []
+        # BUG-939 : tant que la fournée est ouverte, ses champs modifiables
+        # (farine, valeur du sac, notes) suivent le poste (valeurs déjà bornées
+        # par _check_production_session) ; jamais sur une fournée close.
+        if not existing.is_closed and existing.node_id == node.pk:
+            upd = {}
+            raw_flour = record.get('flour_sacks_used')
+            if raw_flour not in (None, ''):
+                new_flour = _to_decimal(raw_flour)
+                if new_flour != existing.flour_sacks_used:
+                    upd['flour_sacks_used'] = new_flour
+            raw_sac = record.get('sac_value_fc_used')
+            if raw_sac not in (None, '') and int(raw_sac) != existing.sac_value_fc_used:
+                upd['sac_value_fc_used'] = int(raw_sac)
+            if isinstance(record.get('notes'), str) and record['notes'] != existing.notes:
+                upd['notes'] = record['notes']
+            if upd:
+                from production.models import ProductionSession as _PS
+                _PS.objects.filter(pk=existing.pk).update(**upd)
+                for k, v in upd.items():
+                    setattr(existing, k, v)
+                _recompute_session_totals(existing)
         if record.get('is_closed') and not existing.is_closed:
             existing.is_closed = True
             changed_fields.append('is_closed')
