@@ -653,6 +653,19 @@ class ExpenseCategory(models.Model):
         default=True,
         verbose_name=_("Actif")
     )
+
+    class Scope(models.TextChoices):
+        BOTH = 'BOTH', _('Direction et boulangeries')
+        BAKERY = 'BAKERY', _('Boulangeries uniquement')
+        DIRECTION = 'DIRECTION', _('Direction uniquement')
+
+    # BUG-677 (remarque.md, demande 4) : catégories propres à la direction vs
+    # aux boulangeries, gérables depuis la Configuration. Défaut BOTH :
+    # comportement existant inchangé.
+    scope = models.CharField(
+        max_length=10, choices=Scope.choices, default=Scope.BOTH,
+        verbose_name=_("Portée"),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

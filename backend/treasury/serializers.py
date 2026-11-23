@@ -39,6 +39,16 @@ class LocalExpenseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'node', 'gerant', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
+    def validate_category(self, value):
+        # BUG-677 : une catégorie réservée à la direction est refusée à un
+        # compte rattaché à une boulangerie.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if (user is not None and not user.can_access_all_nodes
+                and value.scope == value.Scope.DIRECTION):
+            raise serializers.ValidationError("Cette catégorie est réservée à la direction.")
+        return value
+
     def validate_amount(self, value):
         # BUG-205 : une dépense est strictement positive.
         if value is None or value <= 0:

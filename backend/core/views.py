@@ -420,6 +420,17 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.all()
     serializer_class = ExpenseCategorySerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        # BUG-677 : une boulangerie ne voit pas les catégories réservées à la direction.
+        if not user.can_access_all_nodes:
+            qs = qs.exclude(scope=ExpenseCategory.Scope.DIRECTION)
+        scope = self.request.query_params.get('scope')
+        if scope in ExpenseCategory.Scope.values:
+            qs = qs.filter(scope__in=[scope, ExpenseCategory.Scope.BOTH])
+        return qs
+
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]

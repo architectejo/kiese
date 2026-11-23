@@ -2451,6 +2451,17 @@ class BreadDisposalViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewset
             qs = qs.filter(node=user.node)
         elif is_node_less_non_hq(user):
             qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
+        # BUG-674 : Journal des Sorties Non Valorisées consultable par jour :
+        # `?date=` (jour de la fournée) ou plage `?date_from=` / `?date_to=`.
+        params = self.request.query_params
+        for key, lookup in (('date', 'session__date'), ('date_from', 'session__date__gte'),
+                            ('date_to', 'session__date__lte')):
+            raw = params.get(key)
+            if raw:
+                parsed = _safe_parse_date(raw)
+                if parsed is None:
+                    raise ValidationError({'detail': _INVALID_DATE_DETAIL})
+                qs = qs.filter(**{lookup: parsed})
         return qs
 
     def perform_create(self, serializer):
@@ -3023,7 +3034,9 @@ def _build_daily_closure_report(node, report_date=None):
         # le registre, à ne pas confondre avec une omission silencieuse.
         mvm_interne_fc = _m(
             reste_du_jour_fc + reste_du_hier_fc
-            + appro_effectue_fc + appro_recu_fc
+            # BUG-675 (remarque.md, demande 4) : pains envoyés = vendus pour
+            # l'émettrice (+), pains reçus RETRANCHÉS du total de la réceptrice (-).
+            + appro_effectue_fc - appro_recu_fc
             - non_servi_fc + reg_fc  # BUG-177 : NS retranchée (signe du classeur)
             + soldee_fc  # VENTE CASH + VENTE SOLDE : un seul bucket existant (is_soldee)
             + _m(non_vendu_entry['fc']) + _m(declasses_entry['fc'])
@@ -3124,21 +3137,40 @@ def _build_daily_closure_report(node, report_date=None):
     # DECLARED, colonne « produit »). Le dénominateur est la somme de ces
     # mêmes quantités (et non `total_breads_produced`, qui inclut les lignes
     # CARRYOVER du stock de départ, BUG-142) : la répartition somme à 100 %.
-    declared_qty_total = sum(max(0, row['produit']['quantity'] or 0) for row in categories_payload)
-    for row in categories_payload:
-        qty = max(0, row['produit']['quantity'] or 0)
+    # BUG-676 : base de la répartition. Sur une journée « par sacs » non clôturée
+    # (ou sans production déclarée) `produit` est vide : tout affichait 0 %.
+    # Repli : pains vendus du jour (`vendu_jour`), puis pains facturés
+    # (normal + soldé). `repartition_base` indique la base retenue.
+    def _qty_of(row, base):
+        if base == 'produit':
+            return max(0, row['produit']['quantity'] or 0)
+        if base == 'vendu_jour':
+            return max(0, row['vendu_jour']['quantity'] or 0)
+        return max(0, (row['facture_jr']['quantity'] or 0) + (row['vente_cash_soldee']['quantity'] or 0))
+
+    repartition_base = 'produit'
+    for candidate in ('produit', 'vendu_jour', 'facture'):
+        repartition_base = candidate
+        if sum(_qty_of(r, candidate) for r in categories_payload) > 0:
+            break
+    qty_by_row = [_qty_of(r, repartition_base) for r in categories_payload]
+    declared_qty_total = sum(qty_by_row)
+    if repartition_base == 'produit':
+        value_by_row = [max(Decimal('0.00'), Decimal(r['produit']['fc'])) for r in categories_payload]
+    else:
+        value_by_row = [_m(Decimal(q) * Decimal(r['unit_price'])) for q, r in zip(qty_by_row, categories_payload)]
+    total_base_value_fc = sum(value_by_row, Decimal('0.00'))
+    for row, qty, value_fc in zip(categories_payload, qty_by_row, value_by_row):
         pct_qty = (
             (Decimal(qty) * Decimal('100') / Decimal(declared_qty_total))
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             if qty and declared_qty_total else Decimal('0.00')
         )
         repartition_pct_par_quantite.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_qty)})
-
-        value_fc = max(Decimal('0.00'), Decimal(row['produit']['fc']))
         pct_val = (
-            (value_fc * Decimal('100') / total_produced_value_fc)
+            (value_fc * Decimal('100') / total_base_value_fc)
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            if value_fc and total_produced_value_fc else Decimal('0.00')
+            if value_fc and total_base_value_fc else Decimal('0.00')
         )
         repartition_pct_par_valeur.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_val)})
 
@@ -3171,6 +3203,7 @@ def _build_daily_closure_report(node, report_date=None):
             'non_servi_total_fc': str(_m(total_ns_status_fc + total_ns_code_fc)),
             'repartition_pct_par_quantite': repartition_pct_par_quantite,
             'repartition_pct_par_valeur': repartition_pct_par_valeur,
+            'repartition_base': repartition_base,
         },
     }
 

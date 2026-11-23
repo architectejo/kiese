@@ -162,7 +162,8 @@ class RichScenarioClosureTests(TestCase):
         self.assertEqual(c5['produit']['quantity'], 50)
 
         # --- FACTURE MVM INTERNE (classeur : somme signée des rubriques)
-        mvm3 = (D(30) * 300 + D(-15 + 0) * 300 + 0 + D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
+        # BUG-675 : appro recu (-D(15)*300) retranche
+        mvm3 = (D(30) * 300 + D(-15 + 0) * 300 + 0 - D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
         mvm5 = (D(-2) * 500 + D(-8) * 500 + D(12) * 500 + 0 - D(1000) + D(2500) + D(1500) + D(1200) + 0)
         self.assertEqual(c3['facture_mvm_interne']['fc'], f'{mvm3:.2f}')
         self.assertEqual(c5['facture_mvm_interne']['fc'], f'{mvm5:.2f}')

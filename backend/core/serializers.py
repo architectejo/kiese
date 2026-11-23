@@ -138,7 +138,7 @@ class BreadPriceSerializer(serializers.ModelSerializer):
 class ExpenseCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseCategory
-        fields = ['id', 'code', 'label', 'is_active', 'updated_at']
+        fields = ['id', 'code', 'label', 'is_active', 'scope', 'updated_at']
         read_only_fields = ['updated_at']
 
 

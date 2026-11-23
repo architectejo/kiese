@@ -255,9 +255,10 @@ class DailyClosureReportTests(TestCase):
         #   regularisation_fc =                 =  3 000
         #   vente_cash_soldee_fc =               =  2 250
         #   non_vendu_nv_fc + declasses_fc      =      0
-        mvm_300_fc = Decimal('9000') - Decimal('4500') + Decimal('0') + Decimal('4500') \
+        # BUG-675 (remarque.md demande 4) : APPRO RECU est desormais RETRANCHE (-4 500).
+        mvm_300_fc = Decimal('9000') - Decimal('4500') + Decimal('0') - Decimal('4500') \
             + Decimal('0') + Decimal('3000') + Decimal('2250') + Decimal('0') + Decimal('0')
-        self.assertEqual(mvm_300_fc, Decimal('14250'))
+        self.assertEqual(mvm_300_fc, Decimal('5250'))
         self.assertEqual(row300['facture_mvm_interne'], {'fc': str(_q2(mvm_300_fc))})
 
         # Catégorie 500 FC : seul RESTE DU JOUR est non nul (10 × 500).
@@ -277,7 +278,7 @@ class DailyClosureReportTests(TestCase):
         total_mvm_interne_fc = mvm_300_fc + mvm_500_fc
         total_du_jour_fc = total_facture_fc + total_mvm_interne_fc
         self.assertEqual(totals['total_du_jour_fc'], str(_q2(total_du_jour_fc)))
-        self.assertEqual(total_du_jour_fc, Decimal('38250'))
+        self.assertEqual(total_du_jour_fc, Decimal('29250'))
 
         # ECART/FACTURE (Q-007.1, réponse client) = valeur commandée du jour
         # (toutes factures livrées ce jour) − paiements reçus sur ces
