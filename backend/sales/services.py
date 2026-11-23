@@ -144,6 +144,26 @@ def mark_not_served(invoice_pk, actor, reason='', auto=False):
                     status_code=400,
                 )
         reason = EXPIRED_REASON if auto else (reason or '').strip()[:200]
+        # BUG-660/662 : des ajustements liés ont déjà restitué/consommé une part de stock et
+        # de BP. On les neutralise d'abord (effet inverse, statut ANNULÉ comme `cancel`), puis
+        # la restitution de l'originale est complète : l'effet total est la restitution NETTE.
+        adjustments = list(
+            invoice.adjustments.filter(is_adjustment=True)
+            .exclude(status=Invoice.Status.CANCELLED).prefetch_related('lines__bread_price')
+        )
+        if adjustments:
+            adj_debt = sum((a.debt_delta for a in adjustments), Decimal('0.00'))
+            if invoice.client_id and adj_debt != 0:
+                Client.objects.filter(pk=invoice.client_id).update(current_debt=F('current_debt') - adj_debt)
+                _record_debt_movement(
+                    invoice.client, -adj_debt, invoice,
+                    f"Neutralisation des ajustements de {invoice.receipt_number} (non servi)",
+                )
+            if invoice.special_code != Invoice.SpecialCode.NS:
+                for adj in adjustments:
+                    for line in adj.lines.all():
+                        _adjust_bread_stock(invoice.node, line.bread_price, sent=-adj.adjustment_sign * line.quantity)
+            Invoice.objects.filter(pk__in=[a.pk for a in adjustments]).update(status=Invoice.Status.CANCELLED)
         zero = {l.pk: 0 for l in invoice.lines.all()}
         _apply_new_served_quantities(invoice, zero)
         invoice.order_total = Decimal('0.00')

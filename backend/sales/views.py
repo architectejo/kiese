@@ -74,6 +74,14 @@ class BoundedSearchFilter(filters.SearchFilter):
         return [t[:self.MAX_TERM_LENGTH] for t in terms[:self.MAX_TERMS]]
 
 
+def _lock_client(pk):
+    """BUG-640 : verrouille la ligne client (PostgreSQL) puis la relit. Même motif que le
+    verrou de `Node` dans `_make_receipt_number` : verrou sur une requête d'identifiants,
+    lecture ordinaire ensuite (le Meta.ordering de Client joint core_node)."""
+    list(Client.objects.select_for_update(of=('self',)).order_by().filter(pk=pk).values_list('pk', flat=True))
+    return Client.objects.get(pk=pk)
+
+
 def _effective_credit_limit(client, node, config):
     """
     Plafond de crédit effectivement opposable à ce client sur ce nœud.
@@ -540,7 +548,7 @@ class InvoiceViewSet(
             try:
                 # BUG-640 : ligne client verrouillée (lecture de `current_debt` pour le
                 # plafond, `debt_before`/`debt_after`) jusqu'à la fin de la transaction.
-                client = Client.objects.select_for_update().get(pk=client_id)
+                client = _lock_client(client_id)
             except Client.DoesNotExist as e:
                 return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -865,6 +873,11 @@ class InvoiceViewSet(
             served[lid] = qty_int
         return served, None
 
+    def _get_object_retry(self):
+        # BUG-1001 : la résolution de l'objet (get_queryset + check_object_permissions) est
+        # retentée sur verrou SQLite ; 404/403 restent propagés tels quels.
+        return _retry_on_lock(self.get_object)
+
     @action(detail=True, methods=['post'], permission_classes=[IsFacturierOrLivreur])
     def deliver(self, request, pk=None):
         # BUG-650 : retentative bornée sur verrou SQLite (une transaction par tentative).
@@ -880,7 +893,7 @@ class InvoiceViewSet(
         (`initial_order_total`, `ordered_quantity`). Statut déjà NOT_SERVED -> 409.
 
         BUG-053 : la séquence est atomique (voir `sales.services.deliver_invoice`)."""
-        invoice = self.get_object()
+        invoice = self._get_object_retry()
         if invoice.special_code == Invoice.SpecialCode.NS:
             return Response(
                 {'detail': "Une facture « Non Servi » ne peut pas être livrée : aucun pain n'a été remis."},
@@ -977,7 +990,7 @@ class InvoiceViewSet(
         encaissement sur la BP (facture à commande 0). Statut terminal ; la
         ligne n'est jamais supprimée. Facture hors statut PENDING -> 409.
         """
-        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        invoice = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
         reason = request.data.get('reason', '')
         if reason is None:
             reason = ''
@@ -994,7 +1007,7 @@ class InvoiceViewSet(
     @action(detail=True, methods=['post'], permission_classes=[IsFacturier])
     def cancel(self, request, pk=None):
         """Gérant or Facturier can cancel a PENDING order. Restores bread stock and reverses client debt."""
-        invoice = self.get_object()  # filtre par nœud (404 hors périmètre)
+        invoice = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
         return _retry_on_lock(lambda: self._cancel_once(request, invoice.pk))
 
     @transaction.atomic
@@ -1017,7 +1030,7 @@ class InvoiceViewSet(
         # on ne restitue que le NET (originale + ajustements signés).
         adjustments = list(invoice.adjustments.filter(is_adjustment=True).prefetch_related('lines'))
         if invoice.client_id:
-            client = Client.objects.select_for_update().get(pk=invoice.client_id)
+            client = _lock_client(invoice.client_id)
             net_delta = invoice.debt_delta + sum((a.debt_delta for a in adjustments), Decimal('0.00'))
             Client.objects.filter(pk=client.pk).update(current_debt=F('current_debt') - net_delta)
             if net_delta != 0:
@@ -1093,7 +1106,12 @@ class InvoiceViewSet(
           date rétroactive, puisque corriger une période déjà close est
           précisément le scénario visé par ce ticket.
         """
-        original = self.get_object()
+        original = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
+        # BUG-663 : même retentative bornée que deliver/cancel (SQLite verrouillé).
+        return _retry_on_lock(lambda: self._adjust_once(request, original.pk))
+
+    def _adjust_once(self, request, original_pk):
+        original = Invoice.objects.select_related('node', 'client').get(pk=original_pk)
 
         if original.status == Invoice.Status.CANCELLED:
             return Response(
@@ -1148,34 +1166,6 @@ class InvoiceViewSet(
             bp_id = int(ld['bread_price'])
             requested_qty_by_bp[bp_id] = requested_qty_by_bp.get(bp_id, 0) + int(ld['quantity'])
 
-        # Validation minimale (CLAUDE.md §4, décision coordinateur point 7) :
-        # un ajustement négatif ne peut jamais retirer plus de pains, pour
-        # une même catégorie, que ce qui reste net sur la facture d'origine
-        # une fois les ajustements déjà appliqués pris en compte — sinon le
-        # solde net de pains facturés pour cette catégorie deviendrait
-        # négatif, ce qui n'a pas de sens métier (on ne peut pas reprendre
-        # plus de pain qu'on en a vendu).
-        if adjustment_sign == -1:
-            original_qty_by_bp = {}
-            for line in original.lines.all():
-                original_qty_by_bp[line.bread_price_id] = original_qty_by_bp.get(line.bread_price_id, 0) + line.quantity
-            for adj in original.adjustments.filter(is_adjustment=True).prefetch_related('lines'):
-                for line in adj.lines.all():
-                    original_qty_by_bp[line.bread_price_id] = (
-                        original_qty_by_bp.get(line.bread_price_id, 0) + adj.adjustment_sign * line.quantity
-                    )
-            for bp_id, requested_qty in requested_qty_by_bp.items():
-                remaining = original_qty_by_bp.get(bp_id, 0)
-                if requested_qty > remaining:
-                    bp_label = bp_map[bp_id].label
-                    return Response(
-                        {'detail': (
-                            f"Impossible de retirer {requested_qty} « {bp_label} » : il n'en reste que "
-                            f"{remaining} net sur la facture {original.receipt_number} après les ajustements déjà enregistrés."
-                        )},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
         config = Config.get_instance()
         current_work_date = work_date_for(original.node)
         requested_invoice_date = data.get('invoice_date') or current_work_date
@@ -1221,9 +1211,45 @@ class InvoiceViewSet(
         )
 
         with transaction.atomic():
+            # BUG-661 : originale verrouillée AVANT les contrôles (ordre facture puis client,
+            # comme `_cancel_once`) : statut et « net restant » lus sous verrou.
+            original = Invoice.objects.select_for_update(of=('self',)).select_related('node', 'client').get(pk=original_pk)
+            if original.status == Invoice.Status.CANCELLED:
+                return Response({'detail': "Impossible d'ajuster une facture annulée."}, status=status.HTTP_400_BAD_REQUEST)
+            if original.status == Invoice.Status.NOT_SERVED:
+                return Response({'detail': "Impossible d'ajuster une facture non servie."}, status=status.HTTP_400_BAD_REQUEST)
+            # Validation minimale (CLAUDE.md §4, décision coordinateur point 7) :
+            # un ajustement négatif ne peut jamais retirer plus de pains, pour
+            # une même catégorie, que ce qui reste net sur la facture d'origine
+            # une fois les ajustements déjà appliqués pris en compte — sinon le
+            # solde net de pains facturés pour cette catégorie deviendrait
+            # négatif, ce qui n'a pas de sens métier (on ne peut pas reprendre
+            # plus de pain qu'on en a vendu).
+            if adjustment_sign == -1:
+                original_qty_by_bp = {}
+                for line in original.lines.all():
+                    original_qty_by_bp[line.bread_price_id] = original_qty_by_bp.get(line.bread_price_id, 0) + line.quantity
+                for adj in original.adjustments.filter(is_adjustment=True).exclude(status=Invoice.Status.CANCELLED).prefetch_related('lines'):
+                    for line in adj.lines.all():
+                        original_qty_by_bp[line.bread_price_id] = (
+                            original_qty_by_bp.get(line.bread_price_id, 0) + adj.adjustment_sign * line.quantity
+                        )
+                for bp_id, requested_qty in requested_qty_by_bp.items():
+                    remaining = original_qty_by_bp.get(bp_id, 0)
+                    if requested_qty > remaining:
+                        bp_label = bp_map[bp_id].label
+                        return Response(
+                            {'detail': (
+                                f"Impossible de retirer {requested_qty} « {bp_label} » : il n'en reste que "
+                                f"{remaining} net sur la facture {original.receipt_number} après les ajustements déjà enregistrés."
+                            )},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+
             if client is not None:
                 # BUG-640 : `debt_before` lu sous verrou de la ligne client.
-                client = Client.objects.select_for_update().get(pk=client.pk)
+                client = _lock_client(client.pk)
             debt_before = client.current_debt if client is not None else 0
 
             adjustment = Invoice.objects.create(
