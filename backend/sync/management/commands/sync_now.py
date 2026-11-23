@@ -341,6 +341,7 @@ def build_outbound_payload(node_code):
             'id': str(t.id), 'from_node': t.from_node.code, 'to_node': t.to_node.code,
             'bread_price': t.bread_price_id, 'quantity_sent': t.quantity_sent,
             'quantity_received': t.quantity_received, 'transfer_status': t.transfer_status,
+            'flow': t.flow,  # BUG-977
             'notes': t.notes, 'node_origin': t.node_origin,
         }
         for t in transfers_qs
@@ -438,9 +439,17 @@ def build_outbound_payload(node_code):
         for l in SocialDistributionLine.objects.filter(node_origin=node_code, is_synced=False)
     ]
 
+    # BUG-980 : transferts non terminaux que ce poste connaît (rattrapage du cloud > 30 jours).
+    open_transfers = [
+        str(i) for i in BreadTransfer.objects.filter(
+            Q(from_node__code=node_code) | Q(to_node__code=node_code),
+        ).exclude(transfer_status__in=_TRANSFER_DONE).values_list('id', flat=True)[:1000]
+    ]
+
     return {
         'node_code': node_code,
         'batch_id': str(uuid.uuid4()),
+        'open_transfers': open_transfers,
         'records': {
             'clients.Client': clients,
             'sales.Invoice': invoices,
@@ -522,26 +531,51 @@ def apply_push_response(response_data):
             model.objects.filter(pk__in=accepted_ids).update(is_synced=True)
 
 
-def _apply_pulled_transfers(transfers, lines):
-    """BUG-964 : applique les transferts descendus du cloud (émetteur OU récepteur).
+_TRANSFER_RANK = {'PENDING': 0, 'RESPONDED': 1, 'DISPUTED': 2, 'CONFIRMED': 3, 'CANCELLED': 3}
+_TRANSFER_DONE = ('CONFIRMED', 'CANCELLED')
 
-    Aucun effet de stock : les mouvements (`_adjust_bread_stock`) restent produits
-    uniquement par les actions REST locales (send / respond / confirm_reception) ;
-    un transfert reçu par pull n'en crée donc jamais de double. Idempotent :
-    - inconnu localement : créé (`is_synced=True`, statut tel que décidé au cloud) ;
-    - connu : jamais de régression de statut, et jamais écrasé s'il a une
-      modification locale non poussée (`is_synced=False`).
+
+def _local_node_code(payload):
+    """Code du poste : `node_code` de la réponse du cloud (identité du jeton), à défaut
+    `KIESE_NODE_CODE`. Sans code, aucun effet de stock ni alerte n'est appliqué."""
+    import os
+    code = payload.get('node_code') if isinstance(payload, dict) else None
+    if isinstance(code, str) and code:
+        return code
+    return os.environ.get('KIESE_NODE_CODE') or None
+
+
+def _apply_pulled_transfers(transfers, lines, local_code=None):
+    """BUG-964/975/976/978/979 : applique les transferts descendus du cloud (émetteur OU récepteur).
+
+    Contrat (SYNC.md §5.3) :
+    - Transfert inconnu localement : créé (`is_synced=True`, statut et `flow` du cloud), lignes
+      créées SANS mouvement de stock (copie d'un état ; un poste réinstallé ne rejoue pas
+      l'historique) ; alerte locale « Demande de Pains » (émettrice, PENDING) ou « Pains Envoyés »
+      (réceptrice, RESPONDED) régénérée ici car les `SystemNotification` ne sont pas synchronisées.
+    - Transfert connu : jamais de régression de statut ; jamais écrasé s'il a une modification
+      locale non poussée (`is_synced=False`) ni s'il est déjà terminé localement.
+      Les lignes sont appliquées dès que le statut cloud est >= au statut local (BUG-979 :
+      lignes manquantes créées, quantités reçues/envoyées mises à jour même à statut égal).
+    - Stock miroir (BUG-976) : appliqué par DELTA entre la ligne locale et la ligne cloud, dans la
+      même transaction que l'écriture de la ligne. La ligne locale est donc le marqueur
+      d'application : un second pull identique donne un delta nul (aucun double mouvement) ;
+      les actions REST locales, qui écrivent la ligne en même temps que le stock, restent cohérentes.
+        * réceptrice : `received += quantité_reçue_cloud - quantité_reçue_locale` ;
+        * émettrice : `sent += quantité_envoyée_cloud - quantité_envoyée_locale`, seulement si
+          la copie locale était déjà « envoyée » (RESPONDED/DISPUTED : stock déjà déduit).
     Les entrées invalides sont ignorées silencieusement (BUG-781).
     """
     from django.db import transaction
 
     from core.models import BreadPrice, Node
-    from production.models import BreadTransfer, BreadTransferLine
+    from core.utils import create_notification
+    from production.models import BreadTransfer, BreadTransferLine, _adjust_bread_stock
     from sync.services import _strict_uuid, _sync_bounded_qty
 
     if not isinstance(transfers, list):
         return
-    rank = {'PENDING': 0, 'RESPONDED': 1, 'DISPUTED': 2, 'CONFIRMED': 3, 'CANCELLED': 3}
+    rank = _TRANSFER_RANK
     lines_by_transfer = {}
     for ld in lines if isinstance(lines, list) else []:
         if isinstance(ld, dict):
@@ -557,7 +591,9 @@ def _apply_pulled_transfers(transfers, lines):
         qrecv = None if td.get('quantity_received') is None else _sync_bounded_qty(td['quantity_received'])
         with transaction.atomic():
             local = BreadTransfer.objects.select_for_update().filter(pk=tid).first()
-            if local is None:
+            created = local is None
+            old_status = None
+            if created:
                 from_node = Node.objects.filter(code=td.get('from_node')).first()
                 to_node = Node.objects.filter(code=td.get('to_node')).first()
                 if from_node is None or to_node is None or from_node.pk == to_node.pk:
@@ -574,13 +610,18 @@ def _apply_pulled_transfers(transfers, lines):
                 )
                 local.save(_sync_bypass=True)
             else:
-                if (not local.is_synced or rank[status] <= rank[local.transfer_status]
-                        or local.transfer_status in ('CONFIRMED', 'CANCELLED')):
+                if (not local.is_synced or local.transfer_status in _TRANSFER_DONE
+                        or rank[status] < rank[local.transfer_status]):
                     continue
-                local.transfer_status = status
-                local.quantity_received = qrecv
-                local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
-                           _sync_bypass=True)
+                old_status = local.transfer_status
+                if rank[status] > rank[old_status]:
+                    local.transfer_status = status
+                    local.quantity_received = qrecv
+                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
+                               _sync_bypass=True)
+            is_to = bool(local_code) and local.to_node.code == local_code
+            is_from = bool(local_code) and local.from_node.code == local_code
+            sent_deducted = old_status in ('RESPONDED', 'DISPUTED')
             for ld in lines_by_transfer.get(str(tid), []):
                 bp = ld.get('bread_price')
                 if not isinstance(bp, int) or isinstance(bp, bool):
@@ -590,12 +631,58 @@ def _apply_pulled_transfers(transfers, lines):
                     None if ld.get('quantity_received') is None else _sync_bounded_qty(ld['quantity_received']))
                 if price is None or ls is None:
                     continue
-                line, created = BreadTransferLine.objects.get_or_create(
-                    transfer=local, bread_price=price,
-                    defaults={'quantity_sent': ls, 'quantity_received': lr})
-                if not created and lr is not None and line.quantity_received != lr:
-                    line.quantity_received = lr
-                    line.save(update_fields=['quantity_received'])
+                line = BreadTransferLine.objects.select_for_update().filter(transfer=local, bread_price=price).first()
+                if line is None:
+                    BreadTransferLine.objects.create(
+                        transfer=local, bread_price=price, quantity_sent=ls, quantity_received=lr)
+                    d_sent, d_recv = ls, (lr or 0)
+                else:
+                    new_recv = line.quantity_received if lr is None else lr
+                    d_sent, d_recv = ls - line.quantity_sent, (new_recv or 0) - (line.quantity_received or 0)
+                    if d_sent or new_recv != line.quantity_received:
+                        line.quantity_sent, line.quantity_received = ls, new_recv
+                        line.save(update_fields=['quantity_sent', 'quantity_received'])
+                if created:
+                    continue  # copie d'un état : pas de mouvement de stock
+                if is_to and d_recv:
+                    _adjust_bread_stock(local.to_node, price, received=d_recv)
+                if is_from and sent_deducted and d_sent:
+                    _adjust_bread_stock(local.from_node, price, sent=d_sent)
+
+            # BUG-978 : alertes régénérées localement (une fois : la création ou l'avance de
+            # statut n'a lieu qu'une fois par poste ; un rejeu n'avance plus rien).
+            if local_code and (is_to or is_from) and (created or rank[status] > rank[old_status]):
+                lines_txt = ', '.join(
+                    f"{l.quantity_sent}×{l.bread_price.label}"
+                    for l in local.lines.select_related('bread_price')) or '—'
+                f_code, t_code = local.from_node.code, local.to_node.code
+                if is_from and status == 'PENDING' and created:
+                    create_notification(
+                        title=f"Demande de Pains — {f_code}",
+                        message=(f"La boulangerie {t_code} vous demande {lines_txt}. "
+                                 f"Veuillez répondre à cette demande (accepter ou refuser)."),
+                        severity='INFO', node_origin=f_code)
+                elif is_to and status == 'RESPONDED':
+                    create_notification(
+                        title=f"Pains Envoyés — {t_code}",
+                        message=(f"La boulangerie {f_code} vous envoie {lines_txt}. "
+                                 f"Veuillez confirmer la réception."),
+                        severity='INFO', node_origin=t_code)
+                elif is_from and status == 'DISPUTED':
+                    create_notification(
+                        title=f"Litige Transfert — {f_code}→{t_code}",
+                        message=f"Écart détecté à la réception. {lines_txt}.",
+                        severity='DANGER', node_origin=f_code)
+                elif status == 'CONFIRMED' and old_status == 'DISPUTED':
+                    create_notification(
+                        title=f"Litige Transfert résolu — {f_code}→{t_code}",
+                        message="Le litige a été résolu au siège ou par l'autre boulangerie.",
+                        severity='INFO', node_origin=local_code)
+                elif is_to and status == 'CANCELLED':
+                    create_notification(
+                        title=f"Demande Refusée — {t_code}",
+                        message=f"La boulangerie {f_code} n'a pas le stock disponible pour votre demande.",
+                        severity='WARNING', node_origin=t_code)
 
 
 def apply_pull_response(payload):
@@ -616,7 +703,8 @@ def apply_pull_response(payload):
     # BUG-781 : une réponse tronquée ou hostile ne doit jamais lever
     # d'exception : entrées invalides ignorées, rien d'écrit à tort.
     if isinstance(payload, dict):
-        _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'))
+        _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'),
+                                _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return

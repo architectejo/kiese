@@ -10,7 +10,6 @@ chez lui.
 """
 import json
 from datetime import timedelta
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -439,7 +438,6 @@ class A13Flows(P13Base):
             self.assertIn(str(tid), {t['id'] for t in api.get('/api/sync/pull/').data['transfers']})
 
     # ----- defauts voisins ----------------------------------------------------------------------
-    @expectedFailure
     def test_BUG_974_resolution_de_l_emettrice_atteint_le_cloud_et_debloque_k2(self):
         """BUG-974 : K1 (poste) resout le litige localement (ALIGN_ON_RECEIVED) : K1 est credite de 2, transfert
         CONFIRMED localement. Le push est rejete a chaque cycle (« litige non resolu » + « ligne en double ») : le
@@ -461,7 +459,6 @@ class A13Flows(P13Base):
         self.assertEqual(self.view('K1', tid), ('CONFIRMED', {self.b3.pk: (98, 98)}))
         self.assertEqual(self.own('K1', self.b3), 2)
 
-    @expectedFailure
     def test_BUG_975_resolution_siege_received_leve_le_blocage_de_k2_apres_pull(self):
         """BUG-975 : le siege resout au cloud ALIGN_ON_RECEIVED (quantity_sent <- recu). Le pull applique le
         statut CONFIRMED mais ne reporte pas la nouvelle quantity_sent sur les copies locales : la ligne reste
@@ -494,18 +491,15 @@ class A13Flows(P13Base):
         self.sync('K1')
         self.assertEqual(self.total(self.b3), 100, (resolution, self.own('K1', self.b3), self.own('K2', self.b3)))
 
-    @expectedFailure
     def test_BUG_976_resolution_siege_received_regularise_le_stock_de_k1(self):
         """BUG-976 : la resolution du siege (cloud) n'ajuste que les stocks du cloud ; le pull ne cree aucun
         mouvement chez K1 (ALIGN_ON_RECEIVED : +2 attendu) ni chez K2 (ALIGN_ON_SENT : +2 attendu) : la somme
         des stocks du groupe reste a 98 alors que le litige est « resolu » (« somme nulle au niveau du groupe »)."""
         self._resolve_stock('ALIGN_ON_RECEIVED')
 
-    @expectedFailure
     def test_BUG_976_resolution_siege_sent_regularise_le_stock_de_k2(self):
         self._resolve_stock('ALIGN_ON_SENT')
 
-    @expectedFailure
     def test_BUG_976_confirmation_de_la_reception_par_le_siege_credite_le_stock_de_k2(self):
         """Copie locale en retard (limite annoncee d35) : le siege confirme la reception au cloud ; le pull
         passe la copie de K2 de RESPONDED a CONFIRMED sans créditer le stock de K2 : 100 pains disparaissent
@@ -521,7 +515,6 @@ class A13Flows(P13Base):
         self.assertEqual(self.own('K2', self.b3), 100)
         self.assertEqual(self.total(self.b3), 100)
 
-    @expectedFailure
     def test_BUG_977_envoi_direct_garde_son_flux_direct_au_cloud_et_chez_la_receptrice(self):
         """BUG-977 : `flow` n'est ni exporte par le poste ni pose a la creation cloud : un envoi direct (K1) devient
         « Demande puis reponse » au cloud et chez K2 (libelle, regles d'initiateur BUG-624)."""
@@ -534,7 +527,6 @@ class A13Flows(P13Base):
         self.go('K2')
         self.assertEqual(BreadTransfer.objects.get(pk=tid).flow, 'DIRECT')
 
-    @expectedFailure
     def test_BUG_978_la_receptrice_est_alertee_d_un_envoi_recu_par_pull(self):
         """BUG-978 : les alertes (SystemNotification) sont creees dans la base du poste qui agit et ne sont pas
         synchronisees : « Pains Envoyes » / « Demande de Pains » / litige n'apparaissent jamais chez K2 (ou K1) en
@@ -546,7 +538,6 @@ class A13Flows(P13Base):
         self.assertTrue(SystemNotification.objects.filter(node_origin='Q2').exists()
                         or SystemNotification.objects.filter(message__contains='Q1').exists())
 
-    @expectedFailure
     def test_BUG_979_lignes_manquantes_completees_au_pull_suivant(self):
         """BUG-979 : le pull n'applique les lignes que lorsque le statut avance ; un transfert cree localement
         avec une ligne ignoree (categorie de pain inconnue du poste a ce moment) ne la recoit jamais, meme quand la
@@ -565,7 +556,6 @@ class A13Flows(P13Base):
         apply_pull_response(pulled)
         self.assertEqual(BreadTransferLine.objects.filter(transfer_id=tid).count(), 2)
 
-    @expectedFailure
     def test_BUG_980_poste_hors_ligne_plus_de_30_jours_apprend_la_resolution(self):
         """BUG-980 : un transfert CONFIRME depuis plus de 30 jours n'est plus descendu ; un poste qui reste
         hors ligne plus longtemps garde a vie sa copie DISPUTED et sa cloture bloquee (aucun moyen de rattrapage)."""

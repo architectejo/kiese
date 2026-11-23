@@ -1695,6 +1695,11 @@ def _push_bread_transfer(node, record):
         quantity_sent=qty_sent,
         quantity_received=qty_received,
         transfer_status=initial_status,
+        # BUG-977 : `flow` conservé ; DIRECT uniquement pour un envoi direct de l'émettrice
+        # (statut RESPONDED à la création), y compris d'un poste ancien qui n'exporte pas `flow`.
+        flow=(BreadTransfer.Flow.DIRECT
+              if direct_send and record.get('flow') != BreadTransfer.Flow.REQUEST
+              else BreadTransfer.Flow.REQUEST),
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', to_code or node.code),
     )
@@ -1726,11 +1731,31 @@ def _push_bread_transfer_line(node, record):
     if existing is not None:
         # BUG-788 : la quantité reçue n'est modifiable que par la boulangerie réceptrice.
         sent = record.get('quantity_sent')
+        in_dispute = transfer.transfer_status == 'DISPUTED'
+        update_fields = []
         if (sent not in (None, '') and node.pk == transfer.from_node_id
                 and _sync_int(sent, 'quantity_sent') != existing.quantity_sent):
-            # BUG-920 : doublon de ligne avec une autre quantité : jamais « accepté » sans effet.
-            return _record_result(record_id, False, "ligne en double avec une quantité envoyée différente")
+            # BUG-974 : résolution de l'émettrice « le reçu fait foi » (REST resolve_dispute
+            # ALIGN_ON_RECEIVED) : seule exception, dans un litige et uniquement pour aligner
+            # l'envoyé sur la quantité reçue déclarée par la réceptrice.
+            new_sent = _sync_int(sent, 'quantity_sent')
+            if in_dispute and existing.quantity_received is not None and new_sent == existing.quantity_received:
+                existing.quantity_sent = new_sent
+                update_fields.append('quantity_sent')
+            else:
+                # BUG-920 : doublon de ligne avec une autre quantité : jamais « accepté » sans effet.
+                return _record_result(record_id, False, "ligne en double avec une quantité envoyée différente")
         recv = record.get('quantity_received')
+        if (recv is not None and node.pk == transfer.from_node_id and in_dispute
+                and existing.quantity_received != recv):
+            # BUG-974 : résolution de l'émettrice « l'envoyé fait foi » (ALIGN_ON_SENT) : la
+            # reçue est alignée sur l'envoyé, rien d'autre.
+            recv_i = _sync_int(recv, 'quantity_received')
+            if recv_i == existing.quantity_sent:
+                existing.quantity_received = recv_i
+                update_fields.append('quantity_received')
+        if update_fields:
+            existing.save(update_fields=update_fields)
         if recv is not None and node.pk == transfer.to_node_id and existing.quantity_received != recv:
             recv = _sync_int(recv, 'quantity_received')
             if recv != existing.quantity_received:

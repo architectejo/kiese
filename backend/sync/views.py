@@ -25,7 +25,7 @@ from core.permissions import IsHeadquarters
 from .authentication import NodeTokenAuthentication
 from .exceptions import TransientSyncError
 from .permissions import IsValidNodeToken
-from .models import SyncBatchLog, SyncConflictLog
+from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog
 from .serializers import SyncConflictLogSerializer
 from .services import process_push_batch
 
@@ -59,6 +59,24 @@ class HandshakeView(APIView):
             'server_time': timezone.now().isoformat(),
             'is_active': node.is_active,
         })
+
+
+_MAX_OPEN_TRANSFERS = 1000
+
+
+def _store_open_transfers(node, raw):
+    """BUG-980 : mémorise les ids (UUID valides, bornés) des transferts non terminaux du poste.
+    Champ absent (poste ancien) : rien n'est modifié ; valeur invalide : ignorée."""
+    if raw is None or not isinstance(raw, list):
+        return
+    ids = []
+    for item in raw[:_MAX_OPEN_TRANSFERS]:
+        if isinstance(item, str) and len(item) <= 40:
+            try:
+                ids.append(str(uuid.UUID(item)))
+            except (TypeError, ValueError):
+                continue
+    NodeOpenTransfers.objects.update_or_create(node=node, defaults={'transfer_ids': sorted(set(ids))})
 
 
 class PushView(APIView):
@@ -117,6 +135,10 @@ class PushView(APIView):
             batch_id = uuid.UUID(batch_id_raw)
         except (TypeError, ValueError):
             return Response({'detail': "batch_id manquant ou invalide (UUID attendu)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # BUG-980 : transferts non terminaux connus du poste (hors empreinte du lot ;
+        # mise à jour idempotente, y compris sur un lot rejoué).
+        _store_open_transfers(node, data.get('open_transfers'))
 
         records_by_model = data.get('records') or {}
         if not isinstance(records_by_model, dict):
@@ -249,10 +271,15 @@ class PullView(APIView):
         from datetime import timedelta
         from production.models import BreadTransfer
         recent = now - timedelta(days=30)
+        # BUG-980 : un transfert terminé depuis > 30 jours reste descendu tant que le poste
+        # déclare (push `open_transfers`) en avoir encore une copie non terminale.
+        state = NodeOpenTransfers.objects.filter(node=node).first()
+        open_ids = list(state.transfer_ids) if state else []
+        terminal = ('CONFIRMED', 'CANCELLED')
         transfers_qs = BreadTransfer.objects.filter(
             Q(from_node=node) | Q(to_node=node)
         ).exclude(
-            transfer_status__in=('CONFIRMED', 'CANCELLED'), updated_at__lt=recent,
+            Q(transfer_status__in=terminal, updated_at__lt=recent) & ~Q(pk__in=open_ids),
         ).select_related('from_node', 'to_node').prefetch_related('lines')
         transfers, transfer_lines = [], []
         for t in transfers_qs:
@@ -270,6 +297,13 @@ class PullView(APIView):
                 })
         payload['transfers'] = transfers
         payload['transfer_lines'] = transfer_lines
+        # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
+        # émettrice ou réceptrice (effets de stock miroir, alertes).
+        payload['node_code'] = node.code
+        delivered_terminal = {t['id'] for t in transfers if t['transfer_status'] in terminal}
+        if state and delivered_terminal & set(open_ids):
+            state.transfer_ids = sorted(set(open_ids) - delivered_terminal)
+            state.save(update_fields=['transfer_ids', 'updated_at'])
 
         Node.objects.filter(pk=node.pk).update(last_sync=now)
         return Response(payload)

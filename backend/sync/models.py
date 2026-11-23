@@ -289,3 +289,21 @@ class SyncConflictLog(models.Model):
     @property
     def is_resolved(self):
         return self.resolved_at is not None
+
+
+class NodeOpenTransfers(models.Model):
+    """
+    BUG-980 : ids des transferts que le poste déclare encore « non terminaux »
+    (champ `open_transfers` du dernier push). Sert uniquement à décider si un
+    transfert CONFIRMED/CANCELLED de plus de 30 jours doit encore être descendu à ce
+    poste (il en garde une copie ancienne qu'il doit rattraper). Un id est retiré dès
+    que le pull le livre ; le prochain push du poste le redéclare si le poste ne l'a pas
+    appliqué (réponse perdue) : l'état local du poste fait foi, pas un accusé.
+    """
+    node = models.OneToOneField(Node, on_delete=models.CASCADE, related_name='open_transfers_state')
+    transfer_ids = models.JSONField(default=list, verbose_name=_("Transferts non terminaux connus du poste"))
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Transferts ouverts d'un poste")
+        verbose_name_plural = _("Transferts ouverts des postes")
