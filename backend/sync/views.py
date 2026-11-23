@@ -299,7 +299,7 @@ class PullView(APIView):
         # recalculé est ce qui doit redescendre, jamais une valeur figée.
         client_qs = Client.objects.filter(
             Q(node=node) | Q(invoices__node=node)
-        ).distinct()
+        ).distinct().select_related('node')
         if since_client_debt is not None:
             client_qs = client_qs.filter(updated_at__gt=since_client_debt)
         payload['clients'] = [
@@ -309,6 +309,12 @@ class PullView(APIView):
                 'first_name': c.first_name, 'last_name': c.last_name,
                 'phone': c.phone, 'address': c.address,
                 'updated_at': c.updated_at.isoformat(),
+                # BUG-994 : de quoi créer le client sur un poste neuf (additif, cloud ancien = absent).
+                'node': c.node.code, 'node_origin': c.node_origin,
+                'commission_rate': str(c.commission_rate),
+                'cotisation_sociale': str(c.cotisation_sociale) if c.cotisation_sociale is not None else None,
+                'client_type': c.client_type, 'notes': c.notes,
+                'total_breads_received': c.total_breads_received,
             }
             for c in client_qs
         ]

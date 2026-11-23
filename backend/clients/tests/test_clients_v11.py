@@ -11,7 +11,6 @@ import unicodedata
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal as D
-from unittest import expectedFailure
 
 import openpyxl
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -129,7 +128,6 @@ class V981Horloge(Identite):
         self.future(120, credit_limit='60000', current_debt='0')
         self.assertEqual(self.cur().current_debt, D('1234.00'))
 
-    @expectedFailure
     def test_BUG_995_second_ecrasement_en_avance_perd_les_valeurs_ecrasees(self):
         # 1er ecrasement : 90 000 -> 60 000 (trace). Le siege remet 120 000 ; le poste (toujours en avance)
         # repousse 70 000 : la valeur 120 000 ecrasee doit etre conservee quelque part (BUG-981 : « conserver
@@ -288,14 +286,12 @@ class V993DateFacture(Identite):
         Invoice.objects.filter(pk=inv.pk).update(invoice_date=past, is_synced=False, order_total=D('25000.00'))
         return inv, past
 
-    @expectedFailure
     def test_BUG_993_le_lot_sortant_porte_la_date_de_la_facture(self):
         inv, past = self._facture_ancienne()
         rows = build_outbound_payload('K1')['records']['sales.Invoice']
         row = [r for r in rows if r['id'] == str(inv.id)][0]
         self.assertEqual(str(row.get('invoice_date')), past.isoformat())
 
-    @expectedFailure
     def test_BUG_993_facture_poussee_au_cloud_garde_sa_date_du_poste(self):
         # un poste hors ligne pousse une facture du mois passe : elle doit rester dans le mois d'origine
         # (sinon elle est comptee dans la periode de commission du jour du push).
@@ -358,7 +354,6 @@ class PullPosteNeuf(Base):
         rows = node_api(self.k1).get('/api/sync/pull/').json()['clients']
         self.assertNotIn(str(other.id), {x['id'] for x in rows})
 
-    @expectedFailure
     def test_BUG_994_poste_neuf_recoit_ses_clients_identite_et_plafond(self):
         # poste neuf = base locale sans aucun client : apres le pull, il doit les avoir (SYNC.md §1 :
         # « Client créés par d'autres nœuds (lecture) » descendent) avec identite + plafond.

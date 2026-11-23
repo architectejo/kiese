@@ -227,6 +227,7 @@ def build_outbound_payload(node_code):
             'special_code': i.special_code, 'is_debt_repayment': i.is_debt_repayment,
             'receipt_number': i.receipt_number,
             'delivered_at': i.delivered_at.isoformat() if i.delivered_at else None,
+            'invoice_date': i.invoice_date.isoformat() if i.invoice_date else None,  # BUG-993
             'node_origin': i.node_origin,
         }
         for i in invoices_qs
@@ -769,6 +770,128 @@ def _apply_pulled_closures(closures, local_code):
                 is_validated=validated, is_rejected=rejected, rejection_reason=reason[:2000])
 
 
+_PULL_CREATE_BATCH = 500
+
+
+def _build_pulled_client(row, nodes):
+    """BUG-994 : construit (sans l'enregistrer) un `Client` à partir d'une ligne de pull, ou None
+    si la ligne est invalide / incomplète. Aucune dette n'est recalculée : `current_debt` est celle
+    du cloud (pas de DebtMovement, pas de notification)."""
+    from decimal import Decimal, InvalidOperation
+
+    from clients.models import Client
+    from sync.services import MAX_DEBT_ABS, _strict_uuid
+
+    cid = _strict_uuid(row.get('id'))
+    if cid is None or row.get('category') not in Client.Category.values:
+        return None
+    code = row.get('code')
+    if not isinstance(code, str) or not code.strip() or len(code) > 20:
+        return None
+    texts = {}
+    for name, max_len, required in (('first_name', 100, True), ('last_name', 100, True), ('phone', 25, False),
+                                    ('address', None, False), ('notes', None, False)):
+        val = row.get(name, '')
+        if val is None and not required:
+            val = ''
+        if not isinstance(val, str) or (required and not val.strip()) or (max_len and len(val) > max_len):
+            return None
+        texts[name] = val
+    node = nodes.get(row.get('node')) if isinstance(row.get('node'), str) else None
+    if node is None:
+        return None  # nœud inconnu localement (ou cloud ancien sans `node`) : ignoré, journalisé par l'appelant
+
+    def dec(name, low, high, default=None, places='0.01'):
+        raw = row.get(name)
+        if raw is None or raw == '':
+            return default
+        if isinstance(raw, bool):
+            raise ValueError(name)
+        try:
+            value = Decimal(str(raw))
+        except InvalidOperation:
+            raise ValueError(name)
+        if not value.is_finite() or not (low <= value <= high):
+            raise ValueError(name)
+        return value.quantize(Decimal(places))
+
+    try:
+        debt = dec('current_debt', -MAX_DEBT_ABS + 1, MAX_DEBT_ABS - 1, Decimal('0.00'))
+        limit = dec('credit_limit', Decimal('0'), Decimal('10000000'), Decimal('50000.00'))
+        rate = dec('commission_rate', Decimal('0'), Decimal('0.99'), Decimal('0.25'))
+        cotisation = dec('cotisation_sociale', Decimal('0'), Decimal('99999999'), None)
+    except ValueError:
+        return None
+    ctype = row.get('client_type') or Client.ClientType.DETAILLANT
+    if ctype not in Client.ClientType.values:
+        return None
+    total = row.get('total_breads_received', 0)
+    if isinstance(total, bool) or not isinstance(total, int) or not (0 <= total <= 2_000_000_000):
+        return None
+    origin = row.get('node_origin')
+    if not isinstance(origin, str) or not origin or len(origin) > 10:
+        origin = node.code
+    return Client(
+        id=cid, code=code, node=node, node_origin=origin, is_synced=True, category=row['category'],
+        current_debt=debt, credit_limit=limit, commission_rate=rate, cotisation_sociale=cotisation,
+        client_type=ctype, total_breads_received=total, **texts,
+    )
+
+
+def _create_unknown_pulled_clients(rows):
+    """BUG-994 : crée en bloc (bulk_create par lots, requêtes par lots : pas de N+1) les clients de
+    la réponse du pull que ce poste ne connaît pas. Idempotent (un second passage ne trouve plus
+    rien d'inconnu). Le code client reste celui du cloud ; un code déjà pris par un AUTRE client local
+    est ignoré avec journal. Renvoie l'ensemble des UUID créés."""
+    import logging
+
+    from django.db import transaction
+
+    from clients.models import Client
+    from core.models import Node
+    from sync.services import _strict_uuid
+
+    log = logging.getLogger(__name__)
+    candidates = {}
+    for row in rows:
+        if isinstance(row, dict):
+            cid = _strict_uuid(row.get('id'))
+            if cid is not None and cid not in candidates:
+                candidates[cid] = row
+    if not candidates:
+        return set()
+    ids = list(candidates)
+    known = set()
+    for i in range(0, len(ids), _PULL_CREATE_BATCH):
+        known.update(Client.objects.filter(pk__in=ids[i:i + _PULL_CREATE_BATCH]).values_list('pk', flat=True))
+    unknown = [cid for cid in ids if cid not in known]
+    if not unknown:
+        return set()
+    nodes = {n.code: n for n in Node.objects.all()}
+    built = []
+    for cid in unknown:
+        obj = _build_pulled_client(candidates[cid], nodes)
+        if obj is None:
+            log.warning("Pull : client %s inconnu ignoré (ligne incomplète, invalide ou nœud inconnu)", cid)
+        else:
+            built.append(obj)
+    seen_codes, taken = set(), set()
+    codes = [o.code for o in built]
+    for i in range(0, len(codes), _PULL_CREATE_BATCH):
+        taken.update(Client.objects.filter(code__in=codes[i:i + _PULL_CREATE_BATCH]).values_list('code', flat=True))
+    to_create = []
+    for obj in built:
+        if obj.code in taken or obj.code in seen_codes:
+            log.warning("Pull : code client %s déjà utilisé localement, client %s ignoré", obj.code, obj.id)
+            continue
+        seen_codes.add(obj.code)
+        to_create.append(obj)
+    for i in range(0, len(to_create), _PULL_CREATE_BATCH):
+        with transaction.atomic():
+            Client.objects.bulk_create(to_create[i:i + _PULL_CREATE_BATCH], ignore_conflicts=True)
+    return {o.id for o in to_create}
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -794,12 +917,14 @@ def apply_pull_response(payload):
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return
+    # BUG-994 : clients inconnus de ce poste (poste neuf) créés en bloc depuis la réponse du pull.
+    created_ids = _create_unknown_pulled_clients(clients)
     for client_data in clients:
         if not isinstance(client_data, dict):
             continue
         client_id = _strict_uuid(client_data.get('id'))
         category = client_data.get('category')
-        if client_id is None or category not in Client.Category.values:
+        if client_id is None or category not in Client.Category.values or client_id in created_ids:
             continue
         raw_debt = client_data.get('current_debt')
         if isinstance(raw_debt, bool) or raw_debt is None:

@@ -418,10 +418,16 @@ def _apply_client_identity_push(existing, record, node):
         old_category = locked.category
         if future_drift:
             overwritten = ", ".join(f"{k}: {getattr(locked, k)!r} -> {v!r}" for k, v in changes.items())
-            _log_conflict(
+            clock_conflict = _log_conflict(
                 node, 'clients.Client', record_id, 'HORLOGE_POSTE_EN_AVANCE',
                 f"Édition du client {locked.code} poussée par {node.code} avec un horodatage dans le futur "
                 f"({sent_at.isoformat()}) : appliquée, valeurs écrasées conservées ici — {overwritten}.")
+            clock_conflict.refresh_from_db()
+            if clock_conflict.occurrences > 1:
+                # BUG-995 : conflit dédoublonné (BUG-723) : l'historique des valeurs écrasées est conservé.
+                clock_conflict.detail = (
+                    f"{clock_conflict.detail} || Écrasement suivant ({sent_at.isoformat()}) : {overwritten}.")[:20000]
+                clock_conflict.save(update_fields=['detail'])
         for k, v in changes.items():
             setattr(locked, k, v)
         fields = list(changes)
@@ -540,6 +546,22 @@ def _push_invoice(node, record):
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
 
+    # BUG-993 : date de la facture du poste (ISO ASCII AAAA-MM-JJ strict, ni future ni absurde).
+    # Absente (poste ancien) : comportement historique (date du jour du push).
+    invoice_date = None
+    raw_date = record.get('invoice_date')
+    if raw_date not in (None, ''):
+        invoice_date = _strict_date(raw_date) if (
+            isinstance(raw_date, str) and raw_date.isascii() and len(raw_date.strip()) == 10) else None
+        if invoice_date is None:
+            return _record_result(record_id, False, "« invoice_date » invalide (AAAA-MM-JJ attendu)")
+        if invoice_date < MIN_SYNC_INVOICE_DATE:
+            return _record_result(record_id, False, "« invoice_date » trop ancienne")
+        try:
+            _sync_not_future_date(node, invoice_date, 'invoice_date')
+        except ValueError as exc:
+            return _record_result(record_id, False, str(exc))
+
     # BUG-725 : montants jamais négatifs (la BP négative se porte par
     # `debt_before`/`debt_after`, pas par la commande ni le versement).
     for fname in ('order_total', 'payment_amount', 'initial_order_total'):
@@ -611,10 +633,28 @@ def _push_invoice(node, record):
         delivered_at=delivered_at,
         node_origin=record.get('node_origin', bakery_code),
     )
+    if invoice_date is not None:
+        invoice.invoice_date = invoice_date
     invoice.save(_sync_bypass=True)
+    if invoice_date is not None and client is not None and invoice_date != _date_today_local():
+        # BUG-083 (reproduit de la voie REST) : facture datée dans une période de commission close.
+        try:
+            from sales.views import _warn_if_commission_period_locked
+            _warn_if_commission_period_locked(invoice, client)
+        except Exception:  # l'avertissement ne doit jamais faire échouer le lot
+            logger.warning("Avertissement période de commission close non créé (%s)", record_id)
     if invoice.status in ('DELIVERED', 'CANCELLED'):
         _batch_terminal_parents().add(str(invoice.pk))
     return _record_result(record_id, True)
+
+
+def _date_today_local():
+    from django.utils import timezone
+    return timezone.localdate()
+
+
+# Borne basse d'une date de facture poussée par un poste (BUG-993).
+MIN_SYNC_INVOICE_DATE = _date(2020, 1, 1)
 
 
 # BUG-331/332 : borne haute d'une quantité de ligne (line_total est un
