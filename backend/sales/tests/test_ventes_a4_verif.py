@@ -44,7 +44,6 @@ class AnnulationEtNonServiApresAjustement(Base):
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual((self.debt(), self.sent()), (D(0), 0))
 
-    @expectedFailure
     def test_BUG_660_non_servi_apres_ajustement_negatif_double_restitution(self):
         """BUG-660 : mark-not-served apres un ajustement -1 restitue la quantite d'ORIGINE
         (comme BUG-648 pour cancel) : BP -300 et stock -1 au lieu de 0 / 0."""
@@ -56,7 +55,6 @@ class AnnulationEtNonServiApresAjustement(Base):
             self.assertEqual((self.debt(), self.sent()), (D(0), 0),
                              'non servi apres ajustement : restitution double')
 
-    @expectedFailure
     def test_BUG_660_expiration_apres_ajustement_negatif_double_restitution(self):
         """BUG-660 (volet expiration 12 h : meme service `mark_not_served`)."""
         from datetime import timedelta
@@ -78,7 +76,6 @@ class AnnulationEtNonServiApresAjustement(Base):
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual((self.debt(), self.sent()), (D(0), 0))
 
-    @expectedFailure
     def test_BUG_662_non_servi_apres_ajustement_positif_laisse_vente_fantome(self):
         """BUG-662 : mark-not-served d'une originale ayant un ajustement +1 : l'originale est
         annulee mais l'ajustement (vente de 1 pain, BP +300, stock -1) subsiste, alors que
@@ -145,7 +142,6 @@ class AdjustSansVerrouFacture(TransactionTestCase):
         t.start()
         return t
 
-    @expectedFailure
     def test_BUG_661_ajustement_concurrent_a_une_annulation(self):
         """BUG-661 : `adjust` controle le statut et le net restant de l'originale HORS transaction
         et sans verrou : une annulation passee entre le controle et l'ecriture laisse un ajustement
@@ -161,7 +157,6 @@ class AdjustSansVerrouFacture(TransactionTestCase):
             t.join(30)
         self.assertEqual(self._state(), (D(0), 0), f'annulee puis ajustee : {out}')
 
-    @expectedFailure
     def test_BUG_663_deux_ajustements_simultanes_un_seul_500_sans_retentative(self):
         """BUG-663 (et racine BUG-661) : deux ajustements -2 simultanes sur une originale de
         2 pains passent tous deux le controle « net restant » (lu hors verrou) : 4 pains repris

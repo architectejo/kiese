@@ -1083,7 +1083,12 @@ class InvoiceViewSet(
           date rétroactive, puisque corriger une période déjà close est
           précisément le scénario visé par ce ticket.
         """
-        original = self.get_object()
+        original = self.get_object()  # filtre par nœud (404 hors périmètre)
+        # BUG-663 : même retentative bornée que deliver/cancel (SQLite verrouillé).
+        return _retry_on_lock(lambda: self._adjust_once(request, original.pk))
+
+    def _adjust_once(self, request, original_pk):
+        original = Invoice.objects.select_related('node', 'client').get(pk=original_pk)
 
         if original.status == Invoice.Status.CANCELLED:
             return Response(
@@ -1138,34 +1143,6 @@ class InvoiceViewSet(
             bp_id = int(ld['bread_price'])
             requested_qty_by_bp[bp_id] = requested_qty_by_bp.get(bp_id, 0) + int(ld['quantity'])
 
-        # Validation minimale (CLAUDE.md §4, décision coordinateur point 7) :
-        # un ajustement négatif ne peut jamais retirer plus de pains, pour
-        # une même catégorie, que ce qui reste net sur la facture d'origine
-        # une fois les ajustements déjà appliqués pris en compte — sinon le
-        # solde net de pains facturés pour cette catégorie deviendrait
-        # négatif, ce qui n'a pas de sens métier (on ne peut pas reprendre
-        # plus de pain qu'on en a vendu).
-        if adjustment_sign == -1:
-            original_qty_by_bp = {}
-            for line in original.lines.all():
-                original_qty_by_bp[line.bread_price_id] = original_qty_by_bp.get(line.bread_price_id, 0) + line.quantity
-            for adj in original.adjustments.filter(is_adjustment=True).prefetch_related('lines'):
-                for line in adj.lines.all():
-                    original_qty_by_bp[line.bread_price_id] = (
-                        original_qty_by_bp.get(line.bread_price_id, 0) + adj.adjustment_sign * line.quantity
-                    )
-            for bp_id, requested_qty in requested_qty_by_bp.items():
-                remaining = original_qty_by_bp.get(bp_id, 0)
-                if requested_qty > remaining:
-                    bp_label = bp_map[bp_id].label
-                    return Response(
-                        {'detail': (
-                            f"Impossible de retirer {requested_qty} « {bp_label} » : il n'en reste que "
-                            f"{remaining} net sur la facture {original.receipt_number} après les ajustements déjà enregistrés."
-                        )},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
         config = Config.get_instance()
         current_work_date = work_date_for(original.node)
         requested_invoice_date = data.get('invoice_date') or current_work_date
@@ -1200,6 +1177,42 @@ class InvoiceViewSet(
         )
 
         with transaction.atomic():
+            # BUG-661 : originale verrouillée AVANT les contrôles (ordre facture puis client,
+            # comme `_cancel_once`) : statut et « net restant » lus sous verrou.
+            original = Invoice.objects.select_for_update(of=('self',)).select_related('node', 'client').get(pk=original_pk)
+            if original.status == Invoice.Status.CANCELLED:
+                return Response({'detail': "Impossible d'ajuster une facture annulée."}, status=status.HTTP_400_BAD_REQUEST)
+            if original.status == Invoice.Status.NOT_SERVED:
+                return Response({'detail': "Impossible d'ajuster une facture non servie."}, status=status.HTTP_400_BAD_REQUEST)
+            # Validation minimale (CLAUDE.md §4, décision coordinateur point 7) :
+            # un ajustement négatif ne peut jamais retirer plus de pains, pour
+            # une même catégorie, que ce qui reste net sur la facture d'origine
+            # une fois les ajustements déjà appliqués pris en compte — sinon le
+            # solde net de pains facturés pour cette catégorie deviendrait
+            # négatif, ce qui n'a pas de sens métier (on ne peut pas reprendre
+            # plus de pain qu'on en a vendu).
+            if adjustment_sign == -1:
+                original_qty_by_bp = {}
+                for line in original.lines.all():
+                    original_qty_by_bp[line.bread_price_id] = original_qty_by_bp.get(line.bread_price_id, 0) + line.quantity
+                for adj in original.adjustments.filter(is_adjustment=True).exclude(status=Invoice.Status.CANCELLED).prefetch_related('lines'):
+                    for line in adj.lines.all():
+                        original_qty_by_bp[line.bread_price_id] = (
+                            original_qty_by_bp.get(line.bread_price_id, 0) + adj.adjustment_sign * line.quantity
+                        )
+                for bp_id, requested_qty in requested_qty_by_bp.items():
+                    remaining = original_qty_by_bp.get(bp_id, 0)
+                    if requested_qty > remaining:
+                        bp_label = bp_map[bp_id].label
+                        return Response(
+                            {'detail': (
+                                f"Impossible de retirer {requested_qty} « {bp_label} » : il n'en reste que "
+                                f"{remaining} net sur la facture {original.receipt_number} après les ajustements déjà enregistrés."
+                            )},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+
             if client is not None:
                 # BUG-640 : `debt_before` lu sous verrou de la ligne client.
                 client = _lock_client(client.pk)
