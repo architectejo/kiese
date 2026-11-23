@@ -172,6 +172,45 @@ def transfers_by_bread_price(node, work_date):
     )
 
 
+def day_stock_movements(node, work_date):
+    """
+    BUG-1070 / BUG-1071 : colonnes AFFICHAGE de « Stock Pains du Jour », par
+    catégorie, indépendantes de la clôture (aucun effet sur `compute_day_production`) :
+      - `opening`  : stock de départ CONFIRMÉ par le gérant ce jour (le plus tôt
+        de la journée) ; absent si aucune confirmation ;
+      - `sent`     : pains ENVOYÉS par transfert par ce nœud (envoi direct et
+        réponse à une demande ; statuts RESPONDED, CONFIRMED, DISPUTED : le stock
+        a réellement quitté la boulangerie) — rien d'autre (ni ventes, ni
+        soldés, ni ajustements) ;
+      - `received` : pains REÇUS par transfert confirmé ou en litige (quantité reçue, stock crédité).
+    Le jour d'un transfert est la date locale de sa dernière mise à jour.
+    Retourne `(opening, sent, received)` : trois dicts `{bread_price_id: int}`.
+    """
+    opening = {}
+    for conf in (
+        DailyOpeningConfirmation.objects.filter(node=node, date=work_date)
+        .order_by('confirmed_at').prefetch_related('lines')
+    ):
+        for line in conf.lines.all():
+            opening.setdefault(line.bread_price_id, line.qty_confirmed)
+    day = delivered_on_work_date_filter(node, work_date, 'transfer__updated_at')
+    T = BreadTransfer.TransferStatus
+    sent = {
+        r['bread_price_id']: r['qty'] or 0
+        for r in BreadTransferLine.objects.filter(
+            transfer__from_node=node,
+            transfer__transfer_status__in=[T.RESPONDED, T.CONFIRMED, T.DISPUTED], **day,
+        ).values('bread_price_id').annotate(qty=Sum('quantity_sent'))
+    }
+    received = {
+        r['bread_price_id']: r['qty'] or 0
+        for r in BreadTransferLine.objects.filter(
+            transfer__to_node=node, transfer__transfer_status__in=[T.CONFIRMED, T.DISPUTED], **day,
+        ).values('bread_price_id').annotate(qty=Sum('quantity_received'))
+    }
+    return opening, sent, received
+
+
 def compute_day_production(node, work_date, assume_closed=False):
     """
     BUG-319 : synthèse du jour par catégorie. Retourne

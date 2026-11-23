@@ -2410,12 +2410,23 @@ class BreadStockByDateView(APIView):
                     'unit_price': bp.unit_price, 'qty_available': 0,
                 })
             categories.sort(key=lambda c: c['unit_price'])
+        from .services import day_stock_movements
+        opening_m, sent_m, recv_m = day_stock_movements(node, requested_date)
+        for bp_id in set(opening_m) | set(sent_m) | set(recv_m):
+            if bp_id not in {c['bread_price'] for c in categories}:
+                bp = BreadPrice.objects.get(pk=bp_id)
+                categories.append({'bread_price': bp.pk, 'bread_price_display': str(bp),
+                                   'unit_price': bp.unit_price, 'qty_available': 0})
+        categories.sort(key=lambda c: c['unit_price'])
         for c in categories:
             row = day['by_bp'].get(c['bread_price'])
             c['sold_qty'] = row['sold'] if row else 0
             c['closed'] = day['closed']
             c['remaining_qty'] = (row['remaining'] if row else 0) if day['closed'] else None
             c['produced_total'] = (row['produced'] if row else 0) if day['closed'] else None
+            c['qty_opening'] = opening_m.get(c['bread_price'])
+            c['qty_transfer_sent'] = sent_m.get(c['bread_price'], 0)
+            c['qty_transfer_received'] = recv_m.get(c['bread_price'], 0)
 
         return Response({
             'node': node.pk,

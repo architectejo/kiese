@@ -275,6 +275,10 @@ class BreadStockSerializer(serializers.ModelSerializer):
     remaining_qty       = serializers.SerializerMethodField()
     produced_total      = serializers.SerializerMethodField()
     closed              = serializers.SerializerMethodField()
+    # BUG-1070 / BUG-1071 : colonnes du jour (voir services.day_stock_movements).
+    qty_opening           = serializers.SerializerMethodField()
+    qty_transfer_sent     = serializers.SerializerMethodField()
+    qty_transfer_received = serializers.SerializerMethodField()
 
     class Meta:
         model  = BreadStock
@@ -282,6 +286,7 @@ class BreadStockSerializer(serializers.ModelSerializer):
             'id', 'node', 'node_display', 'bread_price', 'bread_price_display', 'unit_price',
             'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted', 'qty_available',
             'sold_qty', 'remaining_qty', 'produced_total', 'closed',
+            'qty_opening', 'qty_transfer_sent', 'qty_transfer_received',
         ]
 
     def _day(self, obj):
@@ -313,6 +318,24 @@ class BreadStockSerializer(serializers.ModelSerializer):
 
     def get_closed(self, obj):
         return self._day(obj)['closed']
+
+    def _movements(self, obj):
+        from core.workday import work_date_for
+        from .services import day_stock_movements
+        cache = self.context.setdefault('_day_movements_cache', {})
+        if obj.node_id not in cache:
+            cache[obj.node_id] = day_stock_movements(obj.node, work_date_for(obj.node))
+        return cache[obj.node_id]
+
+    def get_qty_opening(self, obj):
+        # None = aucun stock de départ confirmé ce jour (distinct de 0 confirmé).
+        return self._movements(obj)[0].get(obj.bread_price_id)
+
+    def get_qty_transfer_sent(self, obj):
+        return self._movements(obj)[1].get(obj.bread_price_id, 0)
+
+    def get_qty_transfer_received(self, obj):
+        return self._movements(obj)[2].get(obj.bread_price_id, 0)
         read_only_fields = ['id', 'qty_produced', 'qty_received', 'qty_sent', 'qty_disposed', 'qty_adjusted']
 
 

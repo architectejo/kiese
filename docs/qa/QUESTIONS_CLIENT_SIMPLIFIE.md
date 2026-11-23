@@ -160,3 +160,13 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 **Situation.** L'écart est calculé « reste déclaré − solde comptable ». Quand le reste n'est pas déclaré, votre tableau affiche l'opposé du solde (ex. −26,8) ; l'application laisse l'écart **vide**. Les statistiques sont visibles aujourd'hui par la direction, le comptable et l'administrateur (toutes les boulangeries) et par le gérant (la sienne seulement).
 
 *Questions : (1) le signe et l'écart vide sont-ils corrects ? (2) le gérant doit-il voir les statistiques de sa boulangerie ? (3) la direction seule voit-elle D1 ?*
+
+### Q-051 (stock de départ) — « Compté comme des pains vendus aujourd'hui » : que veut dire exactement ?
+
+**Situation.** Vous avez demandé que le stock de départ s'inscrive dans « Stock Pains du Jour » et soit « compté comme des pains vendus aujourd'hui ». Aujourd'hui l'application l'**affiche** dans une colonne « Stock de départ » et ne change pas le calcul de clôture (produit = vendus + reste du jour − reste d'hier + …).
+
+**Exemple.** Une boulangerie démarre avec **40 pains** de stock de départ, **produit 100** pains, **vend 120** pains et il en **reste 20**.
+- Lecture 1 : les ventes du jour restent **120** (le stock de départ est seulement affiché).
+- Lecture 2 : le stock de départ compte comme une vente : ventes du jour = **120 + 40 = 160**.
+
+*Question : quelle lecture est la bonne ? Si c'est la lecture 2, quelle valeur de ventes (en FC) doit apparaître dans le rapport du jour ?*
