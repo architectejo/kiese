@@ -83,22 +83,26 @@ class FlourMonthStatsView(APIView):
         ym, error = parse_month(request.query_params.get('month'))
         if error:
             return _bad(error)
-        year, month = ym
+        body, resp = build_month_stats(request.user, ym[0], ym[1], request.query_params.get('node'))
+        return resp if resp is not None else Response(body)
+
+
+def build_month_stats(user, year, month, raw_node):
+    """Calcul pur (lot I-4 : reutilise par l'export Excel) : retourne (corps JSON, None) ou
+    (None, Response d'erreur). `raw_node` = valeur brute de `?node=` (ignoree pour un gerant)."""
+    if True:
         ndays = calendar.monthrange(year, month)[1]
         first = datetime.date(year, month, 1)
         last = datetime.date(year, month, ndays)
-        user = request.user
-
         bakeries = Node.objects.filter(is_active=True).exclude(code=SIEGE_CODE).order_by('code')
         hq = user.can_access_all_nodes
         if hq:
-            raw_node = request.query_params.get('node')
             if raw_node not in (None, ''):
                 node, resp = resolve_node_param(raw_node)
                 if resp is not None:
-                    return resp
+                    return None, resp
                 if node.code == SIEGE_CODE or not node.is_active:
-                    return _bad("Boulangerie inactive ou non valide pour cette statistique.")
+                    return None, _bad("Boulangerie inactive ou non valide pour cette statistique.")
                 bakeries = bakeries.filter(pk=node.pk)
         else:
             # Gérant : sa boulangerie seulement, paramètre node ignoré ; sans boulangerie : rien.
@@ -201,4 +205,4 @@ class FlourMonthStatsView(APIView):
             }
             body['opening_balance'] = _q(initial)
             body['closing_balance'] = rows[-1]['balance']
-        return Response(body)
+        return body, None
