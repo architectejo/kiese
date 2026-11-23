@@ -15,7 +15,10 @@ Les Decimal ne deviennent des float qu'au moment d'ecrire la cellule.
 
 Colonnes calculables = formules Excel du client (F = C+D-E, H = F-G, L = K-H, J = G/I) ; une valeur
 absente (ecart non declare, indice sans reference) reste une cellule VIDE, jamais « #DIV/0! ».
-Les colonnes « reste/sac » et « reste/boite » du sel sont preparees vides (conversion a venir).
+Colonnes « reste/sac » et « reste/boite » du sel (M, N) : valeurs `declared_remaining_bags` /
+`declared_remaining_units` de `intrants_stats._serialize` (BUG-1117, aucun recalcul) ; vides, avec un
+commentaire, si la conversion (`bag_weight_g`, `units_per_bag`) n'est pas configuree. Le stock du sel
+reste en grammes (titre « STOCK (g) »).
 Toute chaine issue de la base commencant par = + - @ (ou tabulation/retour) est prefixee d'une
 apostrophe (aucune injection de formule).
 """
@@ -37,13 +40,14 @@ from kiese.node_guard import resolve_node_param
 
 from .flour_month_stats import build_month_stats, parse_month
 from .intrants_stats import (HYPOTHESES, SIEGE_CODE, SUPPORTED_TYPES, CanReadIntrantsStats,
-                             _totals, compute_rows, parse_day)
+                             _serialize, _totals, compute_rows, parse_day, salt_conversion)
 from .models import ConsumableType
 
 Q3 = Decimal('0.001')
 Q4 = Decimal('0.0001')
 Q2 = Decimal('0.01')
 FMT3, FMT4, FMT2 = '0.000', '0.0000', '0.00'
+FMT1 = '0.0'
 XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 # (code, nom de feuille dans le fichier du client)
@@ -81,6 +85,12 @@ def safe_text(value):
 def _num(value, quantum):
     """Decimal -> float, uniquement a l'ecriture dans la cellule ; None reste vide."""
     return None if value is None else float(Decimal(value).quantize(quantum))
+
+
+def _opt(conv_vals, key, quantum):
+    """Valeur deja calculee par intrants_stats (chaine Decimal) -> nombre ; absente -> cellule vide."""
+    v = conv_vals.get(key) if conv_vals else None
+    return None if v is None else _num(Decimal(v), quantum)
 
 
 def _put(ws, ref, value, fmt=None, bold=False, fill=None, align=CENTER):
@@ -137,7 +147,11 @@ def _intrant_sheet(wb, title, code, day, nodes):
     ws['A2'].font = BOLD
     ws['A2'].alignment = CENTER
 
-    headers = list(HEADERS) + ([(None, SALT_EXTRA[0]), (None, SALT_EXTRA[1])] if code == 'SALT' else [])
+    conv = salt_conversion(ctype) if code == 'SALT' else None
+    headers = list(HEADERS)
+    if code == 'SALT':                                  # le stock du sel est en unite de base (g)
+        headers[2] = (safe_text(f'STOCK ({unit})'), 'INITIAL')
+    headers += ([(None, SALT_EXTRA[0]), (None, SALT_EXTRA[1])] if code == 'SALT' else [])
     merges = ['D4:E4']                                 # « MOUVEMENT » couvre entree + sortie
     for idx, (top, bottom) in enumerate(headers, start=1):
         col = get_column_letter(idx)
@@ -148,18 +162,22 @@ def _intrant_sheet(wb, title, code, day, nodes):
     for ref in merges:
         ws.merge_cells(ref)
     if code == 'SALT':
-        note = ("Conversion à venir : reste en sacs / en boîtes (1 sac = 20 kg = 204 boîtes), "
-                "colonne préparée, laissée vide.")
-        ws['L5'].comment = Comment(note, 'KIESE')
-        ws['M5'].comment = Comment(note, 'KIESE')
+        if conv is None:
+            note = ("Conversion non configurée : renseigner le poids d'un sac et le nombre de boîtes "
+                    "par sac du sel ; colonnes laissées vides.")
+            ws['M5'].comment = Comment(note, 'KIESE')
+            ws['N5'].comment = Comment(note, 'KIESE')
 
     first = 6
     r = first
     for node, vals in zip(nodes, computed):
-        _write_row(ws, r, day, 'D1' if node.code == SIEGE_CODE else node.code, vals, code)
+        conv_vals = _serialize(vals, conv, True) if code == 'SALT' else None
+        _write_row(ws, r, day, 'D1' if node.code == SIEGE_CODE else node.code, vals, code, conv_vals)
         r += 1
     last = r - 1
-    _write_totals(ws, r, first, last, _totals(computed) if computed else None, code)
+    totals = _totals(computed) if computed else None
+    totals_conv = _serialize(totals, conv, True) if (code == 'SALT' and totals) else None
+    _write_totals(ws, r, first, last, totals, code, totals_conv)
 
     widths = {'A': 12, 'B': 10}
     for idx in range(3, len(headers) + 1):
@@ -170,7 +188,7 @@ def _intrant_sheet(wb, title, code, day, nodes):
     return ws
 
 
-def _write_row(ws, r, day, code_label, vals, code):
+def _write_row(ws, r, day, code_label, vals, code, conv_vals=None):
     _put(ws, f'A{r}', day, fmt='dd/mm/yyyy', align=Alignment(horizontal='right'))
     _put(ws, f'B{r}', safe_text(code_label))
     _put(ws, f'C{r}', _num(vals['initial'], Q3), FMT3)
@@ -185,11 +203,11 @@ def _write_row(ws, r, day, code_label, vals, code):
     _put(ws, f'K{r}', _num(declared, Q3), FMT3)
     _put(ws, f'L{r}', f'=K{r}-H{r}' if declared is not None else None, FMT3)
     if code == 'SALT':
-        _put(ws, f'M{r}', None, FMT3)
-        _put(ws, f'N{r}', None, FMT3)
+        _put(ws, f'M{r}', _opt(conv_vals, 'declared_remaining_bags', Q3), FMT3)
+        _put(ws, f'N{r}', _opt(conv_vals, 'declared_remaining_units', Decimal('0.1')), FMT1)
 
 
-def _write_totals(ws, r, first, last, totals, code):
+def _write_totals(ws, r, first, last, totals, code, conv_vals=None):
     _put(ws, f'A{r}', None, fill=TOTAL_FILL)
     _put(ws, f'B{r}', 'TOTAUX', bold=True, fill=TOTAL_FILL)
     for key in ('initial', 'entry', 'exit', 'consumption', 'production_reference'):
@@ -205,8 +223,9 @@ def _write_totals(ws, r, first, last, totals, code):
          bold=True, fill=TOTAL_FILL)
     _put(ws, f'L{r}', _num(totals['gap'], Q3) if totals else None, FMT3, bold=True, fill=TOTAL_FILL)
     if code == 'SALT':
-        _put(ws, f'M{r}', None, FMT3, fill=TOTAL_FILL)
-        _put(ws, f'N{r}', None, FMT3, fill=TOTAL_FILL)
+        _put(ws, f'M{r}', _opt(conv_vals, 'declared_remaining_bags', Q3), FMT3, bold=True, fill=TOTAL_FILL)
+        _put(ws, f'N{r}', _opt(conv_vals, 'declared_remaining_units', Decimal('0.1')), FMT1,
+             bold=True, fill=TOTAL_FILL)
 
 
 def _month_sheet(wb, body):

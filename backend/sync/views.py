@@ -384,6 +384,20 @@ def _node_settings_block(node):
     }
 
 
+def _consumable_types_block():
+    """BUG-1117 : conversion sac/boîtes des types de consommables (configuration propre au cloud,
+    identique pour tous les postes, rien de sensible). Toujours présent (liste des types, champs null
+    si non configuré) pour qu'un retour à « non configuré » descende aussi ; un poste ancien ignore la clé."""
+    from production.models import ConsumableType
+
+    return [
+        {'code': c.code,
+         'bag_weight_g': str(c.bag_weight_g) if c.bag_weight_g is not None else None,
+         'units_per_bag': c.units_per_bag}
+        for c in ConsumableType.objects.order_by('code')
+    ]
+
+
 # BUG-1111 : mouvements de consommables CRÉÉS AU CLOUD pour la boulangerie du poste (envois de la
 # direction `consumables/dispatch/` = ENTRY node_origin SIEGE, corrections du siège). Sans eux, le stock
 # et le « solde comptable » d'un poste ignoreraient ce que la direction lui a envoyé. Seuls les
@@ -578,6 +592,8 @@ class PullView(APIView):
         # BUG-1030 (Q-026) : paramètres PROPRES à la boulangerie du poste (jamais ceux d'un autre nœud,
         # aucun champ sensible). Additif : un poste ancien ignore le bloc.
         payload['node_settings'] = _node_settings_block(node)
+        # BUG-1117 : conversion sac/boîtes du sel (additif, identique pour tous les postes).
+        payload['consumable_types'] = _consumable_types_block()
         delivered_terminal = {t['id'] for t in transfers if t['transfer_status'] in terminal}
         if state and delivered_terminal & set(open_ids):
             state.transfer_ids = sorted(set(open_ids) - delivered_terminal)

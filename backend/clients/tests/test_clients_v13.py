@@ -41,6 +41,7 @@ TOP_KEYS = {
     'server_time', 'config', 'since_config', 'bread_prices', 'since_breadprice', 'clients', 'since_client_debt',
     'client_after_id', 'has_more', 'closures', 'transfers', 'transfer_lines', 'mirrors', 'node_code',
     'node_settings',  # BUG-1030 : parametres propres au noeud du jeton uniquement
+    'consumable_types',  # BUG-1117 : conversion sac/boites (configuration du cloud)
 }
 
 

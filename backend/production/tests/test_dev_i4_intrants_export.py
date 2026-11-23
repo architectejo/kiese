@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 
 from core.models import Node
 from core.tests.test_permissions_regression_2026_11_19 import Base, cl, mk
-from production.models import ConsumableType, ProductionSession
+from production.models import ConsumableCount, ConsumableType, ProductionSession
 from production.tests.test_intrants_stats_a import TODAY, declare, move, stock
 
 URL = '/api/production/intrants-export/'
@@ -131,13 +131,44 @@ class Export(Base):
                 for c in row:
                     self.assertNotIn('#DIV', str(c.value))
 
-    def test_sel_colonnes_conversion_vides_avec_commentaire(self):
+    def test_sel_colonnes_remplies_depuis_la_conversion(self):
+        """BUG-1117 : 1 sac = 20 kg = 204 boites ; M/N = valeurs de intrants-stats (aucun recalcul)."""
+        ConsumableType.objects.filter(code='SALT').update(bag_weight_g=D('20000'), units_per_bag=204)
+        self.scenario()
+        # reste declare du sel de P1 : 40 kg (en grammes)
+        ConsumableCount.objects.filter(node=self.k1, consumable_type='SALT').update(
+            physical_quantity=D('40000'))
+        _, wb = self.book(self.u['DIRECTION'], date=TODAY.isoformat())
+        ws = wb['SEL']
+        js = cl(self.u['DIRECTION']).get(STATS, {'type': 'SALT', 'date': TODAY.isoformat()}).data
+        self.assertEqual(ws['M5'].value, 'RESTE/SAC')
+        self.assertEqual(ws['N5'].value, 'RESTE/BOITE')
+        self.assertIsNone(ws['M5'].comment)
+        self.assertEqual(ws['C4'].value, 'STOCK (g)')
+        rows = self.rows_of(ws)
+        lines = [(x['code'], x) for x in js['rows']] + [('TOTAUX', js['totals'])]
+        for ident, x in lines:
+            r = rows[ident]
+            for col, key in (('M', 'declared_remaining_bags'), ('N', 'declared_remaining_units')):
+                if x[key] is None:
+                    self.assertIsNone(ws[f'{col}{r}'].value, (ident, key))
+                else:
+                    self.assertAlmostEqual(ws[f'{col}{r}'].value, float(x[key]), places=6, msg=(ident, key))
+        p1 = rows['P1']
+        self.assertGreater(ws[f'M{p1}'].value, 0)
+        self.assertAlmostEqual(ws[f'M{p1}'].value, 2.0)          # 40 000 g / 20 000 g
+        self.assertAlmostEqual(ws[f'N{p1}'].value, 408.0)        # 2 sacs x 204 boites
+        # P2 : aucun reste declare -> cellules vides
+        self.assertIsNone(ws[f'M{rows["P2"]}'].value)
+
+    def test_sel_conversion_non_configuree_cellules_vides_avec_commentaire(self):
+        ConsumableType.objects.filter(code='SALT').update(bag_weight_g=None, units_per_bag=None)
         self.scenario()
         _, wb = self.book(self.u['DIRECTION'], date=TODAY.isoformat())
         ws = wb['SEL']
         self.assertEqual(ws['M5'].value, 'RESTE/SAC')
         self.assertEqual(ws['N5'].value, 'RESTE/BOITE')
-        self.assertIn('Conversion à venir', ws['M5'].comment.text)
+        self.assertIn('Conversion non configurée', ws['M5'].comment.text)
         for r in self.rows_of(ws).values():
             self.assertIsNone(ws[f'M{r}'].value)
             self.assertIsNone(ws[f'N{r}'].value)
