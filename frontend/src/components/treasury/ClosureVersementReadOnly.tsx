@@ -60,7 +60,7 @@ export const ClosureVersementReadOnly: React.FC<Props> = ({ nodeFilter, nodeLabe
   const gapColor = (v: string) => (parseFloat(v || '0') === 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))');
 
   return (
-    <div className="glass-card" style={{ padding: '16px', ...style }}>
+    <div className="glass-card" style={{ padding: '16px', minWidth: 0, ...style }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '4px' }}>
         <h2 style={{ fontSize: '0.9rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
           <FiDollarSign style={{ color: 'hsl(var(--accent-color))' }} />
