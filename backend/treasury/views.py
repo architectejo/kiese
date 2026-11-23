@@ -157,13 +157,26 @@ def _unresolved_incoming_transfer_gap(node) -> str:
         .exclude(quantity_sent=F('quantity_received'))
         .select_related('transfer', 'bread_price')
     )
-    if not gap_lines.exists():
+    # BUG-1035 : un litige (DISPUTED) SANS ligne se juge sur l'en-tête (comme
+    # la règle du push, BUG-1021) : reçu absent ou différent de l'envoyé.
+    header_gaps = list(
+        BreadTransfer.objects
+        .filter(to_node=node, transfer_status=BreadTransfer.TransferStatus.DISPUTED, lines__isnull=True)
+        .filter(Q(quantity_received__isnull=True) | ~Q(quantity_received=F('quantity_sent')))
+        .select_related('from_node', 'to_node')
+        .distinct()
+    )
+    if not gap_lines.exists() and not header_gaps:
         return ''
-    details = '; '.join(
+    header_details = [
+        f"{t.from_node.code}→{t.to_node.code}: envoyé {t.quantity_sent}, reçu {t.quantity_received}"
+        for t in header_gaps
+    ]
+    details = '; '.join(header_details + [
         f"{line.transfer.from_node.code}→{line.transfer.to_node.code} "
         f"{line.bread_price.label}: envoyé {line.quantity_sent}, reçu {line.quantity_received}"
         for line in gap_lines
-    )
+    ])
     return details
 
 

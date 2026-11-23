@@ -7,7 +7,6 @@ du code applicatif.
 import re
 from datetime import date as ddate
 from decimal import Decimal
-from unittest import expectedFailure
 
 from core.models import SystemNotification
 from production.models import (BreadTransfer, BreadTransferLine, ConsumableInventory, ConsumableMovement,
@@ -279,7 +278,6 @@ class DecimalMatrix(A20Base):
 
 
 class ZerosFinaux(A20Base):
-    @expectedFailure
     def test_1031_zeros_finaux_meme_verdict_rest_et_push(self):
         """BUG-1031 : '0.3330' (mouvement, 3 decimales) et '1.500' (sacs, 2 decimales) : acceptes au push
         (parseur partage, valeur exacte), refuses en REST (DecimalField DRF compte les zeros finaux)."""
@@ -320,7 +318,6 @@ class UnitPriceQuestion(A20Base):
             print('   ', row)
         self.assertTrue(all(r[1] < 500 for r in rows))
 
-    @expectedFailure
     def test_1032_unit_price_negatif_meme_verdict_rest_et_push(self):
         """BUG-1032 : prix unitaire d'entree negatif '-5' : accepte en REST (201), refuse au push."""
         r = cl(self.g1).post(M, {'stock': self.st.pk, 'movement_type': 'ENTRY', 'quantity': '1',
@@ -330,7 +327,6 @@ class UnitPriceQuestion(A20Base):
             'quantity': '1', 'unit': 'g', 'unit_price': '-5'})[0]
         self.assertEqual(r.status_code in (200, 201), p == 'ACCEPTED', (r.status_code, p))
 
-    @expectedFailure
     def test_1033_unit_price_souligne_et_exposant_refuses_comme_la_quantite(self):
         """BUG-1033 (voir registre) : '1_0' / '1e1' acceptes comme prix unitaire de mouvement alors que la meme
         forme est refusee comme quantite."""
@@ -393,7 +389,6 @@ class EntryNegatif(A20Base):
             'id': uid(), 'node': self.k1.code, 'consumable_type': 'SALT', 'movement_type': 'ENTRY',
             'quantity': q, 'unit': 'g'})[0] == 'ACCEPTED'
 
-    @expectedFailure
     def test_1034_entree_negative_sous_zero_signale_comme_une_sortie(self):
         """BUG-1034 (voir registre) : ENTRY -5 sur un stock de 3 (-> -2) ne cree aucune alerte « Stock negatif »."""
         cl(self.g1).post(M, {'stock': self.st.pk, 'movement_type': 'ENTRY', 'quantity': '3', 'unit_price': '1'},
@@ -444,7 +439,6 @@ class LitigeSansLigne(A20Base):
         BreadTransferLine.objects.filter(transfer=t).update(quantity_received=100)
         self.assertEqual(self._lift(self.a2, t), 'CONFIRMED')
 
-    @expectedFailure
     def test_1035_litige_d_entete_sans_ligne_bloque_la_cloture_de_la_receptrice(self):
         """BUG-1035 : litige sans ligne (push d'un poste a entetes seuls : envoi direct RESPONDED puis
         DISPUTED avec quantity_received != quantity_sent) : la cloture n'est PAS bloquee alors que le push

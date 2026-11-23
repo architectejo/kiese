@@ -1330,7 +1330,8 @@ def _push_consumable_movement(node, record):
         id=record_id, node=bakery, stock=stock, session=session,
         movement_type=record['movement_type'],
         quantity=_prod_decimal(record['quantity'], 'quantity', 3, max_digits=10),
-        unit_price=_to_decimal(record.get('unit_price')),
+        unit_price=(_prod_decimal(record['unit_price'], 'unit_price', 4, minimum=Decimal('0'), max_digits=16)
+                    if record.get('unit_price') not in (None, '') else _to_decimal(None)),
         supplier=record.get('supplier', ''),
         description=record.get('description', ''),
         node_origin=record.get('node_origin', bakery_code),
@@ -2662,7 +2663,9 @@ def _check_consumable_movement(node, record):
             return str(exc)
     if record.get('unit_price') not in (None, ''):
         try:
-            _sync_decimal(record['unit_price'], 'unit_price', 4, Decimal('0'), max_digits=16)
+            # BUG-1033 : parseur canonique (comme la quantite) ; BUG-1032 : prix negatif refuse
+            # des deux cotes (CUMP negatif, BUG-803).
+            _prod_decimal(record['unit_price'], 'unit_price', 4, minimum=Decimal('0'), max_digits=16)
         except ValueError as exc:
             return str(exc)
     return None

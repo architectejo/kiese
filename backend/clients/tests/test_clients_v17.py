@@ -63,7 +63,6 @@ class Base17(TestCase):
 
 
 class CreationDefauts(Base17):
-    @expectedFailure
     def test_facturier_sans_champ_node_ni_taux_prend_le_taux_de_sa_boulangerie(self):
         """BUG-1027 : ClientViewSet.perform_create force commission_rate = 0,25 (defaut du champ) pour tout role
         hors ADMIN/DIRECTION/COMPTABLE/GERANT : le defaut par boulangerie n'est jamais applique aux clients
@@ -72,7 +71,6 @@ class CreationDefauts(Base17):
         c = self.create(self.f1, first_name='Fictif', last_name='Un')
         self.assertEqual((c.node, c.commission_rate), (self.k1, D('0.30')))
 
-    @expectedFailure
     def test_livreur_cree_un_client_avec_le_taux_de_sa_boulangerie(self):
         """BUG-1027 (meme cause, livreur)."""
         self.rate(self.k1, D('0.20'))
@@ -273,7 +271,6 @@ class PushSync(Base17):
         rid, _ = self.push(self.k3)
         self.assertEqual(self.pushed(rid).commission_rate, D('0.28'))
 
-    @expectedFailure
     def test_le_taux_par_boulangerie_arrive_aux_postes_locaux_par_le_pull(self):
         """BUG-1030 : `/api/sync/pull/` ne diffuse que la config globale (default_commission_rate global) ;
         aucun parametre de boulangerie (taux, carte, cotisation, valeur du sac) n'atteint les postes locaux."""

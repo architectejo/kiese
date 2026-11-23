@@ -151,7 +151,9 @@ class ClientViewSet(viewsets.ModelViewSet):
             # gérant et supérieurs (CLAUDE.md §5.1) : valeurs par défaut sinon.
             from decimal import Decimal
             extra['credit_limit'] = Decimal(str(Client._meta.get_field('credit_limit').get_default()))
-            extra['commission_rate'] = Decimal(str(Client._meta.get_field('commission_rate').get_default()))
+            # BUG-1027 : taux par défaut de la boulangerie du client (Q-026), pas le défaut du champ.
+            from core.models import effective_commission_rate
+            extra['commission_rate'] = effective_commission_rate(node)
         client = serializer.save(
             node=node,
             node_origin=node.code,

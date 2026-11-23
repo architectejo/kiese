@@ -38,7 +38,7 @@ class ClientCommissionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
             'total_breads', 'order_value', 'commission_rate',
             'commission_gross',
             'deduction_debt', 'deduction_social', 'deduction_prints', 'deduction_other', 'deduction_manual',
-            'cotisation_sociale_fc', 'carte_fc',
+            'cotisation_sociale_fc', 'carte_fc', 'card_applied',
             'deduction_carte', 'deduction_remise', 'total_deductions',
             'carried_debt_in',
             'net_ordi', 'net_carte',
@@ -51,7 +51,7 @@ class ClientCommissionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
         read_only_fields = [
             'id', 'commission_gross', 'annual_bonus',
             'deduction_carte', 'deduction_remise', 'total_deductions',
-            'carried_debt_in', 'deduction_manual',
+            'carried_debt_in', 'deduction_manual', 'card_applied',
             'net_ordi', 'net_carte', 'net_payable',
             # BUG-703 : seul set_manuel (ADMIN/DIRECTION, journalisé) écrit l'ajustement manuel.
             'manuel_adjustment', 'manuel_notes',

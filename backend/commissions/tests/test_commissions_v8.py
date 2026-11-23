@@ -302,7 +302,6 @@ class NetNegatifEtListing(Base8):
         self.assertEqual(D(s1['total_net']) + D(s2['total_net']),
                          6 * D('12500') - D('2000') - 3 * D('1500') - D('3000'))
 
-    @expectedFailure
     def test_card_applied_expose_en_lecture_seule_comme_annonce_par_le_rapport_b2(self):
         """BUG-1028 : le rapport B-2 annonce `card_applied` en lecture seule dans l'API ; absent du serializer."""
         self.inv(self.ns[0], self.c, 100)

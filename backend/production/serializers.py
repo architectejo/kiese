@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import serializers
 from core.models import Node
 from core.numeric import NumericError, parse_ascii_decimal, parse_ascii_int
@@ -40,6 +42,36 @@ def _refuse_non_ascii_fields(data, names, places=None):
                     parse_ascii_decimal(raw, places=places + 12, label=name)
             except NumericError:
                 raise serializers.ValidationError({'detail': f"« {name} » invalide (nombre en chiffres 0-9 attendu)."})
+    return data
+
+
+def _canonical_decimal_data(data, fields):
+    """
+    BUG-1031 : meme verdict que le push pour les zeros finaux. Une chaine decimale
+    dont les chiffres au-dela de `places` sont tous des zeros (`0.3330`, `1.500`)
+    est reecrite a `places` decimales avant le DecimalField DRF (qui, lui, compte
+    les zeros finaux). Les valeurs a decimale non nulle excedentaire restent
+    inchangees (refusees ensuite par DRF, BUG-907). `fields` : {nom: places}.
+    Renvoie une copie de `data` si elle a ete modifiee, sinon `data`.
+    """
+    if not hasattr(data, 'get'):
+        return data
+    out = data
+    for name, places in fields.items():
+        raw = data.get(name) if name in data else None
+        if not isinstance(raw, str):
+            continue
+        try:
+            number = parse_ascii_decimal(raw, places=places + 12, label=name)
+            quantized = number.quantize(Decimal(1).scaleb(-places))
+        except (NumericError, InvalidOperation):
+            continue
+        if quantized != number:
+            continue
+        if out is data:
+            out = data.copy() if hasattr(data, 'copy') else dict(data)
+        out[name] = format(quantized, 'f')
+    return out
 
 
 class ProductionSessionLineSerializer(serializers.ModelSerializer):
@@ -160,6 +192,7 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
                     msg = "« flour_sacks_used » : 2 décimales maximum."
             if msg:
                 raise serializers.ValidationError({'detail': msg})
+            data = _canonical_decimal_data(data, {'flour_sacks_used': 2})  # BUG-1031
         return super().to_internal_value(data)
 
     def validate(self, attrs):
@@ -344,9 +377,17 @@ class ConsumableMovementSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         _refuse_non_ascii_fields(data, ('quantity',), places=3)
-        raw_price = data.get('unit_price') if hasattr(data, 'get') else None
-        if isinstance(raw_price, str) and not raw_price.isascii():  # BUG-686 (prix : controle historique)
-            raise serializers.ValidationError({'detail': "« unit_price » invalide (chiffres 0-9 uniquement)."})
+        # BUG-1033 : prix unitaire via le parseur canonique (4 decimales), comme la quantite
+        # et comme le push (`1_0`, `1e1`, chiffres non ASCII refuses).
+        if hasattr(data, 'get') and 'unit_price' in data and data.get('unit_price') not in (None, ''):
+            try:
+                price = parse_ascii_decimal(data.get('unit_price'), places=4 + 12, label='unit_price')
+            except NumericError:
+                raise serializers.ValidationError({'detail': "« unit_price » invalide (chiffres 0-9 uniquement)."})
+            # BUG-1032 : un prix d'achat negatif rendrait le CUMP negatif (BUG-803) : refus REST et push.
+            if price < 0:
+                raise serializers.ValidationError({'detail': "Le prix unitaire ne peut pas être négatif."})
+        data = _canonical_decimal_data(data, {'quantity': 3, 'unit_price': 4})  # BUG-1031
         return super().to_internal_value(data)
 
     def validate_stock(self, value):
@@ -378,6 +419,7 @@ class ConsumableCountSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         _refuse_non_ascii_fields(data, ('physical_quantity',), places=3)
+        data = _canonical_decimal_data(data, {'physical_quantity': 3})  # BUG-1031
         return super().to_internal_value(data)
 
     def validate_physical_quantity(self, value):

@@ -765,6 +765,20 @@ class ConsumableMovement(SyncableModel):
                 stock.quantity = new_qty
                 stock.average_unit_cost = new_avg
                 stock.save(update_fields=['quantity', 'average_unit_cost'])
+                # BUG-1034 : une entrée NÉGATIVE (correction, BUG-1020) qui laisse le stock sous
+                # zéro est signalée comme une sortie (même titre, même règle).
+                if self.quantity < 0 and new_qty < 0:
+                    from core.utils import create_notification
+                    create_notification(
+                        title=f"Stock négatif — {self.stock.consumable_type} {self.node.code}",
+                        message=(
+                            f"Entrée négative de {self.quantity} {self.stock.consumable_type} à "
+                            f"{self.node.code} alors que {old_qty} seulement "
+                            f"étai(en)t disponible(s) : stock désormais à {new_qty} "
+                            f"(BUG-1034, stock négatif autorisé sur demande client)."
+                        ),
+                        severity='WARNING', node_origin=self.node.code,
+                    )
             return
 
         # BUG-222 : modification d'un mouvement existant. Auparavant la quantité
