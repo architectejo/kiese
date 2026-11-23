@@ -307,3 +307,24 @@ class NodeOpenTransfers(models.Model):
     class Meta:
         verbose_name = _("Transferts ouverts d'un poste")
         verbose_name_plural = _("Transferts ouverts des postes")
+
+
+class TransferMirror(models.Model):
+    """
+    BUG-989/990 : marqueur « miroir de stock appliqué » par (nœud, transfert), rapporté par
+    le poste dans le champ `mirrors` de son push (état de SES lignes locales : quantité
+    envoyée déduite pour l'émettrice, quantité reçue créditée pour la réceptrice).
+    `applied` = {"<bread_price_id>": [envoyé_déduit, reçu_crédité]}. Le cloud ne tient
+    aucun stock de pains pour les postes : ce marqueur sert uniquement à dire à un poste qui
+    découvre un transfert (jamais vu, ou poste réinstallé qui rejoue l'historique) ce qu'il a
+    DÉJÀ appliqué ; la différence avec l'état du cloud est ce qu'il lui reste à appliquer.
+    """
+    node = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='transfer_mirrors')
+    transfer_id = models.UUIDField(db_index=True)
+    applied = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Miroir de stock d'un transfert")
+        verbose_name_plural = _("Miroirs de stock des transferts")
+        unique_together = [['node', 'transfer_id']]

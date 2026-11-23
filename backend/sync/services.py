@@ -256,6 +256,18 @@ def _batch_terminal_parents():
     return _batch_ctx.parents
 
 
+def _batch_transfer_sets():
+    """BUG-991/992 : ensembles propres au lot en cours : `sent_ok` (transferts dont l'émettrice
+    pousse sa réponse RESPONDED : sa quantité envoyée fait foi) et `conflict` (transferts dont
+    l'état poussé a perdu face au cloud : leurs lignes sont ignorées)."""
+    if not hasattr(_batch_ctx, 'sent_ok'):
+        _batch_ctx.sent_ok, _batch_ctx.conflict = set(), set()
+    return _batch_ctx.sent_ok, _batch_ctx.conflict
+
+
+TRANSFER_STATE_CONFLICT = 'TRANSFER_STATE_CONFLICT'
+
+
 def _record_result(record_id, accepted, reason=None):
     result = {'id': str(record_id)[:64], 'status': ACCEPTED if accepted else REJECTED}
     if reason:
@@ -1656,6 +1668,28 @@ def _push_bread_transfer(node, record):
         }
         new_status = record.get('transfer_status')
         changed_fields = []
+        TSc = BreadTransfer.TransferStatus
+        sent_ok, conflict_set = _batch_transfer_sets()
+        if (new_status == TSc.RESPONDED and node.pk == existing.from_node_id
+                and existing.transfer_status in (TSc.PENDING, TSc.RESPONDED)
+                and existing.flow == BreadTransfer.Flow.REQUEST):
+            # BUG-991 : la réponse de l'émettrice peut ajuster la quantité envoyée (lignes du lot).
+            sent_ok.add(str(existing.pk))
+        # BUG-992 : conflit de précédence « premier terminal gagne ». L'état déjà posé au cloud
+        # prévaut : le refus (CANCELLED) de l'émettrice sur une demande déjà répondue, ou une
+        # réponse sur une demande déjà annulée, est ACQUITTÉ (le poste ne reste pas non synchronisé
+        # à vie), tracé dans SyncConflictLog, et le poste se réaligne au pull (stock restitué/déduit).
+        if (node.pk == existing.from_node_id and new_status and new_status != existing.transfer_status
+                and ((new_status == TSc.CANCELLED and existing.transfer_status != TSc.PENDING)
+                     or (existing.transfer_status == TSc.CANCELLED
+                         and new_status in (TSc.RESPONDED, TSc.DISPUTED, TSc.CONFIRMED)))):
+            conflict_set.add(str(existing.pk))
+            sent_ok.discard(str(existing.pk))
+            _log_conflict(
+                node, 'production.BreadTransfer', existing.pk, TRANSFER_STATE_CONFLICT,
+                f"Le nœud {node.code} a poussé « {new_status} » ; le cloud était déjà « "
+                f"{existing.transfer_status} » : l'état du cloud prévaut, le poste se réaligne.")
+            return _record_result(record_id, True, "conflit : l'état du cloud prévaut (réalignement au prochain pull)")
         if new_status and new_status != existing.transfer_status:
             # BUG-874 : seule la réceptrice valide la réception (CLAUDE.md 5.4).
             # BUG-966 : exception : la sortie de litige (DISPUTED -> CONFIRMED) peut
@@ -1797,6 +1831,9 @@ def _push_bread_transfer_line(node, record):
     locked = (transfer.transfer_status in _TRANSFER_LOCKED
               and str(transfer.pk) not in _batch_terminal_parents())
 
+    sent_ok, conflict_set = _batch_transfer_sets()
+    if str(transfer.pk) in conflict_set:
+        return _record_result(record_id, True)  # BUG-992 : l'état du cloud prévaut, ligne sans effet
     existing = BreadTransferLine.objects.filter(transfer=transfer, bread_price=bread_price).first()
     if existing is not None:
         # BUG-788 : la quantité reçue n'est modifiable que par la boulangerie réceptrice.
@@ -1810,6 +1847,12 @@ def _push_bread_transfer_line(node, record):
             # l'envoyé sur la quantité reçue déclarée par la réceptrice.
             new_sent = _sync_int(sent, 'quantity_sent')
             if in_dispute and existing.quantity_received is not None and new_sent == existing.quantity_received:
+                existing.quantity_sent = new_sent
+                update_fields.append('quantity_sent')
+            elif (str(transfer.pk) in sent_ok and existing.quantity_received is None
+                  and transfer.transfer_status == 'RESPONDED' and new_sent >= 0):
+                # BUG-991 : réponse de l'émettrice à une demande avec quantité ajustée : la
+                # quantité envoyée finale est celle de l'émettrice (rien n'a encore été reçu).
                 existing.quantity_sent = new_sent
                 update_fields.append('quantity_sent')
             else:
@@ -2908,6 +2951,7 @@ def process_push_batch(node, records_by_model):
 
     results = {}
     _batch_ctx.parents = set()
+    _batch_ctx.sent_ok, _batch_ctx.conflict = set(), set()
     for model_label in PUSH_MODEL_ORDER:
         seen_ids = set()
         records = records_by_model.get(model_label) or []

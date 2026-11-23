@@ -25,7 +25,7 @@ from core.permissions import IsHeadquarters
 from .authentication import NodeTokenAuthentication
 from .exceptions import TransientSyncError
 from .permissions import IsValidNodeToken
-from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog
+from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog, TransferMirror
 from .serializers import SyncConflictLogSerializer
 from .services import process_push_batch
 
@@ -77,6 +77,55 @@ def _store_open_transfers(node, raw):
             except (TypeError, ValueError):
                 continue
     NodeOpenTransfers.objects.update_or_create(node=node, defaults={'transfer_ids': sorted(set(ids))})
+
+
+_MAX_MIRRORS = 500
+
+
+def _clean_mirror(raw):
+    """{bread_price_id: [envoyé_déduit, reçu_crédité]} borné ; None si la forme est invalide."""
+    if not isinstance(raw, dict) or len(raw) > 200:
+        return None
+    out = {}
+    for bp, pair in raw.items():
+        if (not isinstance(bp, str) or not bp.isascii() or not bp.isdigit() or len(bp) > 12
+                or not isinstance(pair, (list, tuple)) or len(pair) != 2):
+            return None
+        vals = []
+        for v in pair:
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > 2_000_000_000:
+                return None
+            vals.append(v)
+        out[str(int(bp))] = vals
+    return out
+
+
+def _store_mirrors(node, raw):
+    """BUG-989/990 : mémorise le miroir de stock appliqué par le poste (état de ses lignes
+    locales). Champ absent / invalide : rien n'est modifié. Un transfert étranger au nœud ou
+    inconnu est ignoré. Appliqué seulement pour un lot NEUF (jamais sur un rejeu : un ancien
+    lot ne doit pas ramener le marqueur en arrière)."""
+    from django.db.models import Q
+
+    from production.models import BreadTransfer
+    if not isinstance(raw, dict):
+        return
+    cleaned = {}
+    for key, value in list(raw.items())[:_MAX_MIRRORS]:
+        try:
+            tid = uuid.UUID(key) if isinstance(key, str) and len(key) <= 40 else None
+        except (TypeError, ValueError):
+            tid = None
+        mirror = _clean_mirror(value)
+        if tid is not None and mirror is not None:
+            cleaned[tid] = mirror
+    if not cleaned:
+        return
+    mine = set(BreadTransfer.objects.filter(pk__in=list(cleaned)).filter(
+        Q(from_node=node) | Q(to_node=node)).values_list('pk', flat=True))
+    for tid, mirror in cleaned.items():
+        if tid in mine:
+            TransferMirror.objects.update_or_create(node=node, transfer_id=tid, defaults={'applied': mirror})
 
 
 class PushView(APIView):
@@ -165,6 +214,7 @@ class PushView(APIView):
             return Response({'batch_id': str(batch_id), 'results': existing_batch.result, 'replayed': True})
 
         results = process_push_batch(node, records_by_model)
+        _store_mirrors(node, data.get('mirrors'))
 
         any_rejected = any(
             r.get('status') == 'REJECTED'
@@ -306,6 +356,12 @@ class PullView(APIView):
         ]
         payload['transfers'] = transfers
         payload['transfer_lines'] = transfer_lines
+        # BUG-989/990 : marqueur « miroir déjà appliqué par CE poste » pour les transferts
+        # descendus ({} = cloud récent, aucun marqueur ; clé absente = cloud ancien).
+        payload['mirrors'] = {
+            str(m.transfer_id): m.applied
+            for m in TransferMirror.objects.filter(node=node, transfer_id__in=[t.id for t in transfers_qs])
+        }
         # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
         # émettrice ou réceptrice (effets de stock miroir, alertes).
         payload['node_code'] = node.code
