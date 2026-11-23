@@ -206,7 +206,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         config = Config.get_instance()
         old_cat = client.category
         client.refresh_category(config)
-        client.save(update_fields=['category'])
+        client.save(update_fields=['category', 'updated_at'])  # BUG-1004 : curseur du pull
 
         if client.category == Client.Category.RISK and old_cat != Client.Category.RISK:
             create_notification(
@@ -527,7 +527,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 client.node = new_node
                 client.code = _generate_client_code(new_node.code)
                 client.node_origin = new_node.code
-                client.save(update_fields=['node', 'code', 'node_origin'])
+                client.save(update_fields=['node', 'code', 'node_origin', 'updated_at'])  # BUG-1004 : curseur du pull
                 moved += 1
         log_activity(
             request.user, "Déplacement Clients",

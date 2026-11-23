@@ -846,8 +846,12 @@ def _build_pulled_client(row, nodes):
     origin = row.get('node_origin')
     if not isinstance(origin, str) or not origin or len(origin) > 10:
         origin = node.code
+    active = row.get('is_active', True)  # BUG-999 : absent (cloud ancien) = actif
+    if not isinstance(active, bool):
+        active = True
     return Client(
         id=cid, code=code, node=node, node_origin=origin, is_synced=True, category=row['category'],
+        is_active=active,
         current_debt=debt, credit_limit=limit, commission_rate=rate, cotisation_sociale=cotisation,
         client_type=ctype, total_breads_received=total, **texts,
     )
@@ -911,6 +915,8 @@ def _create_unknown_pulled_clients(rows, local_code=None):
         obj = _build_pulled_client(candidates[cid], nodes)
         if obj is None:
             log.warning("Pull : client %s inconnu ignoré (ligne incomplète, invalide ou nœud inconnu)", cid)
+        elif not obj.is_active and local_code and obj.node.code != local_code:
+            continue  # BUG-999/998 : un client inactif d'une autre boulangerie n'est jamais créé
         else:
             built.append(obj)
     seen_codes, taken = set(), set()
@@ -979,14 +985,14 @@ def apply_pull_response(payload):
             continue
         valid.append((client_id, category, debt, client_data))
     for i in range(0, len(valid), _PULL_CREATE_BATCH):
-        _apply_pulled_client_batch(valid[i:i + _PULL_CREATE_BATCH])
+        _apply_pulled_client_batch(valid[i:i + _PULL_CREATE_BATCH], _local_node_code(payload))
     # `config`/`bread_prices` : appliqués par le futur backend desktop sur
     # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
     # appliquer ici quand la commande est testée contre la même base que
     # le Cloud (ce serait un no-op de toute façon).
 
 
-def _apply_pulled_client_batch(batch):
+def _apply_pulled_client_batch(batch, local_code=None):
     """Applique un lot de clients connus (dette, plafond, identité, catégorie) du cloud.
     BUG-780 : client ignoré si un mouvement de dette local n'est pas poussé ; BUG-952 : une édition
     locale non poussée d'identité/plafond n'est jamais écrasée (la dette, elle, est appliquée)."""
@@ -997,7 +1003,16 @@ def _apply_pulled_client_batch(batch):
     from clients.models import Client
     from sync.models import DebtMovement
 
+    from core.models import Node
+
     ids = [b[0] for b in batch]
+    nodes = {n.code: n for n in Node.objects.all()}
+    # BUG-1004 : codes demandés par le cloud, pour détecter un code déjà pris par un AUTRE client local.
+    wanted = [str(b[3].get('code')) for b in batch if isinstance(b[3].get('code'), str)]
+    holders = {}
+    for i in range(0, len(wanted), _PULL_CREATE_BATCH):
+        holders.update(Client.objects.filter(code__in=wanted[i:i + _PULL_CREATE_BATCH]).values_list('code', 'pk'))
+    batch_codes = set()
     config = None  # lu paresseusement par `refresh_category` (comme avant : pas de création de Config inutile)
     notify = []
     with transaction.atomic():
@@ -1033,6 +1048,26 @@ def _apply_pulled_client_batch(batch):
                 if isinstance(val, str) and (max_len is None or len(val) <= max_len)                         and (name not in ('first_name', 'last_name') or val.strip()):
                     setattr(locked, name, val)
                     fields.add(name)
+            if not local_edit_pending:
+                # BUG-999 : état actif/inactif du cloud (jamais sur une édition locale non poussée, BUG-952).
+                active = client_data.get('is_active')
+                if isinstance(active, bool):
+                    locked.is_active = active
+                    fields.add('is_active')
+                # BUG-1004 : client déplacé de boulangerie au cloud (node + code régénéré).
+                new_code, new_node = client_data.get('code'), nodes.get(client_data.get('node'))
+                if (isinstance(new_code, str) and new_code.strip() and len(new_code) <= 20 and new_node is not None
+                        and (new_code != locked.code or new_node.pk != locked.node_id)):
+                    holder = holders.get(new_code)
+                    if (holder is not None and holder != locked.pk) or (new_code in batch_codes and new_code != locked.code):
+                        _report_client_code_conflict(
+                            Client(id=locked.pk, code=new_code, node=new_node), local_code)
+                    else:
+                        batch_codes.add(new_code)
+                        locked.code, locked.node = new_code, new_node
+                        origin = client_data.get('node_origin')
+                        locked.node_origin = origin if isinstance(origin, str) and origin and len(origin) <= 10 else new_node.code
+                        fields |= {'code', 'node', 'node_origin'}
             locked.category = category
             if local_edit_pending:
                 locked.refresh_category(config)

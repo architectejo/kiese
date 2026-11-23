@@ -14,7 +14,6 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal as D
 from io import StringIO
-from unittest import expectedFailure
 from unittest.mock import MagicMock, patch
 
 from django.core.management import call_command
@@ -36,7 +35,7 @@ CLOUD = 'http://cloud.test'
 ROW_KEYS = {
     'id', 'code', 'current_debt', 'credit_limit', 'category', 'first_name', 'last_name', 'phone', 'address',
     'updated_at', 'node', 'node_origin', 'commission_rate', 'cotisation_sociale', 'client_type', 'notes',
-    'total_breads_received',
+    'total_breads_received', 'is_active',
 }
 TOP_KEYS = {
     'server_time', 'config', 'since_config', 'bread_prices', 'since_breadprice', 'clients', 'since_client_debt',
@@ -374,7 +373,6 @@ class Confidentialite(PageBase):
 class StatutsEtDeplacement(PageBase):
     PAGE = 5000
 
-    @expectedFailure  # BUG-999
     def test_BUG_999_client_inactif_d_un_autre_noeud_disparait_au_poste(self):
         # Le poste K1 a deja la copie ACTIVE du client K3 ; K3 le desactive. Le pull incrementiel doit le
         # signaler au poste (ligne `is_active: false`) : sinon le facturier K1 hors ligne continue de facturer.
@@ -389,7 +387,6 @@ class StatutsEtDeplacement(PageBase):
         self.assertIn(str(c3.id), rows, "desactivation jamais redescendue : le poste garde le client actif")
         self.assertIs(rows[str(c3.id)].get('is_active'), False)
 
-    @expectedFailure  # BUG-999
     def test_BUG_999_client_inactif_du_poste_recree_actif_sur_poste_neuf(self):
         mine = self.mk(self.k1, 'Mien', 'Inactif')
         Client.objects.filter(pk=mine.pk).update(is_active=False)
@@ -408,7 +405,6 @@ class StatutsEtDeplacement(PageBase):
         second = self.get(self.k1, since_client_debt=first['since_client_debt'])
         self.assertNotIn(str(c.id), {x['id'] for x in second['clients']})
 
-    @expectedFailure  # BUG-1004
     def test_BUG_1004_client_deplace_de_boulangerie_redescend_avec_nouveau_noeud_et_code(self):
         c = self.mk(self.k3, 'Va', 'Demenager')
         old_code = c.code
@@ -425,7 +421,6 @@ class StatutsEtDeplacement(PageBase):
         self.assertIn(str(c.id), rows, "client deplace : updated_at inchange, jamais redescendu aux autres postes")
         self.assertEqual((rows[str(c.id)]['node'], rows[str(c.id)]['code']), ('K1', c.code))
 
-    @expectedFailure  # BUG-1004
     def test_BUG_1004_poste_existant_applique_le_nouveau_noeud_et_le_nouveau_code(self):
         c = self.mk(self.k3, 'Va', 'Demenager2')
         row = cloud_rows('K1', 1)[0]
@@ -435,12 +430,12 @@ class StatutsEtDeplacement(PageBase):
         c.refresh_from_db()
         self.assertEqual((c.node.code, c.code), ('K1', 'K1-0099999'))
 
-    def test_deplacement_bulk_move_ne_fait_pas_avancer_updated_at_constat(self):
+    def test_deplacement_bulk_move_fait_avancer_updated_at(self):  # BUG-1004 (ex-constat)
         c = self.mk(self.k3, 'Constat', 'Move')
         Client.objects.filter(pk=c.pk).update(updated_at=timezone.now() - timedelta(hours=2))
         before = Client.objects.get(pk=c.pk).updated_at
         api(self.direction).post('/api/clients/clients/bulk_move/', {'ids': [str(c.id)], 'node': self.k1.pk}, format='json')
-        self.assertEqual(Client.objects.get(pk=c.pk).updated_at, before)
+        self.assertGreater(Client.objects.get(pk=c.pk).updated_at, before)
 
 
 # ---------------------------------------------------------------------------

@@ -402,6 +402,12 @@ class PullView(APIView):
         scope = Q(node=node) | Q(pk__in=Invoice.objects.filter(node=node).values('client_id'))
         if node.code != 'SIEGE':
             scope |= Q(is_active=True)
+        # BUG-999 : au pull incrémentiel (pas au pull complet ni aux pages suivantes d'une marche
+        # initiale), un client d'un autre nœud devenu INACTIF depuis le curseur redescend pour être
+        # désactivé localement ; le curseur `updated_at` filtre ci-dessous. Jamais au pull initial.
+        if (node.code != 'SIEGE' and since_client_debt is not None
+                and not request.query_params.get('client_after_id')):
+            scope |= Q(is_active=False)
         client_qs = Client.objects.filter(scope).select_related('node')
         # Curseur composite (updated_at, id) : pagination stable même à égalité d'horodatage.
         after_id = _parse_after_id(request.query_params.get('client_after_id'))
@@ -427,6 +433,7 @@ class PullView(APIView):
                 'cotisation_sociale': str(c.cotisation_sociale) if c.cotisation_sociale is not None else None,
                 'client_type': c.client_type, 'notes': c.notes,
                 'total_breads_received': c.total_breads_received,
+                'is_active': c.is_active,  # BUG-999 (additif)
             }
             for c in client_rows
         ]
