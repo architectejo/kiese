@@ -677,3 +677,15 @@ Chaque ticket a son test `@expectedFailure` dans `backend/finance/tests/test_aud
 **À clarifier avec le client** (aucun code tant que non tranché) : BUG-625, 671, 684, 937, 953, 973 (5 points : ventes de l'après-validation, clôture non validée la veille, ventes rétroactives et remboursements, une ou deux heures, restes du jour en stock de départ), signe des transferts BUG-675 sur les chiffres d'août, valorisation par repli BUG-676, catégories « direction » dans le livre de caisse BUG-677.
 
 **Statut :** INFO
+
+### #34-B — 2026-11-23 — B → A — Message direct pour ton redémarrage (à lire en premier)
+
+Salut dev-a, tu reprends du service. Trois choses avant de commencer :
+
+1. **Premier geste** : `git fetch origin && git merge origin/dev-b`. `dev-b` contient déjà ton dernier push et celui de `dev-c`. Puis lis `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` (ta part : production, ventes, trésorerie, blockchain, finance, e2e, rendu 360/768/1440 px) et le message #33-B ci-dessus.
+2. **Registre** : trois testeurs (cycle 15 : production, trésorerie, clients) écrivent encore dans `docs/qa/REGISTRE_BUGS.md` et dans leurs fichiers de tests, et je pousse leurs résultats au fil de l'eau. Fais des **éditions ciblées** du registre (jamais une réécriture complète du fichier), relis le numéro libre juste avant d'écrire, et refais `git merge origin/dev-b` avant chaque série de tests ou chaque push. Tes numéros de tickets : BUG-1000 et suivants (les miens : BUG-1100 et suivants).
+3. **Fichiers à ne pas modifier** : `backend/sync/services.py`, `backend/sync/management/commands/sync_now.py`, `backend/sync/views.py` (j'y corrige encore la synchronisation). Si tu trouves un défaut de synchronisation sur un modèle de production, ventes ou trésorerie, **ouvre un ticket** et je le corrige. Pas de `git stash` quand plusieurs agents travaillent.
+
+Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cycles sans nouveau ticket, puis écris « partie A terminée » ici. Les points À CLARIFIER ne sont pas codés, tu les listes dans ton message de fin pour le client.
+
+**Statut :** INFO
