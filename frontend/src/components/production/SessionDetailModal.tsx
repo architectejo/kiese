@@ -3,6 +3,7 @@ import { FiCheckCircle } from 'react-icons/fi';
 import type { ProductionSession } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
 import { productionApi } from '@/api/services';
+import { GapBadge } from './GapBadge';
 import { mergeSessionLines } from './mergeSessionLines';
 import { carryoverLines } from './mergeSessionLines';
 import { ClosureSummaryCard } from './ReconciliationPanel';
@@ -64,6 +65,10 @@ export const SessionDetailModal: React.FC<SessionDetailModalProps> = ({ selected
                     const rColor = rPct >= 90 ? 'hsl(var(--color-success))' : rPct >= 75 ? 'hsl(var(--color-warning))' : 'hsl(var(--color-danger))';
                     return <div style={{ fontWeight: 800, color: rColor }}>{rPct.toFixed(1)}%</div>;
                   })()}
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', fontWeight: 700, textTransform: 'uppercase' }}>Écart</div>
+                  <GapBadge session={selectedSession} fontSize="0.78rem" />
                 </div>
               </div>
             </div>

@@ -4,6 +4,7 @@ import type { UserProfile } from '@/store/authStore';
 import { StockDuJourSection } from './StockDuJourSection';
 import { OpeningConfirmationManualSection } from './OpeningConfirmationManualSection';
 import { BatchInProgressPanel } from './BatchInProgressPanel';
+import { GapBadge } from './GapBadge';
 
 export interface FourneesTabProps {
   breadStocks: BreadStock[];
@@ -80,7 +81,6 @@ export const FourneesTab: React.FC<FourneesTabProps> = ({ breadStocks, sacValueF
                 const tFC  = sess.total_fc_produced || 0;
                 const thFC = sess.theoretical_yield || 0;
                 const rPct = thFC > 0 ? (tFC / thFC) * 100 : 0;
-                const gap  = sess.yield_gap || 0;
                 const rColor = rPct >= 90 ? 'hsl(var(--color-success))' : rPct >= 75 ? 'hsl(var(--color-warning))' : 'hsl(var(--color-danger))';
                 return (
                   <div
@@ -101,9 +101,7 @@ export const FourneesTab: React.FC<FourneesTabProps> = ({ breadStocks, sacValueF
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 800, fontSize: '0.72rem', color: rColor }}>{rPct.toFixed(0)}%</div>
-                      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: gap >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                        {gap >= 0 ? '+' : ''}{gap.toLocaleString('fr-FR')} FC
-                      </div>
+                      <GapBadge session={sess} />
                     </div>
                   </div>
                 );
