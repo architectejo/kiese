@@ -1018,6 +1018,54 @@ def _apply_pulled_node_settings(block, local_code):
     return True
 
 
+def _apply_pulled_consumable_types(rows):
+    """BUG-1117 : applique la conversion sac/boîtes (`bag_weight_g`, `units_per_bag`) du bloc
+    `consumable_types` aux ConsumableType DÉJÀ présents sur le poste (jamais de création, jamais
+    code/libellé/unité). Les deux champs vont ensemble (les deux nombres positifs bornés, ou les deux
+    null) ; ligne invalide ignorée seule et journalisée ; aucune écriture si rien ne change."""
+    import logging
+    from decimal import Decimal
+
+    from django.utils import timezone
+
+    from core.numeric import NumericError, parse_ascii_decimal, parse_ascii_int
+    from production.models import ConsumableType
+
+    log = logging.getLogger('sync')
+    if not isinstance(rows, list):
+        return 0
+    applied = 0
+    for row in rows[:50]:
+        if not isinstance(row, dict) or not isinstance(row.get('code'), str):
+            continue
+        code = row['code']
+        if 'bag_weight_g' not in row and 'units_per_bag' not in row:
+            continue          # clés absentes != null : rien à appliquer
+        raw_w, raw_u = row.get('bag_weight_g'), row.get('units_per_bag')
+        try:
+            if raw_w is None and raw_u is None:
+                weight = units = None
+            elif (raw_w is None or raw_u is None or isinstance(raw_w, bool) or isinstance(raw_u, bool)
+                  or not isinstance(raw_w, (str, int)) or not isinstance(raw_u, (str, int))):
+                raise NumericError('paire incomplète', 'invalid')
+            else:
+                weight = parse_ascii_decimal(str(raw_w), places=3, minimum=Decimal('0.001'),
+                                             maximum=Decimal('10000000'), label='bag_weight_g')
+                units = parse_ascii_int(str(raw_u), minimum=1, maximum=100000, label='units_per_bag')
+        except (NumericError, ValueError, TypeError):
+            log.warning('consumable_types : conversion invalide ignorée pour %s', code[:10])
+            continue
+        ctype = ConsumableType.objects.filter(code=code).first()
+        if ctype is None:
+            continue
+        if ctype.bag_weight_g == weight and ctype.units_per_bag == units:
+            continue
+        ConsumableType.objects.filter(pk=ctype.pk).update(
+            bag_weight_g=weight, units_per_bag=units, updated_at=timezone.now())
+        applied += 1
+    return applied
+
+
 def _apply_pulled_consumable_movements(rows, local_code):
     """BUG-1111 : applique les mouvements de consommables créés au cloud pour CE poste (envois de la
     direction). Idempotent (UUID déjà connu = ignoré), jamais pour une autre boulangerie, jamais
@@ -1102,6 +1150,8 @@ def apply_pull_response(payload):
         _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
     if isinstance(payload, dict):
         _apply_pulled_node_settings(payload.get('node_settings'), _local_node_code(payload))
+    if isinstance(payload, dict):
+        _apply_pulled_consumable_types(payload.get('consumable_types'))
     if isinstance(payload, dict):
         _apply_pulled_consumable_movements(payload.get('consumable_movements'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
