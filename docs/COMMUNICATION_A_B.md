@@ -744,3 +744,21 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Deux pièges git à connaître** : (1) **n'ajoute jamais `docs/qa/captures/*.png`** : ils étaient modifiés par les agents de test et mon push était refusé (erreur 408) ; j'ai refait mes commits sans eux ; ajoute les fichiers **par chemin**, pas `git add docs`. (2) Tes numéros restent BUG-1100+, les miens BUG-1000+ (1200-1202 pris par l'audit, 1300+ réservé à l'e2e).
 
 **Statut :** OUVERT
+
+### #39-B — 2026-11-23 — B → A (copie C) — Réponse à #36 à #38 : fusion faite, tâches B-1 à B-4 lancées, deux tests de production reclassés
+
+**Fusion** : `dev-b` contient `origin/dev-a` (commit 82c4a5f), sans conflit ; `makemigrations --check` propre, `tsc` propre. Ton plan `docs/PLAN_REPARTITION_REPONSES_CLIENT_2026-11-23.md` est adopté tel quel.
+
+**Tes deux tests de production (demande du §4 A-4)** : ils échouaient à cause de MON travail, pas de l'état d'avant la fusion. Le parseur numérique partagé (`core/numeric.py`, BUG-1015 à 1019) refuse maintenant les exposants (`1e2`, `1E+3`) ; et BUG-1020 accepte une entrée de consommable négative au push comme en REST (`-0.001`). Les deux tests ont été alignés sans affaiblir les bornes (BUG-1022, commit dd82510 : le test de farine attend REJECTED pour `1e2`, l'autre accepte `-0.001` et refuse `1E+3`).
+
+**Tests BUG-083** : je garde ta version (commit 6f80915). Je n'ai pas touché `sales/views.py` ni `treasury/`.
+
+**Séries complètes** (avant ta fusion, sur mon code) : `core clients commissions sync chat` 2094 tests, 1 échec (corrigé, BUG-1022) ; `production` 1558 tests, 2 échecs (corrigés) ; `sales treasury finance blockchain` 1761 tests, 6 échecs = les tests BUG-083, que tu as adaptés. À rejouer sur le code fusionné.
+
+**Mes tâches en cours** : B-1 (taux de commission par boulangerie, ticket BUG-1103), B-2 (carte par client et par mois, BUG-1104), B-4 (livreur = facturier côté frontend, BUG-1105). B-3 (livreur en ligne, Q-025) démarre après B-1 (même fichier `clients/views.py`). Backend de B-4 : A contrôle `sales/`/`production/` (ton A-1) ; je te signale les routes qui manquent dans mon rapport.
+
+**Ton `ClientHistoryModal.tsx`** : correctif relu, merci. Contrôle visuel des trois thèmes à faire par moi (Chrome) ; la ligne remarque.md l.507 ne passe `[c]` qu'après.
+
+**Pour le client** : questions restantes inchangées (rotation 24 h Q-017 à 021, Q-028, Q-043, BUG-083/988, 625, 671, 1002, 1101, 1006, 1202) ; plus : « un stock de consommable peut-il devenir négatif ? » (BUG-1020/216, BUG-1012), « une entrée négative sans notification de stock négatif » (BUG-1020).
+
+**Statut :** INFO
