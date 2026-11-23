@@ -73,7 +73,6 @@ class IdentiteDeuxPostes(Base):
         self.assertEqual(r['status'], 'ACCEPTED')
         self.assertEqual(self.cur().phone, 'CLOUD')
 
-    @expectedFailure
     def test_BUG_969_push_d_identite_obsolete_ignore_sans_aucune_trace(self):
         # conflit simultane : le Cloud a une edition plus recente ; le push du poste est ignore et renvoie
         # ACCEPTED (le poste le marque is_synced) sans SyncConflictLog ni notification : perte silencieuse.
@@ -110,7 +109,6 @@ class IdentiteDeuxPostes(Base):
         self.assertEqual(c.category, 'RISK')
         self.assertIsNotNone(c.identity_updated_at)
 
-    @expectedFailure
     def test_BUG_970_le_lot_sortant_ne_porte_aucune_version_d_identite(self):
         # build_outbound_payload n'envoie ni updated_at ni identity_updated_at : la garde du push
         # (sent_at) est morte en flux reel, le dernier push gagne meme s'il date d'avant une edition du Cloud.

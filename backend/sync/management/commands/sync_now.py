@@ -206,6 +206,9 @@ def build_outbound_payload(node_code):
             'cotisation_sociale': _dec(c.cotisation_sociale), 'commission_rate': _dec(c.commission_rate),
             'credit_limit': _dec(c.credit_limit), 'client_type': c.client_type, 'notes': c.notes,
             'node_origin': c.node_origin,
+            # BUG-970 : versions pour la garde « dernier écrivain gagne » du push d'identité.
+            'updated_at': c.updated_at.isoformat() if c.updated_at else None,
+            'identity_updated_at': c.identity_updated_at.isoformat() if c.identity_updated_at else None,
         }
         for c in Client.objects.filter(node_origin=node_code, is_synced=False)
     ]

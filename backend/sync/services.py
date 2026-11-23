@@ -299,7 +299,7 @@ _CLIENT_TEXT_FIELDS = (('first_name', 100, True), ('last_name', 100, True), ('ph
                        ('address', None, False), ('notes', None, False))
 
 
-def _apply_client_identity_push(existing, record):
+def _apply_client_identity_push(existing, record, node):
     """
     BUG-941 (SYNC.md §5.1) : identité et paramètres d'un client (nom, téléphone,
     adresse, plafond, taux, cotisation, type) = dernier écrivain gagne, poussés
@@ -312,7 +312,9 @@ def _apply_client_identity_push(existing, record):
 
     record_id = record.get('id')
     try:
-        sent_at = _parse_aware_datetime(record.get('updated_at'))
+        # BUG-970 : version d'identité du poste si fournie, sinon `updated_at`
+        # (ancien poste : rien n'est envoyé, le push est appliqué).
+        sent_at = _parse_aware_datetime(record.get('identity_updated_at') or record.get('updated_at'))
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
     # BUG-951 : la garde porte sur la version de l'IDENTITÉ seule. Un mouvement de
@@ -324,6 +326,35 @@ def _apply_client_identity_push(existing, record):
     if reference is None and not DebtMovement.objects.filter(client_id=existing.pk).exists():
         reference = existing.updated_at
     if sent_at is not None and reference is not None and sent_at < reference:
+        # BUG-969 : perte tracée (journal de conflits + notification), statut ACCEPTED
+        # conservé pour que le poste marque l'enregistrement synchronisé.
+        # Un rejeu d'un push déjà appliqué (mêmes valeurs) n'est pas une perte : pas de bruit.
+        def _differs(name):
+            if name not in record or record[name] in (None, ''):
+                return False
+            cur = getattr(existing, name)
+            try:
+                return (Decimal(str(record[name])) != Decimal(str(cur))
+                        if isinstance(cur, Decimal) else str(record[name]) != str(cur))
+            except InvalidOperation:
+                return True
+        if not any(_differs(n) for n in ('first_name', 'last_name', 'phone', 'address', 'notes', 'credit_limit',
+                                          'commission_rate', 'cotisation_sociale', 'client_type')):
+            return _record_result(record_id, True)
+        _log_conflict(
+            node, 'clients.Client', record_id, 'IDENTITE_OBSOLETE',
+            f"Modification d'identité du client {existing.code} poussée par {node.code} ignorée : "
+            f"plus ancienne que la version du Cloud ({reference.isoformat()}).")
+        try:
+            from core.utils import create_notification
+            create_notification(
+                title="Modification de client ignorée",
+                message=(f"La modification du client {existing.code} faite sur {node.code} est plus ancienne "
+                         f"que celle déjà enregistrée : elle a été ignorée. Vérifiez la fiche client."),
+                severity='WARNING', node_origin=node.code,
+            )
+        except Exception:  # la notification ne doit jamais faire échouer le lot
+            logger.warning("Notification d'identité obsolète non créée (%s)", record_id)
         return _record_result(record_id, True)
 
     changes = {}
@@ -394,7 +425,7 @@ def _push_client(node, record):
                 f"Le nœud {node.code} a tenté de modifier un client appartenant à {existing.node_origin}."
             )
             return _record_result(record_id, False, "nœud non propriétaire de ce client")
-        return _apply_client_identity_push(existing, record)  # BUG-941
+        return _apply_client_identity_push(existing, record, node)  # BUG-941
 
     bakery_code = record.get('node') or node.code
     try:
@@ -1784,10 +1815,23 @@ def _push_local_expense(node, record):
     return _record_result(record_id, True)
 
 
+def _bill_int(raw, name):
+    """Billetage : ENTIER strict. Int (non booléen) ou chaîne de chiffres ASCII 0-9
+    uniquement ; '2.0', '1e3', négatifs, flottants, non ASCII refusés (ValueError)."""
+    if isinstance(raw, bool) or isinstance(raw, float):
+        raise ValueError(f"« {name} » invalide : entier attendu")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not (text.isascii() and text.isdigit()):
+            raise ValueError(f"« {name} » invalide : entier attendu (chiffres 0-9 uniquement)")
+        raw = text
+    return _sync_int(raw, name)
+
+
 def _bills_kwargs(record):
     """BUG-932 : billetage en entiers (les chaînes numériques ASCII validées par
     `_check_bills` sont converties ; absent/vide = 0)."""
-    return {n: (0 if record.get(n) in (None, '') else int(_sync_decimal(record[n], n, 0)))
+    return {n: (0 if record.get(n) in (None, '') else _bill_int(record[n], n))
             for n in ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
                       'bills_500', 'bills_200', 'bills_100', 'bills_50')}
 
@@ -2489,7 +2533,7 @@ def _check_bills(record):
         if record.get(name) in (None, ''):
             continue
         try:
-            _sync_int(record[name], name)
+            _bill_int(record[name], name)
         except ValueError as exc:
             return str(exc)
     return None
@@ -2770,6 +2814,7 @@ def process_push_batch(node, records_by_model):
     results = {}
     _batch_ctx.parents = set()
     for model_label in PUSH_MODEL_ORDER:
+        seen_ids = set()
         records = records_by_model.get(model_label) or []
         handler = PUSH_HANDLERS[model_label]
         model_results = []
@@ -2779,6 +2824,14 @@ def process_push_batch(node, records_by_model):
             continue
         for record in records:
             raw_record = record
+            if model_label == 'clients.Client' and isinstance(record, dict) and record.get('id'):
+                # BUG-972 : dans un même lot, un id déjà traité plus haut = rejeu (le premier
+                # enregistrement gagne). Un AUTRE lot peut modifier l'identité (BUG-941).
+                rid_key = str(record['id'])
+                if rid_key in seen_ids:
+                    model_results.append(_record_result(record['id'], True))
+                    continue
+                seen_ids.add(rid_key)
             try:
                 with _tx.atomic():
                     record, rejected = _preflight(node, model_label, record)
