@@ -170,13 +170,16 @@ class TeamAssignmentApiTests(TestCase):
             self.api.post(URL, {'team': 'A'}, format='json')
         self.assertFalse(ActivityLog.objects.filter(action="Changement équipe de service").exists())
 
-    def test_facturier_can_assign_livreur_cannot(self):
+    def test_facturier_and_livreur_can_assign(self):
+        # Changement de specification voulu BUG-1050 (client, Q-027 : « le
+        # livreur a les memes ecrans que le facturier ») : le livreur lit et
+        # designe l'equipe comme le facturier (avant : 403).
         with _now(13):
             r = _api(self.facturier).post(URL, {'team': 'A'}, format='json')
             self.assertEqual(r.status_code, 200, r.data)
             livreur = make_user('LIVREUR', node=self.node)
-            self.assertEqual(_api(livreur).get(URL).status_code, 403)
-            self.assertEqual(_api(livreur).post(URL, {'team': 'A'}, format='json').status_code, 403)
+            self.assertEqual(_api(livreur).get(URL).status_code, 200)
+            self.assertEqual(_api(livreur).post(URL, {'team': 'A'}, format='json').status_code, 200)
         self.assertEqual(APIClient().get(URL).status_code, 401)
 
     def test_non_hq_user_is_scoped_to_own_node(self):
