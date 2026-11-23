@@ -77,7 +77,6 @@ class V652(TBase):
         self.assertEqual(self.respond(t, [self.L(self.b3, 10)]).status_code, 400)
         self.assertEqual(self.stock(self.k1, self.b3), 90)
 
-    @expectedFailure
     def test_BUG_680_respond_duplicate_category_lines_refused(self):
         """BUG-680 : deux lignes de meme categorie dans la reponse : la derniere ecrase la
         premiere en silence (la reception refuse les doublons, BUG-620/622)."""
@@ -114,7 +113,6 @@ class V653(TBase):
                               format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_681_patch_session_date_to_future_refused(self):
         """BUG-681 : le PATCH de la date d'une fournee vers le futur est accepte (BUG-653 ne
         controle que la creation)."""
@@ -141,7 +139,6 @@ class V654(TBase):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(self.stock(self.k1, self.b3), 112)
 
-    @expectedFailure
     def test_BUG_654_session_line_quantity_unicode_refused(self):
         """BUG-654 (REJETE a6) : la quantite d'une LIGNE de fournee (serializer DRF) accepte
         encore « ٣ » (201, 3 pains ajoutes au stock) ; seul `_strict_int` a ete corrige."""
@@ -149,7 +146,6 @@ class V654(TBase):
                                  'lines': [{'bread_price': self.b3.pk, 'quantity': '٣'}]}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_682_unicode_digits_in_consumables_used(self):
         """BUG-682 : `consumables_used` (Decimal(str())) accepte « ٣ »."""
         ConsumableType.objects.get_or_create(code='SALT', defaults={'label': 'Sel', 'unit': 'g'})
@@ -157,7 +153,6 @@ class V654(TBase):
                                  'consumables_used': [{'consumable_type': 'SALT', 'quantity': '٣'}]}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_682_unicode_digits_in_disposal_quantity(self):
         """BUG-682 : quantite d'une disposition (DRF IntegerField) acceptee avec « ٣ »."""
         ses = ProductionSession.objects.create(node=self.k1, date=ddate.today() - timedelta(days=1), team='B',
@@ -179,7 +174,6 @@ class V626(TBase):
         self.assertIsNone(c.inventory_id)
         self.assertEqual(c.gap, c.physical_quantity - c.system_quantity)
 
-    @expectedFailure
     def test_BUG_683_patch_count_synced_must_be_resent_and_gap_recomputed(self):
         """BUG-683 : une ligne de comptage synchronisee puis modifiee par PATCH reste
         `is_synced=True` : la modification n'est jamais renvoyee au Cloud."""
@@ -192,7 +186,6 @@ class V626(TBase):
         c = ConsumableCount.objects.get(pk=r.data['id'])
         self.assertFalse(c.is_synced)
 
-    @expectedFailure
     def test_BUG_683_patch_count_recomputes_gap(self):
         """BUG-683 : le PATCH de `physical_quantity` ne recalcule pas `gap` (ecart d'inventaire faux)."""
         ConsumableStock.objects.get_or_create(node=self.k1, consumable_type='FLOUR')

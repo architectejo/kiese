@@ -205,6 +205,8 @@ def _parse_consumables_used(raw, node):
         raw_qty = item.get('quantity', 0)
         if isinstance(raw_qty, bool) or raw_qty is None or isinstance(raw_qty, (list, dict)):
             raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
+        if isinstance(raw_qty, str) and not raw_qty.isascii():  # BUG-682
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
         try:
             qty = Decimal(str(raw_qty).strip() or '0')
         except InvalidOperation:
@@ -1003,6 +1005,10 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
             ).select_related('bread_price').all()
         }
         user = self.request.user
+        # BUG-681 : pas de date future non plus en modification (cf. BUG-653).
+        new_date = serializer.validated_data.get('date')
+        if new_date is not None and new_date > work_date_for(serializer.instance.node):
+            raise ValidationError({'detail': "La date de la fournée ne peut pas être dans le futur."})
         old_flour = Decimal(str(serializer.instance.flour_sacks_used or 0))
         if not user.can_access_all_nodes:
             # BUG-056 : un non-HQ ne peut jamais réaffecter une session
@@ -1702,7 +1708,12 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
 
     def perform_update(self, serializer):
         self._refuse_if_inventory_line(serializer.instance)
-        serializer.save()
+        # BUG-683 : toute modification est à renvoyer au Cloud et l'écart est recalculé.
+        physical = serializer.validated_data.get('physical_quantity', serializer.instance.physical_quantity)
+        serializer.save(
+            gap=physical - serializer.instance.system_quantity,
+            is_synced=False,
+        )
 
     def perform_destroy(self, instance):
         self._refuse_if_inventory_line(instance)
@@ -1919,6 +1930,11 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
             # (400 sinon, sans écriture), comme à la réception (BUG-620).
             lines_by_bp = {l.bread_price_id: l for l in transfer.lines.select_related('bread_price')}
             final_qty = {bp_pk: l.quantity_sent for bp_pk, l in lines_by_bp.items()}
+            # BUG-680 : deux lignes de même catégorie -> 400 (la dernière écrasait la première).
+            ids_seen = [b for b, _ in parsed if b is not None]
+            if len(ids_seen) != len(set(ids_seen)):
+                return Response({'detail': "Catégorie de pain en double dans la réponse."},
+                                status=status.HTTP_400_BAD_REQUEST)
             for bp_id, qty_send in parsed:
                 if bp_id not in lines_by_bp:
                     return Response(

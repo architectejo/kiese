@@ -9,7 +9,19 @@ MAX_DISPOSAL_QTY = 1_000_000
 MAX_DISPOSAL_VALUE = 9_999_999_999  # DecimalField(max_digits=12, decimal_places=2)
 
 
+def _refuse_non_ascii_quantity(data):
+    """BUG-654/682 : la quantité brute doit être en chiffres ASCII (« ٣ » refusé)."""
+    if hasattr(data, 'get'):
+        raw = data.get('quantity')
+        if isinstance(raw, str) and not raw.isascii():
+            raise serializers.ValidationError({'detail': "Quantité invalide (chiffres 0-9 uniquement)."})
+
+
 class ProductionSessionLineSerializer(serializers.ModelSerializer):
+    def to_internal_value(self, data):
+        _refuse_non_ascii_quantity(data)
+        return super().to_internal_value(data)
+
     bread_price_display = serializers.StringRelatedField(source='bread_price', read_only=True)
     unit_price = serializers.IntegerField(source='bread_price.unit_price', read_only=True)
     line_fc = serializers.IntegerField(read_only=True)
@@ -419,6 +431,10 @@ class BreadDisposalSerializer(serializers.ModelSerializer):
 
     def validate_session(self, value):
         return _check_fk_in_user_node(self, value, 'Session')
+
+    def to_internal_value(self, data):
+        _refuse_non_ascii_quantity(data)
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         # BUG-158 : seule une ligne REMAINING (« reste du jour », reflet du

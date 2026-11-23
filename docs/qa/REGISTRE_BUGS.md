@@ -17736,25 +17736,31 @@ Spec `e2e/tests/26-lot-2026-11-19.spec.ts`, backend :8000 + Vite :5173, db.sqlit
 - Verdicts : VÉRIFIÉ = BUG-652, 653, 674, 675, 676, 677 ; REJETÉ PARTIEL = BUG-654 (ligne de fournée). BUG-625 : `test_BUG_625_*` en « unexpected success » (le COMPTABLE reçoit désormais 403) : signalé, non tranché.
 
 ### BUG-680 — [Mineur] Transferts : `respond_to_request` accepte deux lignes de même catégorie (la dernière écrase)
-- Module : Production · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-652.
+- Module : Production · backend · Statut : CORRIGÉ · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-652.
 - Observé : réponse `[b3 x3, b3 x8]` -> 200, 8 envoyés ; la réception refuse les doublons (BUG-620/622). Attendu : 400. Test : `V652::test_BUG_680_respond_duplicate_category_lines_refused` (`@expectedFailure`).
+- Dev-backend d18 (2026-11-23) : Cause : aucune détection de doublon dans `parsed`. Correction : 400 si une catégorie apparaît deux fois (`production/views.py::respond_to_request`). Test : `@expectedFailure` retiré (à confirmer par le testeur). Pas de changement de contrat hors 400 supplémentaires.
 
 ### BUG-681 — [Mineur] Fournées : PATCH de la date vers le futur accepté
-- Module : Production · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-653.
+- Module : Production · backend · Statut : CORRIGÉ · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-653.
 - Observé : PATCH `date` = J+30 -> 200 (contourne le contrôle posé à la création). Attendu : 400. Test : `V653::test_BUG_681_patch_session_date_to_future_refused` (`@expectedFailure`).
+- Dev-backend d18 (2026-11-23) : Cause : contrôle de date posé seulement dans `perform_create`. Correction : même contrôle (`work_date_for(node)`) dans `perform_update` (`production/views.py`). Test : `@expectedFailure` retiré (à confirmer par le testeur). Pas de changement de contrat hors 400 supplémentaires.
 
 ### BUG-682 — [Mineur] Chiffres Unicode encore acceptés : `consumables_used` et quantité de disposition
-- Module : Production · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Voisinage de BUG-654.
+- Module : Production · backend · Statut : CORRIGÉ · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Voisinage de BUG-654.
 - Observé : `consumables_used[].quantity = "٣"` (Decimal(str())) -> 201 ; `BreadDisposal.quantity = "٣"` (DRF IntegerField) -> 201. Attendu : chiffres ASCII uniquement (400). Tests : `V654::test_BUG_682_*` (2, `@expectedFailure`). À traiter avec la ligne de fournée de BUG-654 (même cause : validation DRF hors `_strict_int`).
+- Dev-backend d18 (2026-11-23) : Cause : validation hors `_strict_int`. Correction : `consumables_used` (`_parse_consumables_used`) et quantité de disposition (`BreadDisposalSerializer.to_internal_value`) refusent les chiffres non ASCII ; même garde sur la ligne de fournée (BUG-654 reliquat, `ProductionSessionLineSerializer`). Test : `@expectedFailure` retiré (à confirmer par le testeur). Pas de changement de contrat hors 400 supplémentaires.
 
 ### BUG-683 — [Mineur] Comptage de consommable : PATCH ne renvoie pas au Cloud et ne recalcule pas l'écart
-- Module : Production/Sync · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-626.
+- Module : Production/Sync · backend · Statut : CORRIGÉ · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-626.
 - Observé : `ConsumableCountViewSet.perform_update` ne remet pas `is_synced=False` (un comptage déjà synchronisé puis modifié n'est jamais renvoyé) et `gap` reste calculé sur l'ancienne `physical_quantity` (4,5 au lieu de 7). Attendu : `is_synced=False` et `gap = physique - système`. Tests : `V626::test_BUG_683_*` (2, `@expectedFailure`).
+- Dev-backend d18 (2026-11-23) : Cause : `perform_update` sans effet de bord. Correction : `ConsumableCountViewSet.perform_update` force `is_synced=False` et recalcule `gap = physique - system_quantity` (`production/views.py`). Test : `@expectedFailure` retiré (à confirmer par le testeur). Pas de changement de contrat hors 400 supplémentaires.
+- BUG-654 (reliquat ligne de fournée) : corrigé aussi en d18 (même garde ASCII), test `V654::test_BUG_654_session_line_quantity_unicode_refused` sans `@expectedFailure` ; en attente de re-vérification par le testeur.
 
 ### BUG-684 — [Mineur, À CLARIFIER] Dépenses locales : un compte siège peut utiliser une catégorie « direction seule » pour une boulangerie
 - Module : Trésorerie · backend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-677.
 - Observé : POST dépense locale `node=K1` par la direction avec une catégorie `DIRECTION` -> 201 ; la dépense porte une catégorie masquée au gérant de K1. Attendu (à confirmer) : 400 pour toute dépense LOCALE. Test : `V677::test_BUG_684_*` (`@expectedFailure`).
 
 ### BUG-685 — [Mineur] Export clôture : « Appro Reçu » non signé alors que l'écran l'affiche en négatif
-- Module : Clôture · frontend · Statut : OUVERT · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-675.
+- Module : Clôture · frontend · Statut : CORRIGÉ (dev-frontend Dev B d19, 2026-11-23) · Ouvert par : testeur-production (Dev A), 2026-11-23 a6. Suite de BUG-675.
+- Correction : `clotureReportExport.ts` applique la même règle que l'écran (quantité > 0 => −qté, FC > 0 => −FC) : Excel en nombres natifs négatifs, impression HTML avec « −1 250 » / « −5 000 FC ». Vérifier : clôture d'une boulangerie réceptrice d'un transfert, exporter Excel + imprimer, colonne « Appro Reçu » négative comme à l'écran.
 - Observé (lecture de code, sans test automatisé) : `frontend/src/utils/clotureReportExport.ts` (Excel l.138 et HTML l.207) écrit `appro_recu` en positif, alors que `ClotureJournaliere.tsx` l'affiche `−qté / −FC` et que le total le retranche. Attendu : même signe dans l'export.
