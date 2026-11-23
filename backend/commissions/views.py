@@ -44,6 +44,27 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             qs = qs.filter(node=user.node)
         return qs
 
+    def _refuse_identity_change(self, request):
+        # BUG-893 : month/year/node d'une période clôturée ou portant des
+        # commissions sont figés (l'historique de paie ne se déplace pas).
+        period = self.get_object()
+        if not (period.is_closed or ClientCommission.objects.filter(period=period).exists()):
+            return None
+        data = request.data if hasattr(request.data, 'get') else {}
+        for name, current in (('month', period.month), ('year', period.year), ('node', period.node_id)):
+            if name in data and str(data.get(name)) != str(current):
+                return Response(
+                    {'detail': "Le mois, l'année et la boulangerie d'une période clôturée "
+                               "ou contenant des commissions ne sont pas modifiables."},
+                    status=status.HTTP_400_BAD_REQUEST)
+        return None
+
+    def update(self, request, *args, **kwargs):
+        refused = self._refuse_identity_change(request)
+        if refused is not None:
+            return refused
+        return super().update(request, *args, **kwargs)
+
     def destroy(self, request, *args, **kwargs):
         # BUG-263 : l'historique de paie d'une période clôturée (ou contenant
         # des commissions payées) ne se supprime pas.

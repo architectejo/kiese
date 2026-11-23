@@ -1258,6 +1258,21 @@ def _restamp_orphan_exits(stock_id):
         return len(pending)
 
 
+def _sync_bounded_qty(raw):
+    """BUG-894 : entier 0..2e9 (comme production.views._strict_int), sinon None."""
+    if isinstance(raw, bool):
+        return None
+    try:
+        d = Decimal(str(raw).strip())
+    except (ArithmeticError, ValueError):
+        return None
+    if not str(raw).strip().isascii() or not d.is_finite() or d != d.to_integral_value():
+        return None
+    if d < 0 or d > 2_000_000_000:
+        return None
+    return int(d)
+
+
 def _push_bread_transfer(node, record):
     from core.models import BreadPrice
     from production.models import BreadTransfer
@@ -1314,7 +1329,11 @@ def _push_bread_transfer(node, record):
                 changed_fields.append('transfer_status')
                 # BUG-788 : la quantité reçue ne vient que de la boulangerie réceptrice.
                 if record.get('quantity_received') is not None and node.pk == existing.to_node_id:
-                    existing.quantity_received = record['quantity_received']
+                    # BUG-894 : mêmes bornes que la voie REST (entier 0 à 2e9).
+                    qty_recv = _sync_bounded_qty(record['quantity_received'])
+                    if qty_recv is None:
+                        return _record_result(record_id, False, "quantité reçue invalide")
+                    existing.quantity_received = qty_recv
                     changed_fields.append('quantity_received')
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
@@ -1337,6 +1356,16 @@ def _push_bread_transfer(node, record):
         return _record_result(
             record_id, False,
             "seule la boulangerie réceptrice peut confirmer la réception")
+
+    # BUG-891 : un transfert naît toujours « en attente » ; les autres états
+    # s'obtiennent par la machine d'états (BUG-888), jamais à la création.
+    initial_status = record.get('transfer_status', BreadTransfer.TransferStatus.PENDING)
+    if initial_status != BreadTransfer.TransferStatus.PENDING:
+        return _record_result(
+            record_id, False, "un transfert est créé au statut « en attente » uniquement")
+    if record.get('quantity_received') is not None:
+        if _sync_bounded_qty(record['quantity_received']) is None:
+            return _record_result(record_id, False, "quantité reçue invalide")
 
     bread_price = None
     bp_id = record.get('bread_price')

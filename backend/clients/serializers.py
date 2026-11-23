@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from core.mixins import AsciiDigitsMixin
 from .models import Client, SocialContribution, SocialDistribution, SocialDistributionLine
 
 
@@ -9,10 +10,11 @@ MAX_COMMISSION_RATE = Decimal('0.30')
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 
-class ClientBoundsMixin:
+class ClientBoundsMixin(AsciiDigitsMixin):
     """BUG-250/257/258 : bornes communes à la création et à la modification."""
     MAX_CREDIT_LIMIT = MAX_CREDIT_LIMIT
     MAX_COMMISSION_RATE = MAX_COMMISSION_RATE
+    ascii_digit_fields = ('credit_limit', 'commission_rate', 'cotisation_sociale')
 
     def validate_credit_limit(self, value):
         if value < 0 or value > self.MAX_CREDIT_LIMIT:

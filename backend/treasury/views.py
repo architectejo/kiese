@@ -466,7 +466,11 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         """
         from django.utils.dateparse import parse_date
 
+        from core.mixins import get_json_object
+
         from .services import regenerate_facturier_reports
+
+        get_json_object(request)  # BUG-892 : corps non objet -> 400
 
         # BUG-161 (B3) : le nœud est résolu AVANT la date (la date de travail
         # en dépend) ; l'absence de nœud reste signalée après la date, comme avant.

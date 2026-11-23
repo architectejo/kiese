@@ -58,3 +58,18 @@ def get_json_object(request):
     if isinstance(data, dict):  # inclut QueryDict
         return data
     raise ValidationError({'detail': "Corps de requête invalide : un objet JSON est attendu."})
+
+
+class AsciiDigitsMixin:
+    """BUG-895 : les champs numériques listés dans `ascii_digit_fields` refusent
+    les chiffres non ASCII (« ٣ », « １２ ») envoyés en chaîne (400 en français)."""
+    ascii_digit_fields = ()
+
+    def to_internal_value(self, data):
+        from rest_framework.exceptions import ValidationError
+        if hasattr(data, 'get'):
+            for name in self.ascii_digit_fields:
+                raw = data.get(name)
+                if isinstance(raw, str) and not raw.isascii():
+                    raise ValidationError({name: ["Valeur invalide (chiffres 0-9 uniquement)."]})
+        return super().to_internal_value(data)

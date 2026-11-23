@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import date as ddate, timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
+
 
 from django.contrib.auth import get_user_model
 from django.urls import URLPattern, URLResolver, get_resolver
@@ -95,7 +95,6 @@ class V886(b5.B5):
                         fails.append((method, url, repr(body)[:30], r.status_code))
         self.assertEqual(fails, [])
 
-    @expectedFailure
     def test_BUG_892_treasury_reports_generate_corps_non_objet_est_400(self):
         """BUG-892 : POST /api/treasury/reports/generate/ avec un corps JSON non objet -> 500."""
         admin = User.objects.create(username='pr7_adm2', role='ADMIN', is_superuser=True, is_staff=True)
@@ -228,7 +227,6 @@ class V888(b5.B5):
                 bad.append((q, t.quantity_received))
         self.assertEqual(bad, [])
 
-    @expectedFailure
     def test_BUG_894_quantite_recue_gigantesque_par_push_refusee(self):
         """BUG-894 : le push accepte quantity_received = 10**15 (REST confirm_reception refuse > 2e9 ; PostgreSQL -> 500)."""
         t = self.transfer('RESPONDED')
@@ -251,7 +249,6 @@ class V888(b5.B5):
     def test_creation_par_un_tiers_refusee(self):
         self.assertIsNone(self._create(self.raw3, self.k1, self.k2, 'PENDING'))
 
-    @expectedFailure
     def test_BUG_891_creation_par_push_directement_en_litige_ou_annule_refusee(self):
         """BUG-891 : la creation par push accepte un statut DISPUTED/CANCELLED/CONFIRMED-equivalent arbitraire."""
         for st in ('DISPUTED', 'CANCELLED'):
@@ -259,7 +256,6 @@ class V888(b5.B5):
                 t = self._create(raw, src, dst, st)
                 self.assertTrue(t is None or t.transfer_status not in ('DISPUTED', 'CANCELLED'), (st, t))
 
-    @expectedFailure
     def test_BUG_891_creation_par_la_receptrice_deja_repondue_refusee(self):
         """BUG-891 : la receptrice cree un transfert RESPONDED (acte reserve a l'emettrice)."""
         t = self._create(self.raw2, self.k1, self.k2, 'RESPONDED')
@@ -309,7 +305,6 @@ class V889(b5.B5):
             cm.refresh_from_db()
             self.assertNotEqual(cm.period_id, closed.pk, (method, r.status_code, r.content))
 
-    @expectedFailure
     def test_BUG_893_periode_cloturee_ne_change_pas_de_mois_ni_d_annee(self):
         """BUG-893 : PATCH month/year d'une periode cloturee (le gel BUG-263 ne couvre que delete)."""
         per, _ = self.mk(closed=True, month=3)
@@ -325,7 +320,6 @@ class V889(b5.B5):
         per.refresh_from_db()
         self.assertTrue(per.is_closed, r.content)
 
-    @expectedFailure
     def test_BUG_893_periode_avec_commissions_ne_change_pas_de_boulangerie(self):
         """BUG-893 : PATCH node d'une periode (cloturee ou non) portant des commissions : les commissions changent de boulangerie."""
         per, cm = self.mk(closed=True, month=2)
@@ -452,7 +446,6 @@ class VProd(TBase):
         self.assertEqual(bad, [])
         self.assertEqual(DailyOpeningConfirmation.objects.count(), before)
 
-    @expectedFailure
     def test_BUG_896_opening_confirmation_chiffres_non_ascii_et_notation_exponentielle_refuses(self):
         """BUG-896 : qty « ٣ », « １２ » ou « 1e3 » acceptee (stock de depart ajuste), comme BUG-686 sur les autres champs."""
         bad = []
@@ -532,7 +525,6 @@ class VProd(TBase):
             self.assertEqual(rr.status_code, 400, (v, rr.status_code, rr.content))
         self.assertEqual(BreadDisposal.objects.get(pk=did).unit_price_sold, Dc('100'))
 
-    @expectedFailure
     def test_BUG_895_prix_valeur_sac_seuil_et_plafond_chiffres_non_ascii_refuses(self):
         """BUG-895 : « ٣ » accepte (=3) sur BreadPrice.unit_price, Node.sac_value_fc, Config.best_client_threshold, Client.credit_limit."""
         from clients.models import Client as C

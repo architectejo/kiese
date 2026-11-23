@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -3880,6 +3881,9 @@ class DailyOpeningConfirmationView(APIView):
             raw_bp = entry.get('bread_price')
             try:
                 if isinstance(raw_bp, bool) or isinstance(raw_qty, bool):
+                    raise ValueError
+                # BUG-896 : ni chiffres non ASCII, ni notation exponentielle.
+                if isinstance(raw_qty, str) and not re.fullmatch(r'\s*-?[0-9]+(\.0+)?\s*', raw_qty):
                     raise ValueError
                 # BUG-6NN : id entier strict (pas 1.5 -> 1, pas de chaîne géante / 1_0).
                 try:

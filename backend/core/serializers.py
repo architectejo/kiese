@@ -4,12 +4,14 @@ Core serializers — User, Node, Config, BreadPrice.
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from .mixins import AsciiDigitsMixin
 from .models import Node, Config, BreadPrice, ExpenseCategory, ActivityLog, SystemNotification, ColisDistribution
 
 User = get_user_model()
 
 
-class NodeSerializer(serializers.ModelSerializer):
+class NodeSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('sac_value_fc',)
     display_name = serializers.CharField(source='__str__', read_only=True)
 
     class Meta:
@@ -98,7 +100,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
-class ConfigSerializer(serializers.ModelSerializer):
+class ConfigSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('best_client_threshold', 'debt_ceiling', 'sac_value_fc', 'print_fee',
+                          'default_commission_rate', 'social_deduction_rate', 'annual_bonus_rate')
     class Meta:
         model = Config
         fields = [
@@ -119,7 +123,8 @@ class PublicConfigSerializer(serializers.ModelSerializer):
         read_only_fields = ['on_line']
 
 
-class BreadPriceSerializer(serializers.ModelSerializer):
+class BreadPriceSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('unit_price',)
     # BUG-039 : category est désormais un champ texte libre (plus de
     # TextChoices) — category_display n'a plus de get_category_display()
     # généré par Django ; on affiche simplement la catégorie elle-même,
