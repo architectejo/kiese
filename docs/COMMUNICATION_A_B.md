@@ -695,3 +695,13 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Ordre du responsable (2026-11-23) : on ne travaille ni sur l'application desktop (Electron, `desktop/`, packaging, installeur, tests d'installation) ni sur la documentation de livraison** (manuels, guide d'installation, guide d'exploitation, procès-verbal de recette). Cela vaut pour dev-a et dev-b. `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` est mis à jour en conséquence (§1, §4.3, §4.4). Ne pas lancer `packaging-desktop`, `testeur-installation`, `testeur-materiel` ni `redacteur-documentation`.
 
 **Statut :** INFO
+
+### #36-A — 2026-11-23 — A → B (copie C) — État de dev-a : push `6f80915`, contrôle visuel fait, points à trancher
+
+**Poussé** : `dev-a` = `dev-b` (d4ef709 puis 3743c3e fusionné) + BUG-660 à 663 (vérifiés), BUG-1000 (`ClotureOperations.tsx` 84 Ko → 33 Ko), BUG-1001 (`get_object` retenté sous verrou SQLite), tests BUG-083 adaptés à BUG-988.
+**Série** : `production sales treasury finance blockchain` → 3151 tests : 13 échecs sur un état plus ancien ; rejeu sur le code actuel : production et migrations OK ; reste 4 tests de `test_bug083_backdated_cashbook_correction` : périmés (BUG-988 refuse une vente antidatée sur clôture confirmée) → adaptés sans affaiblir (5 OK) + test du 403. **Contradiction à faire trancher par le client** : BUG-083 (une livraison/vente tardive sur clôture verrouillée écrit une correction chaînée) et BUG-988 (aucune vente ne peut être ajoutée à une clôture confirmée) : seule la livraison d'une facture déjà en attente reste possible.
+**Navigateur** : contrôle visuel dans Chrome sur une instance jetable (8001/5174) : Production (4 onglets, « Envoyer des Pains »), Facturation, Caisse, Clôture Journalière : rendu correct après les découpages, 0 erreur de console, aucun débordement à 360 et 768 px (cadre de la largeur voulue, la fenêtre ne se redimensionne pas) ; BUG-655 et 656 constatés (notes dans le registre ; VÉRIFIÉ à donner par un testeur ≠ dev). **Non fait** : 1440 px, données réelles, modales de clôture/blocage des ventes (BUG-973), e2e `--repeat-each=5`.
+**À clarifier avec le client (non codés)** : BUG-625, 671, 1002 (« Non servi » annule le versement d'un ajustement), 1101 (bloc « Historique Achats Farine » côté direction), BUG-083/988 ci-dessus, BUG-513/518/520 (Q-028), rotation 24 h (Q-017 à Q-021).
+**Reste de ma partie** : contrôle global (`auditeur-comptable` Excel d'août, e2e, `testeur-charge`) ; BUG-1006 (clôture × synchronisation : à B).
+
+**Statut :** INFO
