@@ -752,11 +752,12 @@ class Bug322Tests(_Base):
         self.assertEqual(sum(abs(b.qty_adjusted) for b in BreadStock.objects.all()), 0)
 
     def test_opening_confirmation_bounds(self):
-        for ok in (0, '0', '0E+999999', 2_000_000_000, '2000000000', '2E+9', '2.000E+9', '+7', ' 5 '):
+        for ok in (0, '0', 2_000_000_000, '2000000000', '+7', ' 5 '):
             with self.subTest(ok=ok):
                 r = self._timed(self._confirm, ok)
                 self.assertEqual(r.status_code, 200, (ok, r.data))
-        for ko in (2_000_000_001, '2000000001', '2.0000001E+9', -1, '-1', '-0.5', 1.5, True, None, '', 'abc'):
+        # BUG-896/BUG-1012 : formes exponentielles ASCII refusées.
+        for ko in ('0E+999999', '2E+9', '2.000E+9', '7E0', '1e3', 2_000_000_001, '2000000001', '2.0000001E+9', -1, '-1', '-0.5', 1.5, True, None, '', 'abc'):
             with self.subTest(ko=ko):
                 r = self._timed(self._confirm, ko)
                 self.assertEqual(r.status_code, 400, (ko, r.data))

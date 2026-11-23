@@ -115,11 +115,14 @@ class AcceptedValuesTests(_Base):
             {'bread_price_id': self.bp.pk, 'before': 20, 'after': 35, 'delta': 15}])
 
     def test_integral_forms_accepted(self):
-        for ok in ('7', 7.0, '7.0', ' 7 ', '7E0'):
+        # BUG-896/BUG-1012 : '7E0' (notation exponentielle) est désormais refusé.
+        for ok in ('7', 7.0, '7.0', ' 7 '):
             with self.subTest(ok):
                 resp = self.post(self.q(ok))
                 self.assertEqual(resp.status_code, 200, (ok, resp.data))
                 self.assertEqual(self.stock().qty_available, 7)
+        resp = self.post(self.q('7E0'))
+        self.assertEqual(resp.status_code, 400, resp.data)
 
     def test_resubmission_idempotent(self):
         for _ in range(3):

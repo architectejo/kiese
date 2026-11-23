@@ -164,11 +164,13 @@ class NegativeQuantityTests(_Base):
         r = self._entry('YEAST', '-1', mtype='EXIT')
         self.assertEqual(r.status_code, 201, r.content)
 
-    def test_bug216_rejete_inventaire_physique_negatif_accepte(self):
+    def test_bug688_inventaire_physique_negatif_refuse(self):
+        # BUG-688 l'emporte sur BUG-216 (BUG-1012) : stock physique négatif refusé ; mouvements négatifs restent acceptés.
         r = self.api.post('/api/production/counts/', {
             'consumable_type': 'SALT', 'count_date': '2026-11-12', 'physical_quantity': '-1400',
         }, format='json')
-        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn('ne peut pas être négative', str(r.json()))
 
 
 class StockNegativeNotificationTests(_Base):
