@@ -937,6 +937,82 @@ def _create_unknown_pulled_clients(rows, local_code=None):
     return {o.id for o in to_create}
 
 
+def _apply_pulled_node_settings(block, local_code):
+    """BUG-1030 (Q-026) : applique le bloc `node_settings` au `Node` LOCAL du poste (le cloud fait
+    autorité). Absent/invalide -> rien ; champ invalide ignoré seul (journalisé) ; jamais code, nom,
+    last_sync, is_active ; aucune écriture si rien ne change ; le nœud local n'est jamais créé."""
+    import datetime
+    import logging
+    import re
+    from decimal import Decimal, InvalidOperation
+
+    from django.utils import timezone
+
+    from core.models import Node
+
+    log = logging.getLogger('sync')
+    if not isinstance(block, dict) or not isinstance(local_code, str) or not local_code:
+        return False
+    node = Node.objects.filter(code=local_code).first()
+    if node is None:
+        return False
+
+    def dec(raw, maximum, nullable):
+        if raw is None and nullable:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+            raise ValueError
+        try:
+            v = Decimal(str(raw).strip())
+        except InvalidOperation:
+            raise ValueError
+        if not v.is_finite() or v < 0 or v > maximum:
+            raise ValueError
+        return v.quantize(Decimal('0.01'))
+
+    def hhmm(raw, nullable):
+        if raw is None and nullable:
+            return None
+        m = re.fullmatch(r'([01]\d|2[0-3]):([0-5]\d)', raw) if isinstance(raw, str) else None
+        if not m:
+            raise ValueError
+        return datetime.time(int(m.group(1)), int(m.group(2)))
+
+    def boolean(raw):
+        if not isinstance(raw, bool):
+            raise ValueError
+        return raw
+
+    specs = {
+        'default_commission_rate': lambda r: dec(r, Decimal('1'), True),
+        'card_fee_fc': lambda r: dec(r, Decimal('10000000'), False),
+        'monthly_social_contribution': lambda r: dec(r, Decimal('10000000'), False),
+        'sac_value_fc': lambda r: dec(r, Decimal('9999999999'), True),
+        'handover_time': lambda r: hhmm(r, False),
+        'block_sales_after_closure': boolean,
+        'team_rotation_enabled': boolean,
+        'team_a_start_time': lambda r: hhmm(r, True),
+        'team_a_end_time': lambda r: hhmm(r, True),
+        'team_b_start_time': lambda r: hhmm(r, True),
+        'team_b_end_time': lambda r: hhmm(r, True),
+    }
+    changes = {}
+    for field, parse in specs.items():
+        if field not in block:
+            continue
+        try:
+            value = parse(block[field])
+        except (ValueError, TypeError):
+            log.warning('node_settings : valeur invalide ignorée pour %s', field)
+            continue
+        if getattr(node, field) != value:
+            changes[field] = value
+    if not changes:
+        return False
+    Node.objects.filter(pk=node.pk).update(updated_at=timezone.now(), **changes)
+    return True
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -959,6 +1035,8 @@ def apply_pull_response(payload):
                                 _local_node_code(payload), payload.get('mirrors'))
     if isinstance(payload, dict):
         _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
+    if isinstance(payload, dict):
+        _apply_pulled_node_settings(payload.get('node_settings'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return

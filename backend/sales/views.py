@@ -15,7 +15,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from core.mixins import is_node_less_non_hq
 from kiese.node_guard import NoNodeGuardMixin, parse_date_param
-from core.models import Node, BreadPrice, Config
+from core.models import Node, BreadPrice, Config, effective_commission_rate
 from core.permissions import IsFacturier, IsLivreur, IsGerant, IsFacturierOrLivreur
 from core.utils import log_activity, create_notification, validate_requested_date as _validate_requested_date
 from core.workday import work_date_for
@@ -365,7 +365,7 @@ class InvoiceViewSet(
         else:
             config = Config.get_instance()
             client = invoice.client
-            new_rate = client.commission_rate if client.commission_rate is not None else config.default_commission_rate
+            new_rate = client.commission_rate if client.commission_rate is not None else effective_commission_rate(client.node)
         if new_value != invoice.commission_exempt or new_rate != old_rate:
             invoice.commission_exempt = new_value
             invoice.commission_rate = new_rate
@@ -766,7 +766,7 @@ class InvoiceViewSet(
         else:
             # BUG-210 : le taux vient de la configuration serveur (taux du
             # client), jamais du payload (déjà validé dans le serializer).
-            comm_rate = client.commission_rate if client.commission_rate is not None else config.default_commission_rate
+            comm_rate = client.commission_rate if client.commission_rate is not None else effective_commission_rate(client.node)
         debt_before = client.current_debt if client is not None else 0
 
         invoice = Invoice.objects.create(

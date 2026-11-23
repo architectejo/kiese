@@ -492,7 +492,9 @@ def _push_client(node, record):
         node=bakery,
         cotisation_sociale=(_to_decimal(record.get('cotisation_sociale'), Decimal('0'))
                             if record.get('cotisation_sociale') not in (None, '') else None),
-        commission_rate=_to_decimal(record.get('commission_rate'), Decimal('0.25')),
+        # Q-026 : taux absent du push = défaut de la boulangerie (appliqué par Client.save).
+        **({'commission_rate': _to_decimal(record['commission_rate'], Decimal('0.25'))}
+           if record.get('commission_rate') not in (None, '') else {}),
         credit_limit=_to_decimal(record.get('credit_limit'), Decimal('50000.00')),
         client_type=record.get('client_type', 'DETAILLANT'),
         notes=record.get('notes', ''),

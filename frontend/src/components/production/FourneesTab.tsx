@@ -47,7 +47,7 @@ export const FourneesTab: React.FC<FourneesTabProps> = ({ breadStocks, sacValueF
               automatique dans DashboardLayout.tsx). */}
           {/* BUG-161 : en rotation, une seule équipe de service par journée : confirmation pour
               « l'autre équipe » (BUG-151) sans objet, section masquée. */}
-          {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && !rotationActive && (
+          {user && (user.role === 'GERANT' || user.role === 'FACTURIER' || user.role === 'LIVREUR') && !user.can_access_all_nodes && !rotationActive && (
             <OpeningConfirmationManualSection onConfirmed={() => loadData(viewNode || undefined)} />
           )}
 

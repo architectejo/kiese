@@ -64,6 +64,8 @@ export interface BakeryNode {
   monthly_social_contribution?: string;
   /** BUG-417 : carte / frais d'imprimé en FC, propre à la boulangerie (défaut serveur 1 000). */
   card_fee_fc?: string;
+  /** BUG-1103 : taux de commission par défaut des nouveaux clients ("0.25") ; null = taux global. */
+  default_commission_rate?: string | null;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;

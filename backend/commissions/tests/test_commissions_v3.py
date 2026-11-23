@@ -37,7 +37,9 @@ class Retenue737Tests(Base):
         self.assertEqual(ClientCommission.objects.filter(client=self.c).count(), 3)
         first = ClientCommission.objects.get(client=self.c, period__node=self.n1)
         self.assertEqual((first.deduction_debt, first.deduction_social), (D('10000.00'), D('1500.00')))
-        for n, card in ((self.n5, D('300.00')), (self.n3, D('700.00'))):
+        # BUG-1104 : la carte (QA1 = 1 000, boulangerie porteuse) n'est retenue qu'une fois
+        self.assertEqual(first.deduction_prints, D('1000.00'))
+        for n, card in ((self.n5, D('0.00')), (self.n3, D('0.00'))):
             r = ClientCommission.objects.get(client=self.c, period__node=n)
             self.assertEqual((r.deduction_debt, r.deduction_social, r.deduction_prints), (D('0.00'), D('0.00'), card))
             # CM = 50 000 x 0,25 = 12 500 ; net = 12 500 - carte

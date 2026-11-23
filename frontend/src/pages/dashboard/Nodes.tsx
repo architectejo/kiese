@@ -5,6 +5,7 @@ import {
   FiCheckCircle, FiXCircle, FiClock, FiShield
 } from 'react-icons/fi';
 import { apiClient } from '@/api/client';
+import { coreApi } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
 
 export interface BakeryNode {
@@ -16,6 +17,8 @@ export interface BakeryNode {
   monthly_social_contribution?: string;
   /** BUG-417 : carte / frais d'imprimé (FC), propre à la boulangerie. */
   card_fee_fc?: string;
+  /** BUG-1103 : taux de commission par défaut des nouveaux clients ("0.25") ; null = taux global. */
+  default_commission_rate?: string | null;
   is_active: boolean;
   last_sync: string | null;
   created_at: string;
@@ -72,6 +75,7 @@ export const Nodes: React.FC = () => {
     sac_value_fc: '',
     monthly_social_contribution: '2000',
     card_fee_fc: '1000',
+    default_commission_rate: '',
     is_active: true,
     team_a_start_time: '',
     team_a_end_time: '',
@@ -81,6 +85,7 @@ export const Nodes: React.FC = () => {
     team_rotation_enabled: false,
     block_sales_after_closure: false,
   });
+  const [globalRatePct, setGlobalRatePct] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const fetchNodes = async () => {
@@ -110,6 +115,7 @@ export const Nodes: React.FC = () => {
         sac_value_fc: node.sac_value_fc ?? '',
         monthly_social_contribution: node.monthly_social_contribution ?? '0',
         card_fee_fc: node.card_fee_fc ?? '1000',
+        default_commission_rate: node.default_commission_rate ?? '',
         is_active: node.is_active,
         team_a_start_time: toTimeInputValue(node.team_a_start_time),
         team_a_end_time: toTimeInputValue(node.team_a_end_time),
@@ -128,6 +134,7 @@ export const Nodes: React.FC = () => {
         sac_value_fc: '',
         monthly_social_contribution: '2000',
         card_fee_fc: '1000',
+        default_commission_rate: '',
         is_active: true,
         team_a_start_time: '',
         team_a_end_time: '',
@@ -137,6 +144,14 @@ export const Nodes: React.FC = () => {
         team_rotation_enabled: false,
         block_sales_after_closure: false,
       });
+    }
+    if (globalRatePct === null) {
+      coreApi.config.get()
+        .then(res => {
+          const r = parseFloat(String(res.data.default_commission_rate));
+          if (Number.isFinite(r)) setGlobalRatePct(String(Math.round(r * 100)));
+        })
+        .catch(() => { /* texte générique affiché */ });
     }
     setFormErrors({});
     setIsModalOpen(true);
@@ -163,8 +178,14 @@ export const Nodes: React.FC = () => {
         return;
       }
     }
+    const rateRaw = formData.default_commission_rate.trim().replace(',', '.');
+    if (rateRaw !== '' && (!Number.isFinite(Number(rateRaw)) || Number(rateRaw) < 0 || Number(rateRaw) > 0.3)) {
+      setFormErrors(p => ({ ...p, default_commission_rate: 'Le taux de commission doit être compris entre 0 et 0,30.' }));
+      return;
+    }
     const payload = {
       ...formData,
+      default_commission_rate: rateRaw !== '' ? rateRaw : null,
       sac_value_fc: formData.sac_value_fc !== '' ? formData.sac_value_fc : null,
       monthly_social_contribution: formData.monthly_social_contribution !== '' ? formData.monthly_social_contribution : '0',
       card_fee_fc: formData.card_fee_fc !== '' ? formData.card_fee_fc : '0',
@@ -463,6 +484,28 @@ export const Nodes: React.FC = () => {
                 </span>
                 {formErrors.card_fee_fc && (
                   <span role="alert" style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', display: 'block', marginTop: '2px' }}>{formErrors.card_fee_fc}</span>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="node-default-rate" style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px' }}>Taux de commission par défaut</label>
+                <input
+                  id="node-default-rate"
+                  type="number"
+                  min="0"
+                  max="0.30"
+                  step="0.01"
+                  value={formData.default_commission_rate}
+                  onChange={(e) => { setFormData({...formData, default_commission_rate: e.target.value}); setFormErrors(p => ({ ...p, default_commission_rate: '' })); }}
+                  className="form-input"
+                  style={{ fontSize: '0.8rem', height: '36px', padding: '0 10px' }}
+                  placeholder="Taux global"
+                />
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
+                  Vide = taux global ({globalRatePct !== null ? `${globalRatePct} %` : 'défini dans la configuration'}). Entre 0 et 0,30 (ex. 0,25 = 25 %). Appliqué aux nouveaux clients de cette boulangerie.
+                </span>
+                {formErrors.default_commission_rate && (
+                  <span role="alert" style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', display: 'block', marginTop: '2px' }}>{formErrors.default_commission_rate}</span>
                 )}
               </div>
 

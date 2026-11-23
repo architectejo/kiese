@@ -127,6 +127,12 @@ class Node(models.Model):
         help_text=_("Montant FC de la carte retenu par client dans cette boulangerie "
                     "(remarque.md : défaut 1 000 FC)")
     )
+    default_commission_rate = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True, default=None,
+        verbose_name=_("Taux de commission par défaut (boulangerie)"),
+        help_text=_("Q-026 : taux proposé à la création d'un client de cette boulangerie "
+                    "(ex: 0.25). Vide = reprendre le taux global de la configuration.")
+    )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Active"),
@@ -397,6 +403,18 @@ class User(AbstractUser):
 
 
 # ─── Global Configuration ───────────────────────────────────────────
+
+def effective_commission_rate(node=None):
+    """Q-026 : taux de commission par défaut d'une boulangerie, sinon celui de `Config`.
+
+    Valeur proposée à la création d'un client ; ne modifie jamais un `Client.commission_rate`
+    déjà saisi ni une `CommissionPeriod.commission_rate` figée.
+    """
+    rate = getattr(node, 'default_commission_rate', None) if node is not None else None
+    if rate is None:
+        rate = Config.get_instance().default_commission_rate
+    return Decimal(str(rate))
+
 
 class Config(models.Model):
     """

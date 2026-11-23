@@ -157,6 +157,8 @@ export const Clients: React.FC = () => {
   const [newAddress, setNewAddress] = useState('');
   const [newCreditLimit, setNewCreditLimit] = useState(50000);
   const [newCommissionRate, setNewCommissionRate] = useState(25);
+  const [globalRatePct, setGlobalRatePct] = useState<number | null>(null);
+  const rateTouchedRef = useRef(false);
   const [newCotisationSociale, setNewCotisationSociale] = useState('');
   const [newPhoto, setNewPhoto] = useState<File | null>(null);
   const [newPhotoPreview, setNewPhotoPreview] = useState<string | null>(null);
@@ -331,14 +333,30 @@ export const Clients: React.FC = () => {
   const openAddModal = async () => {
     setAddError(null);
     setSelectedNode('');
+    rateTouchedRef.current = false;
     setIsAddModalOpen(true);
-    if (needsNodeSelector && nodesList.length === 0) {
+    // BUG-1103 : taux global de repli (la lecture peut être refusée selon le rôle : on ignore).
+    coreApi.config.get()
+      .then(res => { const r = parseFloat(String(res.data.default_commission_rate)); if (Number.isFinite(r)) setGlobalRatePct(Math.round(r * 100)); })
+      .catch(() => {});
+    if (nodesList.length === 0) {
       try {
         const res = await coreApi.nodes.list();
         setNodesList(res.data);
       } catch { /* ignore */ }
     }
   };
+
+  // BUG-1103 : pré-remplit le taux avec celui de la boulangerie du client (sinon le taux global),
+  // tant que l'utilisateur ne l'a pas modifié lui-même.
+  useEffect(() => {
+    if (!isAddModalOpen || rateTouchedRef.current) return;
+    const nodeId = selectedNode || user?.node || '';
+    const node = nodesList.find(n => n.id === nodeId);
+    const raw = node?.default_commission_rate;
+    const pct = raw != null && raw !== '' ? Math.round(parseFloat(raw) * 100) : globalRatePct;
+    if (pct != null && Number.isFinite(pct)) setNewCommissionRate(pct);
+  }, [isAddModalOpen, selectedNode, nodesList, globalRatePct, user?.node]);
 
   const closeAddClientModal = () => {
     setIsAddModalOpen(false);
@@ -960,7 +978,7 @@ export const Clients: React.FC = () => {
         newCreditLimit={newCreditLimit}
         setNewCreditLimit={setNewCreditLimit}
         newCommissionRate={newCommissionRate}
-        setNewCommissionRate={setNewCommissionRate}
+        setNewCommissionRate={(v: number) => { rateTouchedRef.current = true; setNewCommissionRate(v); }}
         newCotisationSociale={newCotisationSociale}
         setNewCotisationSociale={setNewCotisationSociale}
         newPhone={newPhone}

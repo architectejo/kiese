@@ -247,7 +247,9 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                         'commission_rate': client.commission_rate,
                         'deduction_debt': Decimal('0.00'),
                         'deduction_social': Decimal('0.00'),
-                        'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
+                        # BUG-1104 : la carte (montant fixe par client et par mois, BUG-417 : valeur
+                        # de la boulangerie porteuse) est posee plus bas, sur UNE seule ligne.
+                        'deduction_prints': Decimal('0.00'),
                         'node_origin': node.code,
                     }
                 )
@@ -284,6 +286,23 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                             first.deduction_social = cotisation
                             first.compute(float(config.annual_bonus_rate))
                             first.save()
+                # BUG-1104 : carte = UNE retenue par client et par mois, portee par la ligne non payee
+                # la plus ancienne si aucune ligne du mois ne la porte deja (porteuse supprimee :
+                # reportee ; porteuse payee : conservee, les autres restent a 0).
+                if not month_rows.filter(card_applied=True).exists():
+                    carrier = month_rows.filter(
+                        is_paid=False, period__is_closed=False,
+                    ).select_related('period__node').order_by('created_at', 'pk').first()
+                    if carrier is not None:
+                        fee = carrier.period.node.card_fee_fc
+                        if carrier.pk == commission.pk:
+                            commission.deduction_prints = Decimal(str(commission.deduction_prints)) + fee
+                            commission.card_applied = True
+                        else:
+                            carrier.deduction_prints = Decimal(str(carrier.deduction_prints)) + fee
+                            carrier.card_applied = True
+                            carrier.compute(float(config.annual_bonus_rate))
+                            carrier.save()
                 commission.compute(float(config.annual_bonus_rate))
                 commission.save()
 

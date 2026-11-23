@@ -532,8 +532,9 @@ class ClientMultiBoulangerieTests(Base):
         self.p1 = self.generate(self.n1)
 
     def test_chaque_boulangerie_a_sa_ligne_avec_sa_carte(self):
+        # BUG-1104 : carte = UNE retenue par client et par mois, celle de la boulangerie porteuse (generee en premier : QA3 = 700)
         self.assertEqual(self.row(self.p3, self.c).deduction_prints, D('700.00'))
-        self.assertEqual(self.row(self.p1, self.c).deduction_prints, D('1000.00'))
+        self.assertEqual(self.row(self.p1, self.c).deduction_prints, D('0.00'))
         self.assertEqual(self.row(self.p1, self.c).commission_gross, D('12500.00'))
 
     def test_dette_du_client_retenue_une_seule_fois_sur_l_ensemble_des_boulangeries(self):

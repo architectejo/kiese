@@ -165,7 +165,21 @@ class Client(SyncableModel):
     def full_name(self):
         return f"{self.last_name} {self.first_name}"
 
+    def __init__(self, *args, **kwargs):
+        # Q-026 : un client construit SANS taux (REST, import Excel, push sync) reçoit à la création le
+        # taux par défaut de sa boulangerie. Un objet relu de la base (args positionnels) n'est jamais touché.
+        self._rate_unset = not args and 'commission_rate' not in kwargs
+        super().__init__(*args, **kwargs)
+        self._rate_initial = self.commission_rate if self._rate_unset else None
+
+    def _apply_node_default_rate(self):
+        if self._state.adding and getattr(self, '_rate_unset', False) and self.node_id                 and self.commission_rate == self._rate_initial:
+            from core.models import effective_commission_rate
+            self.commission_rate = effective_commission_rate(self.node)
+        self._rate_unset = False
+
     def save(self, *args, **kwargs):
+        self._apply_node_default_rate()
         if self.code:
             super().save(*args, **kwargs)
             return

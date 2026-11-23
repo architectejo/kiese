@@ -362,6 +362,27 @@ def _parse_after_id(raw):
         raise ParseError("Paramètre « client_after_id » invalide : UUID attendu.")
 
 
+def _hhmm(value):
+    return value.strftime('%H:%M') if value else None
+
+
+def _node_settings_block(node):
+    """BUG-1030 : bloc `node_settings` du nœud authentifié uniquement (décimales en chaînes, heures HH:MM)."""
+    return {
+        'default_commission_rate': str(node.default_commission_rate) if node.default_commission_rate is not None else None,
+        'card_fee_fc': str(node.card_fee_fc),
+        'monthly_social_contribution': str(node.monthly_social_contribution),
+        'sac_value_fc': str(node.sac_value_fc) if node.sac_value_fc is not None else None,
+        'handover_time': _hhmm(node.handover_time),
+        'block_sales_after_closure': bool(node.block_sales_after_closure),
+        'team_rotation_enabled': bool(node.team_rotation_enabled),
+        'team_a_start_time': _hhmm(node.team_a_start_time),
+        'team_a_end_time': _hhmm(node.team_a_end_time),
+        'team_b_start_time': _hhmm(node.team_b_start_time),
+        'team_b_end_time': _hhmm(node.team_b_end_time),
+    }
+
+
 class PullView(APIView):
     """GET /api/sync/pull/ — descente Cloud → Local (SYNC.md §4)."""
     authentication_classes = [NodeTokenAuthentication]
@@ -519,6 +540,9 @@ class PullView(APIView):
         # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
         # émettrice ou réceptrice (effets de stock miroir, alertes).
         payload['node_code'] = node.code
+        # BUG-1030 (Q-026) : paramètres PROPRES à la boulangerie du poste (jamais ceux d'un autre nœud,
+        # aucun champ sensible). Additif : un poste ancien ignore le bloc.
+        payload['node_settings'] = _node_settings_block(node)
         delivered_terminal = {t['id'] for t in transfers if t['transfer_status'] in terminal}
         if state and delivered_terminal & set(open_ids):
             state.transfer_ids = sorted(set(open_ids) - delivered_terminal)
