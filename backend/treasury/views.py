@@ -761,6 +761,9 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         if date_error:
             raise ValidationError({'detail': date_error})
 
+        # BUG-996 : le compteur de resoumission n'avance que si la clôture était INFIRMÉE
+        # (comme le cloud) ; une simple édition d'une clôture non infirmée ne le touche pas.
+        was_rejected = bool(serializer.instance.is_rejected)
         node = serializer.instance.node
         total_entries = FacturierReport.objects.filter(
             node=node, date=target_date
@@ -779,7 +782,8 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
             with transaction.atomic():
                 closure = serializer.save(is_rejected=False, rejection_reason='')
                 # BUG-985 : marqueur explicite de resoumission (même à contenu identique).
-                closure.resubmit_count = (closure.resubmit_count or 0) + 1
+                if was_rejected:
+                    closure.resubmit_count = (closure.resubmit_count or 0) + 1
                 closure.total_entries  = total_entries
                 closure.total_expenses = total_expenses
                 closure.compute_physical_cash()

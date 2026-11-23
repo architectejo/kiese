@@ -50,6 +50,7 @@ class R985(Base13):
     def test_payload_exporte_le_compteur(self):
         self.report(self.n1, 'A', '10000')
         d = self.close(self.g1, {'bills_10000': 1}).json()
+        self._reject(d)  # BUG-996 : seule une resoumission apres infirmation incremente le compteur
         self.assertEqual(self._put({'id': d['id']}).status_code, 200)
         rows = build_outbound_payload('C1')['records'][CLO]
         self.assertEqual([x['resubmit_count'] for x in rows if x['id'] == d['id']], [1])
@@ -109,7 +110,6 @@ class R985(Base13):
         self.push(self.raw1, CLO, dict(rec, resubmit_count=99))
         self.assertFalse(self._rejected(rec))
 
-    @expectedFailure  # BUG-996
     def test_rejeu_d_un_enregistrement_anterieur_a_l_infirmation(self):
         """Poste : edition (PUT) d'une cloture NON infirmee -> compteur local 1 (le cloud reste a 0 car
         il n'incremente que sur une cloture infirmee). La direction infirme ; le rejeu du MEME
@@ -119,7 +119,7 @@ class R985(Base13):
         d = self.close(self.g1, {'bills_10000': 1}).json()
         self.assertEqual(self._put(d).status_code, 200)
         rec = next(x for x in build_outbound_payload('C1')['records'][CLO] if x['id'] == d['id'])
-        self.assertEqual(rec['resubmit_count'], 1)
+        self.assertEqual(rec['resubmit_count'], 0)  # BUG-996 : une edition non infirmee n'incremente plus
         CashClosure.objects.filter(pk=d['id']).delete()           # cloud : premiere remontee
         self.push(self.raw1, CLO, dict(rec, resubmit_count=0))     # (cloud a 0)
         self._reject(rec)
