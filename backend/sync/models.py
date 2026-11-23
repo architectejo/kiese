@@ -331,3 +331,20 @@ class TransferMirror(models.Model):
         verbose_name = _("Miroir de stock d'un transfert")
         verbose_name_plural = _("Miroirs de stock des transferts")
         unique_together = [['node', 'transfer_id']]
+
+
+class TransferPull(models.Model):
+    """
+    BUG-1007 : instant (début de réponse) du dernier PULL abouti qui a livré ce transfert à ce
+    poste. Absence de ligne = jamais livré. Critère « poste en retard » de `_store_mirrors`
+    (au lieu de `Node.last_sync`, posé aussi par chaque push). Table séparée de TransferMirror
+    pour ne pas modifier le schéma intermédiaire 0004/0005.
+    """
+    node = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='transfer_pulls')
+    transfer_id = models.UUIDField(db_index=True)
+    pulled_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = _("Dernier pull d'un transfert")
+        verbose_name_plural = _("Derniers pulls des transferts")
+        unique_together = [['node', 'transfer_id']]

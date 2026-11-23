@@ -25,7 +25,7 @@ from core.permissions import IsHeadquarters
 from .authentication import NodeTokenAuthentication
 from .exceptions import TransientSyncError
 from .permissions import IsValidNodeToken
-from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog, TransferMirror
+from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog, TransferMirror, TransferPull
 from .serializers import SyncConflictLogSerializer
 from .services import process_push_batch
 
@@ -126,6 +126,8 @@ def _store_mirrors(node, raw):
     mine_objs = {t.pk: t for t in mine_qs}
     mine = set(mine_objs)
     _bump_peaks(node, mine_objs.values())
+    pulled = dict(TransferPull.objects.filter(node=node, transfer_id__in=list(mine)).values_list(
+        'transfer_id', 'pulled_at'))
     bounds = {}
     for tid, t in mine_objs.items():
         for bp, pair in _effective_line_bounds(t).items():
@@ -140,7 +142,7 @@ def _store_mirrors(node, raw):
         # au siège) peut légitimement pousser un marqueur au-dessus de la borne actuelle, jusqu'à la
         # plus haute valeur historique connue du cloud.
         stale = (mine_objs[tid].transfer_status != 'PENDING'
-                 and (node.last_sync is None or node.last_sync < mine_objs[tid].updated_at))
+                 and (tid not in pulled or pulled[tid] < mine_objs[tid].updated_at))
         merged = dict(old)
         rejected = []
         for bp, (sent, recv) in mirror.items():
@@ -506,6 +508,9 @@ class PullView(APIView):
             state.transfer_ids = sorted(set(open_ids) - delivered_terminal)
             state.save(update_fields=['transfer_ids', 'updated_at'])
 
+        # BUG-1007 : pull abouti -> horodatage par transfert livré (critère « poste en retard »).
+        for tid in by_id:
+            TransferPull.objects.update_or_create(node=node, transfer_id=tid, defaults={'pulled_at': now})
         Node.objects.filter(pk=node.pk).update(last_sync=now)
         return Response(payload)
 

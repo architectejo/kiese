@@ -272,7 +272,6 @@ class A17Peak(A17Base):
         self.assertEqual(self.total(self.b3), 100)
         self.assertEqual(self.oob().count(), 0)
 
-    @expectedFailure   # BUG-1007
     def test_BUG_1007_poste_perime_qui_repousse_sans_pull_est_signale_a_tort(self):
         """Poste honnete dont le pull a echoue : le 1er push (perime) passe grace au pic mais pose `last_sync`
         a maintenant ; le rejeu du MEME marqueur honnete [100, 0] (nouveau lot, pull toujours echoue) n'est
