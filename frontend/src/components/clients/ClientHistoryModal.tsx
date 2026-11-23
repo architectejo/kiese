@@ -83,11 +83,12 @@ export const ClientHistoryModal: React.FC<Props> = ({ clientId, clientName, init
         <button className="btn btn-secondary" disabled={!older || loading} onClick={() => older && setMonth(older)}
           aria-label="Mois précédent" style={{ padding: '6px 12px' }}>‹ Précédent</button>
         <select
+          className="form-input"
           aria-label="Choisir le mois"
           value={data?.month ?? ''}
           disabled={!data || loading}
           onChange={e => setMonth(e.target.value)}
-          style={{ padding: '6px 8px', minWidth: '150px' }}
+          style={{ minWidth: '170px', width: 'auto' }}
         >
           {months.map(m => (
             <option key={m} value={m}>{monthLabel(m)}{m === data?.current_month ? ' (mois courant)' : ''}</option>

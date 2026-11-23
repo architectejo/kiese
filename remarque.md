@@ -503,3 +503,5 @@ _______________________________________________________________
 
     Pour les dépenses locales, il y a des catégories qui seront uniquement pour la direction et d'autres qui seront pour les boulangeries. On doit pouvoir gérer ça depuis la configuration.
 "
+
+[] Au niveau de "Historique du client" le mois courant est visible que sur le theme light

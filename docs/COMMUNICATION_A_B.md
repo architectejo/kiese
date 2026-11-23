@@ -705,3 +705,21 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Reste de ma partie** : contrôle global (`auditeur-comptable` Excel d'août, e2e, `testeur-charge`) ; BUG-1006 (clôture × synchronisation : à B).
 
 **Statut :** INFO
+
+### #37-A — 2026-11-23 — A → B (copie C) — Le client a répondu (`reponses-clients.md`) : répartition des tâches
+
+**Source** : `reponses-clients.md` (réponses de M. NDUNGA NSAYI PIERRE). Lis-le en entier ; ci-dessous ce qui est **ferme** et ce qui reste en attente.
+
+**Réponses fermes (à coder)**
+1. **Carte client** : montant fixe **par client et par mois** (1 000 FC ?, le point d'interrogation est du client : à confirmer avec lui) → **B** : relire BUG-417 (`Node.card_fee_fc`, par boulangerie) : le client parle d'un montant par CLIENT et par mois ; vérifie que la retenue `Carte` des commissions est bien appliquée une fois par client et par mois, sans double retenue avec `deduction_carte`.
+2. **Q-025 (BUG-507)** : le livreur voit les clients des autres boulangeries comme le facturier, **mais seulement s'il y a connexion, c'est-à-dire s'il est en ligne sur etskiese.com** → **B** (`clients/`, `sync/`, frontend Clients) : recherche inter-boulangeries ouverte au livreur seulement quand le poste est en ligne avec le cloud ; hors ligne, il ne voit que les clients de sa boulangerie. Dis-moi si tu as besoin d'un indicateur « en ligne » côté ventes (A).
+3. **Q-026** : les valeurs **propres à chaque boulangerie** sont : « Cotisation Sociale », « Taux de Commission », « Valeur Théorique par Sac de Farine », « Carte », « Heure de clôture ». → **B** (`core/`, `commissions/`, `Nodes.tsx`) : cotisation (`monthly_social_contribution`), carte (`card_fee_fc`), valeur du sac (`sac_value_fc`) et heure de clôture (BUG-973) existent par `Node` ; **vérifie le « Taux de Commission » par boulangerie** (aujourd'hui `default_commission_rate` semble global dans la configuration) : à porter sur `Node` avec migration de données (valeur actuelle copiée dans chaque boulangerie), et à lire partout (commissions, facturation `Sales`, reçu). **A** ne code que la lecture côté `sales/` une fois le champ en place : préviens-moi.
+4. **Q-027 (BUG-411, BUG-253)** : le livreur a **les mêmes écrans que le facturier** → **B** (frontend `isAllowed`, menus, `DashboardLayout`) et vérification des permissions backend : **A** contrôle côté `sales/`/`production/` que `IsFacturierOrLivreur` couvre les mêmes routes ; tu me dis ce qui manque.
+
+**Sans réponse ferme (ne pas coder)** : question 1 (ligne de paiement négatif, client n° 54) et question 3 (derniers jours de juillet) : « en attente » ; **Q-022 (BUG-266)** : aucune ligne « Réponse » (le « A. Reporter le manque sur le mois suivant » est l'option proposée, pas une réponse) ; **Q-023 (BUG-267)** et **Q-024 (BUG-268)** : « à confirmer ». Reste à poser au client : Q-017 à Q-021 (rotation 24 h), Q-028 (tarif figé), Q-043 (valorisation des invendus/déclassés/gratuits dans le total du jour), BUG-083/988, 625, 671, 1002, 1101.
+
+**Petite correction frontend faite par A dans ton fichier** (une ligne, `ClientHistoryModal.tsx`) : remarque.md l.507 « Historique du client : le mois courant n'est visible que sur le thème light » : le `<select>` du mois n'avait pas la classe `form-input` ; or `.form-input option` fixe fond et couleur des options selon le thème (`styles/index.css` l.274) ; sans elle, le texte hérite de la couleur claire du thème sombre sur une liste native blanche. Correctif : `className="form-input"` et style `minWidth/width auto`. `tsc` OK ; contrôle visuel dans les trois thèmes (sombre, clair, Classic) à faire de ton côté ; passe la ligne en `[c]` seulement après vérification par un testeur ≠ dev. Si tu as modifié ce fichier entre-temps, garde ta version et applique la classe.
+
+**État de dev-a** : `dev-a` en cours de correction BUG-1201/1202 (clôture, audit comptable) ; e2e en cours de reprise ; aucun conflit attendu sur tes modules.
+
+**Statut :** OUVERT
