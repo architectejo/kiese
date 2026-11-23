@@ -6,7 +6,6 @@ Donnees fictives. Les `@expectedFailure` referencent leur ticket.
 import uuid
 from datetime import timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -244,7 +243,6 @@ class V9BatchTerminal(V9Base):
 # ------------------------------------------------------------------ defauts voisins
 class V9Neighbours(V9Base):
     # ---- lignes de fournee / transferts : doublon d'une autre id ----------------
-    @expectedFailure
     def test_BUG_920_duplicate_line_other_id_not_silently_accepted(self):
         s = self.sess()
         push(self.a1, LBL_S, s)
@@ -255,7 +253,6 @@ class V9Neighbours(V9Base):
         # soit rejete, soit la quantite est la bonne ; jamais ACCEPTED avec une valeur perdue
         self.assertTrue(st == 'REJECTED' or q == [77], (st, q))
 
-    @expectedFailure
     def test_BUG_920_duplicate_transfer_line_other_id_not_silently_accepted(self):
         t = {'id': uid(), 'from_node': self.k1.code, 'to_node': self.k2.code}
         push(self.a1, LBL_T, t)
@@ -295,21 +292,18 @@ class V9Neighbours(V9Base):
         self.assertEqual(push(self.a2, LBL_TL, dict(ln, quantity_received=98))[0], 'ACCEPTED')
         self.assertEqual(BreadTransferLine.objects.get(pk=ln['id']).quantity_received, 98)
 
-    @expectedFailure
     def test_BUG_921_line_added_to_confirmed_transfer_refused(self):
         t, _ = self._transfer_with_line('CONFIRMED')
         st = push(self.a1, LBL_TL, {'transfer': t['id'], 'bread_price': self.b5.pk, 'quantity_sent': 40})[0]
         self.assertEqual(st, 'REJECTED')
         self.assertEqual(BreadTransferLine.objects.filter(transfer_id=t['id']).count(), 1)
 
-    @expectedFailure
     def test_BUG_921_received_quantity_rewritten_after_confirmation_refused(self):
         t, ln = self._transfer_with_line('CONFIRMED')
         BreadTransferLine.objects.filter(pk=ln['id']).update(quantity_received=100)
         st = push(self.a2, LBL_TL, dict(ln, quantity_received=1))[0]
         self.assertEqual(BreadTransferLine.objects.get(pk=ln['id']).quantity_received, 100, st)
 
-    @expectedFailure
     def test_BUG_922_transfer_to_itself_refused(self):
         t = {'id': uid(), 'from_node': self.k1.code, 'to_node': self.k1.code}
         self.assertEqual(push(self.a1, LBL_T, t)[0], 'REJECTED')
@@ -329,12 +323,10 @@ class V9Neighbours(V9Base):
         self.assertEqual(push(self.a1, LBL_S, b)[0], 'REJECTED')
         self.assertEqual(ProductionSession.objects.filter(node=self.k1, date=a['date'], team='A').count(), 1)
 
-    @expectedFailure
     def test_BUG_923_future_closed_at_refused(self):
         rec, res = self.push_sess(is_closed=True, closed_at='2099-01-01T00:00:00Z')
         self.assertEqual(res[0], 'REJECTED')
 
-    @expectedFailure
     def test_BUG_923_future_closed_at_on_transition_refused(self):
         s = self.sess()
         push(self.a1, LBL_S, s)
@@ -342,7 +334,6 @@ class V9Neighbours(V9Base):
         c = ProductionSession.objects.get(pk=s['id'])
         self.assertTrue(c.closed_at is None or c.closed_at <= timezone.now() + timedelta(days=1), c.closed_at)
 
-    @expectedFailure
     def test_BUG_924_inconsistent_session_totals_not_stored_as_is(self):
         """total_breads / total_fc_produced / theoretical_yield sont recalcules par REST depuis les lignes ;
         le push les copie : un poste peut creer une fournee a 4 milliards de FC sans aucune ligne."""
@@ -351,7 +342,6 @@ class V9Neighbours(V9Base):
         self.assertTrue(res[0] == 'REJECTED' or (s and s.total_fc_produced == 0), (res, s and s.total_fc_produced))
 
     # ---- disposals / consommables -------------------------------------------------
-    @expectedFailure
     def test_BUG_925_disposal_value_overflow_refused(self):
         s = self.sess()
         push(self.a1, LBL_S, s)
@@ -362,7 +352,6 @@ class V9Neighbours(V9Base):
         self.assertEqual(st, 'REJECTED')
         self.assertFalse(BreadDisposal.objects.filter(pk=d['id']).exists())
 
-    @expectedFailure
     def test_BUG_926_movement_unknown_or_oversized_consumable_type_refused(self):
         for ctype in ('X' * 60, 12345, ['SALT'], 'sel ' * 5, ' '):
             rec = {'id': uid(), 'node': self.k1.code, 'consumable_type': ctype, 'movement_type': 'ENTRY', 'quantity': '1'}
@@ -395,7 +384,6 @@ class V9Neighbours(V9Base):
             self.assertEqual(res[lab][0][0], 'REJECTED', lab)
 
     # ---- factures ------------------------------------------------------------------
-    @expectedFailure
     def test_BUG_927_invoice_invalid_team_refused(self):
         for team in ('Z', 'J', 'AB', '1'):
             rec = self.inv(team=team)
@@ -403,14 +391,12 @@ class V9Neighbours(V9Base):
             self.assertEqual(st, 'REJECTED', team)
             self.assertFalse(Invoice.objects.filter(pk=rec['id']).exists(), team)
 
-    @expectedFailure
     def test_BUG_928_transfer_quantities_above_2e9_refused(self):
         t = {'id': uid(), 'from_node': self.k1.code, 'to_node': self.k2.code, 'bread_price': self.b3.pk,
              'quantity_sent': 3_000_000_000}
         self.assertEqual(push(self.a1, LBL_T, t)[0], 'REJECTED')
         self.assertFalse(BreadTransfer.objects.filter(pk=t['id']).exists())
 
-    @expectedFailure
     def test_BUG_928_transfer_line_quantity_above_2e9_refused(self):
         t, _ = self._transfer_with_line()
         st = push(self.a1, LBL_TL, {'transfer': t['id'], 'bread_price': self.b5.pk, 'quantity_sent': 3_000_000_000})[0]
@@ -423,7 +409,6 @@ class V9LineIdCollision(V9Base):
     """`sync_now` pousse `id: str(l.id)` (PK entiere locale) pour InvoiceLine / ProductionSessionLine /
     BreadTransferLine ; deux postes ont forcement les memes petits ids."""
 
-    @expectedFailure
     def test_BUG_919_invoice_lines_same_local_id_two_nodes(self):
         i1, i2 = self.inv(), self.inv(node=self.k2.code)
         push(self.a1, LBL_I, i1)
@@ -433,7 +418,6 @@ class V9LineIdCollision(V9Base):
         self.assertEqual((r1[0], r2[0]), ('ACCEPTED', 'ACCEPTED'), (r1, r2))
         self.assertEqual(InvoiceLine.objects.filter(invoice_id=i2['id']).count(), 1)
 
-    @expectedFailure
     def test_BUG_919_session_lines_same_local_id_two_nodes(self):
         s1, s2 = self.sess(), self.sess(node=self.k2.code)
         push(self.a1, LBL_S, s1)

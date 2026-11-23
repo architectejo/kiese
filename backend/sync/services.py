@@ -530,12 +530,37 @@ def _parse_line_price(value):
     return int(number)
 
 
+def _resolve_invoice_line(record_id, record):
+    """BUG-919 : retrouve la ligne déjà connue du cloud pour ce payload.
+
+    Contrat d'id : l'id envoyé par le poste (PK entière locale) n'est qu'un
+    INDICE. Il désigne la ligne cloud de même PK seulement si elle appartient à
+    la facture indiquée (ou si la facture n'est pas précisée : ancien payload).
+    Sinon (collision avec la ligne d'un autre poste), la ligne est cherchée par
+    clé naturelle (facture, catégorie de pain)."""
+    from sales.models import InvoiceLine
+
+    invoice_uuid = _strict_uuid(record.get('invoice'))
+    line = None
+    if record_id not in (None, '') and str(record_id).strip().isdigit() and str(record_id).isascii():
+        line = InvoiceLine.objects.filter(pk=int(str(record_id).strip())).first()
+    if line is None:
+        return None     # id libre : nouvelle ligne (créée avec cet id)
+    if invoice_uuid is None or line.invoice_id == invoice_uuid:
+        return line
+    # id déjà pris par la ligne d'une AUTRE facture : collision entre postes.
+    bp = _bread_price_or_none(record.get('bread_price'))
+    if bp is None:
+        return None
+    return InvoiceLine.objects.filter(invoice_id=invoice_uuid, bread_price=bp).order_by('pk').first()
+
+
 def _push_invoice_line(node, record):
     from core.models import BreadPrice
     from sales.models import Invoice, InvoiceLine
 
     record_id = record.get('id')
-    existing_line = InvoiceLine.objects.filter(pk=record_id).first() if record_id else None
+    existing_line = _resolve_invoice_line(record_id, record)
     if existing_line is not None:
         # BUG-321 : quantité servie réduite (livraison partielle / non servi).
         # Le prix figé et le commandé initial restent inchangés ; on ne
@@ -632,8 +657,11 @@ def _push_invoice_line(node, record):
     kwargs = dict(invoice=invoice, bread_price=bread_price, quantity=quantity)
     if full_unit_price is not None:
         kwargs['full_unit_price'] = full_unit_price
-    if record_id:
-        kwargs['id'] = record_id
+    # BUG-919 : l'id du poste n'est repris comme clé que s'il est libre ; sinon
+    # (collision avec la ligne d'un autre poste) la clé cloud est auto-attribuée
+    # et la ligne se retrouve ensuite par (facture, catégorie).
+    if record_id and str(record_id).strip().isdigit() and str(record_id).isascii()             and not InvoiceLine.objects.filter(pk=int(record_id)).exists():
+        kwargs['id'] = int(record_id)
     line = InvoiceLine.objects.create(**kwargs)
     if unit_price is not None and line.unit_price != unit_price:
         # Prix net exact du nœud local (ex. arrondi soldée) : update() pour ne
@@ -805,15 +833,10 @@ def _push_production_session(node, record):
         team=record.get('team', ''),
         date=_date.fromisoformat(record['date']),
         flour_sacks_used=_to_decimal(record.get('flour_sacks_used')),
-        breads_300=record.get('breads_300', 0),
-        breads_400=record.get('breads_400', 0),
-        breads_500=record.get('breads_500', 0),
-        breads_1000=record.get('breads_1000', 0),
-        total_breads=record.get('total_breads', 0),
-        total_fc_produced=record.get('total_fc_produced', 0),
-        theoretical_yield=record.get('theoretical_yield', 0),
-        yield_gap=record.get('yield_gap', 0),
-        sac_value_fc_used=record.get('sac_value_fc_used', 200000),
+        # BUG-924 : les totaux (pains, FC, rendement, écart) ne sont JAMAIS copiés
+        # du poste : ils sont recalculés depuis les lignes (compute_totals, comme
+        # la voie REST) après la sauvegarde, puis à chaque ligne poussée.
+        sac_value_fc_used=record.get('sac_value_fc_used') or 200000,
         is_closed=bool(record.get('is_closed', False)),
         closed_at=record.get('closed_at'),
         closure_summary=record.get('closure_summary'),
@@ -821,25 +844,40 @@ def _push_production_session(node, record):
         node_origin=record.get('node_origin', bakery_code),
     )
     session.save(_sync_bypass=True)
+    _recompute_session_totals(session)
     if session.is_closed:
         _batch_terminal_parents().add(str(session.pk))
     return _record_result(record_id, True)
 
 
+def _recompute_session_totals(session):
+    """BUG-924 : totaux de la fournée dérivés de ses lignes (update() : pas de save())."""
+    from production.models import ProductionSession
+    session.compute_totals()
+    ProductionSession.objects.filter(pk=session.pk).update(
+        total_breads=session.total_breads, total_fc_produced=session.total_fc_produced,
+        theoretical_yield=session.theoretical_yield, yield_gap=session.yield_gap,
+        breads_300=session.breads_300, breads_400=session.breads_400,
+        breads_500=session.breads_500, breads_1000=session.breads_1000,
+    )
+
+
 def _push_production_session_line(node, record):
-    from core.models import BreadPrice
+    """Ligne de fournée. BUG-919 : l'id local du poste (PK entière auto-incrémentée)
+    n'est JAMAIS utilisé comme clé cloud ; la ligne est identifiée par sa clé
+    naturelle (session, catégorie de pain, source), unique en base. Rejeu
+    idempotent, pas de collision entre postes, lignes déjà synchronisées
+    retrouvées sans doublon."""
     from production.models import ProductionSession, ProductionSessionLine
 
     record_id = record.get('id')
-    if record_id and ProductionSessionLine.objects.filter(pk=record_id).exists():
-        return _record_result(record_id, True)
-
-    session = ProductionSession.objects.filter(pk=record.get('session')).first()
+    session_uuid = _strict_uuid(record.get('session'))
+    session = ProductionSession.objects.filter(pk=session_uuid).first() if session_uuid else None
     if session is None:
         return _record_result(record_id, False, "dépendance manquante : session")
     if session.node_id != node.pk:
         return _record_result(record_id, False, "session d'une autre boulangerie refusée")
-    bread_price = BreadPrice.objects.filter(pk=record.get('bread_price')).first()
+    bread_price = _bread_price_or_none(record.get('bread_price'))
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
@@ -847,29 +885,44 @@ def _push_production_session_line(node, record):
     if record.get('quantity', 0) is None:
         return _record_result(record_id, False, "« quantity » manquante")
     quantity = _sync_int(record.get('quantity', 0), 'quantity')
-    # BUG-905 : pas de ligne sur une fournée clôturée (rejeu idempotent d'une
-    # ligne déjà présente pour cette catégorie : accepté).
-    if session.is_closed and str(session.pk) not in _batch_terminal_parents():
-        if ProductionSessionLine.objects.filter(session=session, bread_price=bread_price).exists():
-            return _record_result(record_id, True)
+    # BUG-142 : `source` (DECLARED/CARRYOVER), défaut DECLARED si absent.
+    source = record.get('source') or ProductionSessionLine.Source.DECLARED
+    if source not in ProductionSessionLine.Source.values:
+        return _record_result(record_id, False, "« source » invalide")
+
+    # BUG-905 : pas de nouvelle valeur sur une fournée clôturée (sauf fournée
+    # terminée dans ce même lot, avec ses lignes).
+    locked = session.is_closed and str(session.pk) not in _batch_terminal_parents()
+    existing = ProductionSessionLine.objects.filter(
+        session=session, bread_price=bread_price, source=source).first()
+    if existing is not None:
+        if existing.quantity == quantity:
+            return _record_result(record_id, True)      # rejeu idempotent
+        if locked:
+            return _record_result(record_id, False, "fournée clôturée : modification de ligne refusée")
+        # BUG-920 : même (fournée, catégorie, source) avec une autre quantité =
+        # mise à jour de la ligne (ex. incrément à la livraison), jamais « accepté » sans effet.
+        ProductionSessionLine.objects.filter(pk=existing.pk).update(quantity=quantity)
+        _recompute_session_totals(session)
+        return _record_result(record_id, True)
+    if locked:
         return _record_result(record_id, False, "fournée clôturée : ajout de ligne refusé")
 
-    # BUG-142 : propage `source` (DECLARED/CARRYOVER) si le nœud source l'a
-    # envoyé ; sinon le défaut du modèle (DECLARED) s'applique — compatible
-    # avec un nœud distant pas encore mis à jour (champ absent du payload).
-    kwargs = dict(
-        session=session, bread_price=bread_price, quantity=quantity,
-        source=record.get('source', 'DECLARED'),
-    )
-    if record_id:
-        kwargs['id'] = record_id
     try:
-        ProductionSessionLine.objects.create(**kwargs)
+        with transaction.atomic():
+            ProductionSessionLine.objects.create(
+                session=session, bread_price=bread_price, quantity=quantity, source=source)
     except IntegrityError:
-        # Rejeu sans id (ou unique_together session+bread_price déjà
-        # honoré par une tentative concurrente) — idempotent par construction.
-        pass
+        return _record_result(record_id, False, "ligne en double (écriture concurrente) : à rejouer")
+    _recompute_session_totals(session)
     return _record_result(record_id, True)
+
+
+def _bread_price_or_none(raw):
+    from core.models import BreadPrice
+    if isinstance(raw, bool) or not str(raw).strip().isdigit() or not str(raw).strip().isascii():
+        return None
+    return BreadPrice.objects.filter(pk=int(str(raw).strip())).first()
 
 
 def _push_bread_disposal(node, record):
@@ -1310,6 +1363,9 @@ def _sync_bounded_qty(raw):
     return int(d)
 
 
+_TRANSFER_LOCKED = ('CONFIRMED', 'CANCELLED')  # BUG-921 : transfert immuable une fois terminé
+
+
 def _push_bread_transfer(node, record):
     from core.models import BreadPrice
     from production.models import BreadTransfer
@@ -1374,6 +1430,9 @@ def _push_bread_transfer(node, record):
                     changed_fields.append('quantity_received')
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if existing.transfer_status in _TRANSFER_LOCKED:
+                # BUG-921 : le lot qui termine le transfert peut encore pousser ses lignes.
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     from_code = record.get('from_node')
@@ -1422,52 +1481,60 @@ def _push_bread_transfer(node, record):
 
 
 def _push_bread_transfer_line(node, record):
-    from core.models import BreadPrice
+    """Ligne de transfert. BUG-919 : identifiée par sa clé naturelle
+    (transfert, catégorie de pain), unique en base ; l'id local du poste n'est
+    jamais utilisé comme clé cloud."""
     from production.models import BreadTransfer, BreadTransferLine
 
     record_id = record.get('id')
-    if record_id:
-        existing = BreadTransferLine.objects.filter(pk=record_id).first()
-        if existing:
-            # BUG-788 : contrôle d'appartenance AVANT toute écriture ; la
-            # quantité reçue n'est modifiable que par la boulangerie réceptrice.
-            parent = existing.transfer
-            if node.pk not in (parent.from_node_id, parent.to_node_id):
-                return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
-            changed_fields = []
-            if (record.get('quantity_received') is not None and node.pk == parent.to_node_id
-                    and existing.quantity_received != record['quantity_received']):
-                existing.quantity_received = record['quantity_received']
-                changed_fields.append('quantity_received')
-            if changed_fields:
-                existing.save(update_fields=changed_fields)
-            return _record_result(record_id, True)
-
-    transfer = BreadTransfer.objects.filter(pk=record.get('transfer')).first()
+    transfer_uuid = _strict_uuid(record.get('transfer'))
+    transfer = BreadTransfer.objects.filter(pk=transfer_uuid).first() if transfer_uuid else None
     if transfer is None:
         return _record_result(record_id, False, "dépendance manquante : transfer")
     if node.pk not in (transfer.from_node_id, transfer.to_node_id):
         return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
+    bread_price = _bread_price_or_none(record.get('bread_price'))
+    if bread_price is None:
+        return _record_result(record_id, False, "dépendance manquante : bread_price")
+    # BUG-921 : transfert confirmé/annulé = immuable (hors lot qui le termine).
+    locked = (transfer.transfer_status in _TRANSFER_LOCKED
+              and str(transfer.pk) not in _batch_terminal_parents())
+
+    existing = BreadTransferLine.objects.filter(transfer=transfer, bread_price=bread_price).first()
+    if existing is not None:
+        # BUG-788 : la quantité reçue n'est modifiable que par la boulangerie réceptrice.
+        sent = record.get('quantity_sent')
+        if (sent not in (None, '') and node.pk == transfer.from_node_id
+                and _sync_int(sent, 'quantity_sent') != existing.quantity_sent):
+            # BUG-920 : doublon de ligne avec une autre quantité : jamais « accepté » sans effet.
+            return _record_result(record_id, False, "ligne en double avec une quantité envoyée différente")
+        recv = record.get('quantity_received')
+        if recv is not None and node.pk == transfer.to_node_id and existing.quantity_received != recv:
+            recv = _sync_int(recv, 'quantity_received')
+            if recv != existing.quantity_received:
+                if locked and existing.quantity_received is not None:
+                    return _record_result(record_id, False, "transfert terminé : quantité reçue non modifiable")
+                existing.quantity_received = recv
+                existing.save(update_fields=['quantity_received'])
+        return _record_result(record_id, True)
+
+    if locked:
+        return _record_result(record_id, False, "transfert terminé : ajout de ligne refusé")
     # BUG-874 : la quantité reçue ne vient que de la boulangerie réceptrice.
     if record.get('quantity_received') is not None and node.pk != transfer.to_node_id:
         return _record_result(
             record_id, False,
             "seule la boulangerie réceptrice peut renseigner la quantité reçue")
-    bread_price = BreadPrice.objects.filter(pk=record.get('bread_price')).first()
-    if bread_price is None:
-        return _record_result(record_id, False, "dépendance manquante : bread_price")
-
-    kwargs = dict(
-        transfer=transfer, bread_price=bread_price,
-        quantity_sent=record.get('quantity_sent', 0),
-        quantity_received=record.get('quantity_received'),
-    )
-    if record_id:
-        kwargs['id'] = record_id
+    recv = record.get('quantity_received')
     try:
-        BreadTransferLine.objects.create(**kwargs)
+        with transaction.atomic():
+            BreadTransferLine.objects.create(
+                transfer=transfer, bread_price=bread_price,
+                quantity_sent=_sync_int(record.get('quantity_sent', 0) or 0, 'quantity_sent'),
+                quantity_received=None if recv is None else _sync_int(recv, 'quantity_received'),
+            )
     except IntegrityError:
-        pass
+        return _record_result(record_id, False, "ligne en double (écriture concurrente) : à rejouer")
     return _record_result(record_id, True)
 
 
@@ -1988,6 +2055,8 @@ def _validate_fields(label, record):
 
 MAX_FLOUR_SACKS_SYNC = Decimal('100000')   # ProductionSessionSerializer.MAX_FLOUR_SACKS
 MAX_SYNC_INT = 2_000_000_000               # production.views._strict_int
+MAX_SYNC_DISPOSAL_QTY = 1_000_000          # production.serializers.MAX_DISPOSAL_QTY
+MAX_SYNC_DISPOSAL_VALUE = 9_999_999_999    # production.serializers.MAX_DISPOSAL_VALUE
 MAX_SYNC_COMMISSION_RATE = Decimal('0.30')  # ClientBoundsMixin.MAX_COMMISSION_RATE
 
 
@@ -2055,6 +2124,20 @@ def _check_production_session(node, record):
             _sync_decimal(raw, 'flour_sacks_used', 2, Decimal('0'), MAX_FLOUR_SACKS_SYNC)
         except ValueError as exc:
             return str(exc)
+    # BUG-924 : valeur du sac bornée (les totaux, eux, sont recalculés depuis les lignes).
+    if record.get('sac_value_fc_used') not in (None, ''):
+        try:
+            _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)
+        except ValueError as exc:
+            return str(exc)
+    # BUG-923 : l'horodatage de clôture ne peut pas être dans le futur.
+    if record.get('closed_at') not in (None, ''):
+        from django.utils import timezone
+        try:
+            moment = _parse_aware_datetime(record['closed_at'])
+            _sync_not_future_date(node, timezone.localtime(moment).date(), 'closed_at')
+        except (ValueError, TypeError, OverflowError) as exc:
+            return str(exc) or "« closed_at » invalide"
     return None
 
 
@@ -2067,6 +2150,28 @@ def _check_production_session_line(node, record):
         except ValueError as exc:
             return str(exc)
     return None
+
+
+def _check_bread_transfer(node, record):
+    # BUG-922 : pas de transfert d'une boulangerie vers elle-même (REST).
+    if record.get('from_node') not in (None, '') and record.get('from_node') == record.get('to_node'):
+        return "une boulangerie ne peut pas s'envoyer un transfert à elle-même"
+    return _check_transfer_quantities(record)
+
+
+def _check_transfer_quantities(record):
+    # BUG-928 : mêmes bornes que BUG-894 (entier 0 à 2e9).
+    for name in ('quantity_sent', 'quantity_received'):
+        if record.get(name) not in (None, ''):
+            try:
+                _sync_int(record[name], name)
+            except ValueError as exc:
+                return str(exc)
+    return None
+
+
+def _check_bread_transfer_line(node, record):
+    return _check_transfer_quantities(record)
 
 
 def _check_bread_disposal(node, record):
@@ -2087,10 +2192,29 @@ def _check_bread_disposal(node, record):
             _sync_int(record['unit_price_sold'], 'unit_price_sold')
         except ValueError as exc:
             return str(exc)
+    # BUG-925 : mêmes bornes que la voie REST (quantité <= 1 000 000, valeur
+    # totale <= 9 999 999 999 : colonne Decimal(12, 2)).
+    qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
+    price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+    if abs(qty) > MAX_SYNC_DISPOSAL_QTY:
+        return f"« quantity » ne peut pas dépasser {MAX_SYNC_DISPOSAL_QTY}"
+    if abs(qty) * price > MAX_SYNC_DISPOSAL_VALUE:
+        return "la valeur totale (quantité × prix unitaire) dépasse la limite autorisée"
     return None
 
 
 def _check_consumable_movement(node, record):
+    # BUG-926 : code de consommable bien formé (texte court, sans blanc, comme
+    # ConsumableCount) ; l'appartenance à ConsumableType reste du ressort de BUG-729
+    # (des suites existantes poussent des codes métier non seedés : SEL, FARINE...).
+    ctype = record.get('consumable_type')
+    if ctype not in (None, ''):
+        import re
+        if not isinstance(ctype, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,10}', ctype):
+            return "« consumable_type » invalide (code de 1 à 10 caractères sans espace attendu)"
+    unit = record.get('unit')
+    if unit not in (None, '') and (not isinstance(unit, str) or len(unit) > 20):
+        return "« unit » invalide"
     if record.get('quantity') not in (None, ''):
         try:
             _sync_decimal(record['quantity'], 'quantity', 3, Decimal('0'), max_digits=10)
@@ -2121,6 +2245,9 @@ def _check_invoice(node, record):
             _sync_not_future_date(node, timezone.localtime(moment).date(), name)
         except ValueError as exc:
             return str(exc)
+    # BUG-927 : équipes A et B uniquement (CLAUDE.md 5.2).
+    if record.get('team') not in (None, '', 'A', 'B'):
+        return "« team » invalide : équipe A ou B uniquement"
     receipt = record.get('receipt_number')
     if receipt not in (None, ''):
         if not isinstance(receipt, str) or not receipt.isascii():
@@ -2301,6 +2428,8 @@ _STRICT_CHECKS = {
     'production.ProductionSession': _check_production_session,
     'production.ProductionSessionLine': _check_production_session_line,
     'production.BreadDisposal': _check_bread_disposal,
+    'production.BreadTransfer': _check_bread_transfer,
+    'production.BreadTransferLine': _check_bread_transfer_line,
     'production.ConsumableMovement': _check_consumable_movement,
     'sales.Invoice': _check_invoice,
 }

@@ -267,7 +267,8 @@ def build_outbound_payload(node_code):
         for s in sessions_qs
     ]
     session_lines = [
-        {'id': str(l.id), 'session': str(l.session_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity}
+        {'id': str(l.id), 'session': str(l.session_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity,
+         'source': l.source}
         for s in sessions_qs for l in s.lines.all()
     ]
     disposals = [
