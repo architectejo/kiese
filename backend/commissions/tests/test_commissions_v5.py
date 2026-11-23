@@ -154,7 +154,10 @@ class RetenueUniqueHorlogeGrossiere(Base5):
         with patch('django.utils.timezone.now', return_value=self.FIXED):
             self.gen(self.ns[0])
             self.gen(self.ns[1])
-        ClientCommission.objects.filter(client=self.c).update(deduction_debt=D('0'), deduction_social=D('0'))
+        # BUG-1014 : un zero decide par la comptabilite passe par PATCH (pose deduction_manual).
+        for x in ClientCommission.objects.filter(client=self.c):
+            rz = api(self.comptable).patch(f'{COMM}{x.id}/', {'deduction_debt': '0', 'deduction_social': '0'}, format='json')
+            self.assertEqual(rz.status_code, 200, getattr(rz, 'data', None))
         self.gen(self.ns[0])
         r = self.row(self.ns[0], self.c)
         self.assertEqual(r.deduction_debt, D('0.00'))  # conserve tel quel

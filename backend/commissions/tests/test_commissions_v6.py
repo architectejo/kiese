@@ -93,15 +93,17 @@ class Multi(Base5):
                          'retenue perdue : aucune ligne ne la porte et aucune alerte')
 
     def test_manuel_zero_sur_la_porteuse_puis_generation_d_une_nouvelle_ligne_ne_double_pas(self):
-        """Comptable met la retenue de la porteuse a 0 a la main, puis supprime une autre ligne et la
-        regenere : la nouvelle ligne reprend la retenue (la porteuse a 0 ne compte plus) = pas de doublon."""
+        """Comptable met la retenue de la porteuse a 0 a la main (PATCH -> deduction_manual), puis supprime une
+        autre ligne et la regenere. BUG-1014 (d54) : la decision manuelle fige le mois, la nouvelle ligne ne
+        reprend PAS la retenue (avant d54 elle la reprenait) ; dans tous les cas, jamais de doublon."""
         c = self.carrier()
         api(self.comptable).patch(f'{COMM}{c.id}/', {'deduction_debt': '0', 'deduction_social': '0'}, format='json')
         other = ClientCommission.objects.filter(client=self.c).exclude(pk=c.pk).first()
         node = other.period.node
         self.delete(other)
         self.gen(node)
-        self.assertEqual(self.total('deduction_debt'), D('10000.00'))
+        self.assertEqual(self.total('deduction_debt'), D('0.00'))
+        self.assertEqual(self.total('deduction_social'), D('0.00'))
 
     def test_net_a_payer_exact_de_chaque_ligne(self):
         for r in self.rows():

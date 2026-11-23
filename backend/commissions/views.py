@@ -233,86 +233,57 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             # différentes ne s'exécutent plus en parallèle pour un même client.
             with transaction.atomic():
                 Client.objects.select_for_update().filter(pk=client_id).first()
-                # BUG-1009 : « déjà retenu » = une AUTRE ligne du mois PORTE réellement la retenue
-                # (dette ou cotisation non nulle, payée ou non). Si la ligne porteuse a été supprimée,
-                # les lignes restantes à 0 ne comptent pas : la ligne (re)créée reporte la retenue.
-                deja_retenu = ClientCommission.objects.filter(
-                    client_id=client_id, period__month=month, period__year=year,
-                ).exclude(period=period).filter(
-                    ~Q(deduction_debt=0) | ~Q(deduction_social=0),
-                ).exists()
-                debt_default = Decimal('0.00') if deja_retenu else Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
-                social_default = Decimal('0.00') if deja_retenu else cotisation
-
+                # BUG-1013/1014 : regle explicite et deterministe. Pour (client, mois), la retenue
+                # (dette BP + cotisation, BUG-737) est portee par exactement UNE ligne non payee : la plus
+                # ancienne (created_at, pk). Une ligne creee ici demarre a 0 ; le report ne s'applique que si
+                # aucune ligne du mois ne porte la retenue ET qu'aucune ligne n'a ete decidee a la main
+                # (`deduction_manual`, zero compris). Independant du statut des factures et de l'ordre de
+                # regeneration ; une ligne payee ou d'une periode close n'est jamais modifiee.
                 commission, created = ClientCommission.objects.get_or_create(
                     period=period, client_id=client_id,
                     defaults={
                         'total_breads': agg['total_breads'],
                         'order_value': agg['order_value'],
                         'commission_rate': client.commission_rate,
-                        'deduction_debt': debt_default,
-                        'deduction_social': social_default,
+                        'deduction_debt': Decimal('0.00'),
+                        'deduction_social': Decimal('0.00'),
                         'deduction_prints': node.card_fee_fc,  # BUG-417 : carte propre à la boulangerie
                         'node_origin': node.code,
                     }
                 )
-                if created and not deja_retenu:
-                    # Filet sans verrou réel (SQLite) : si une ligne d'une autre
-                    # boulangerie, créée avant la nôtre, a retenu entre-temps,
-                    # la nôtre cède (la plus ancienne garde la retenue unique).
-                    earlier = ClientCommission.objects.filter(
-                        client_id=client_id, period__month=month, period__year=year,
-                    ).exclude(pk=commission.pk).filter(
-                        # BUG-1009 : seule une ligne qui PORTE la retenue peut nous la faire céder.
-                        ~Q(deduction_debt=0) | ~Q(deduction_social=0),
-                    ).filter(
-                        Q(created_at__lt=commission.created_at)
-                        # BUG-1005 : à horodatage égal (horloge grossière, Windows), l'ordre des UUID
-                        # ne dit rien de l'ordre de création : une ligne qui retient déjà gagne.
-                        | (Q(created_at=commission.created_at)
-                           & (Q(pk__lt=commission.pk) | ~Q(deduction_debt=0) | ~Q(deduction_social=0)))
-                    ).exists()
-                    if earlier:
-                        commission.deduction_debt = Decimal('0.00')
-                        commission.deduction_social = Decimal('0.00')
+                # BUG-264 : une commission payée n'est jamais recalculée ; sinon
+                # seuls les champs dérivés des factures sont rafraîchis (les
+                # retenues saisies à la main sont conservées).
+                if commission.is_paid:
+                    continue
                 if not created:
-                    # BUG-264 : une commission payée n'est jamais recalculée ; sinon
-                    # seuls les champs dérivés des factures sont rafraîchis (les
-                    # retenues saisies à la main sont conservées).
-                    if commission.is_paid:
-                        continue
                     commission.total_breads     = agg['total_breads']
                     commission.order_value      = agg['order_value']
                     commission.commission_rate  = client.commission_rate
-                    # BUG-1011 : si la ligne porteuse de la retenue a ete supprimee et qu'AUCUNE ligne du
-                    # mois (payee ou non) ne la porte, la plus ancienne ligne NON payee (created_at, pk)
-                    # la reporte : jamais perdue, jamais doublee, jamais sur une ligne payee.
-                    carried = ClientCommission.objects.filter(
-                        client_id=client_id, period__month=month, period__year=year,
-                    ).filter(~Q(deduction_debt=0) | ~Q(deduction_social=0)).exists()
-                    # Seulement si une boulangerie facturee ce mois n'a plus de ligne (porteuse supprimee) :
-                    # sinon un zero manuel de la comptabilite serait ecrase (test_commissions_v5).
-                    if not carried:
-                        nodes_inv = set(Invoice.objects.filter(
-                            client_id=client_id, status=Invoice.Status.DELIVERED,
-                            invoice_date__month=month, invoice_date__year=year,
-                            is_soldee=False, commission_exempt=False, is_debt_repayment=False,
-                        ).values_list('node_id', flat=True))
-                        # Boulangerie dont la periode existe deja mais sans ligne pour ce client = ligne supprimee.
-                        nodes_with_period = set(CommissionPeriod.objects.filter(
-                            month=month, year=year, node_id__in=nodes_inv,
-                        ).values_list('node_id', flat=True))
-                        nodes_rows = set(ClientCommission.objects.filter(
-                            client_id=client_id, period__month=month, period__year=year,
-                        ).values_list('period__node_id', flat=True))
-                        carried = not (nodes_with_period - nodes_rows)
-                    if not carried:
-                        first = ClientCommission.objects.filter(
-                            client_id=client_id, period__month=month, period__year=year, is_paid=False,
-                        ).order_by('created_at', 'pk').first()
-                        if first is not None and first.pk == commission.pk:
-                            commission.deduction_debt = Decimal(str(client.current_debt))
+                month_rows = ClientCommission.objects.filter(
+                    client_id=client_id, period__month=month, period__year=year,
+                )
+                decided = (
+                    month_rows.filter(
+                        Q(deduction_manual=True) | ~Q(deduction_debt=0) | ~Q(deduction_social=0),
+                    ).exists()
+                    or commission.deduction_manual
+                    or commission.deduction_debt != 0 or commission.deduction_social != 0
+                )
+                if not decided:
+                    first = month_rows.filter(
+                        is_paid=False, period__is_closed=False,
+                    ).order_by('created_at', 'pk').first()
+                    if first is not None:
+                        debt_value = Decimal(str(client.current_debt))  # BUG-293 : BP créditrice conservée (négatif)
+                        if first.pk == commission.pk:
+                            commission.deduction_debt = debt_value
                             commission.deduction_social = cotisation
+                        else:
+                            first.deduction_debt = debt_value
+                            first.deduction_social = cotisation
+                            first.compute(float(config.annual_bonus_rate))
+                            first.save()
                 commission.compute(float(config.annual_bonus_rate))
                 commission.save()
 
@@ -415,13 +386,20 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     def perform_update(self, serializer):
         config = Config.get_instance()
         old_net = serializer.instance.net_payable
+        old_debt = serializer.instance.deduction_debt
+        old_social = serializer.instance.deduction_social
         commission = serializer.save()
-        commission.compute(float(config.annual_bonus_rate))
-        commission.save(update_fields=[
+        fields = [
             'commission_gross', 'annual_bonus',
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
-        ])
+        ]
+        # BUG-1014 : la comptabilite decide la retenue (zero compris) : plus de report automatique ce mois.
+        if commission.deduction_debt != old_debt or commission.deduction_social != old_social:
+            commission.deduction_manual = True
+            fields.append('deduction_manual')
+        commission.compute(float(config.annual_bonus_rate))
+        commission.save(update_fields=fields)
         log_activity(  # BUG-944
             self.request.user, "Modification Commission",
             f"Commission de {commission.client.full_name} ({commission.period}) modifiée : "

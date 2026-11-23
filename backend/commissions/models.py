@@ -60,6 +60,9 @@ class ClientCommission(SyncableModel):
     deduction_social  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Retenue Sociale (FC)"))
     deduction_prints  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Frais Imprimés (FC)"))
     deduction_other   = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Retenues Diverses (FC)"))
+    # BUG-1014 : True des que la comptabilite modifie deduction_debt/deduction_social (PATCH/PUT) : la decision
+    # (zero compris) fige la retenue du client pour tout le mois, plus de report automatique.
+    deduction_manual  = models.BooleanField(default=False, verbose_name=_("Retenue décidée manuellement"))
     deduction_carte   = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Retenue CARTE 1% (FC)"))
     deduction_remise  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Remise 0.25% de la commande (FC)"))
     total_deductions  = models.DecimalField(max_digits=14, decimal_places=2, default='0.00', verbose_name=_("Total Retenues (FC)"))

@@ -4,7 +4,6 @@ Commissions - ronde b20 (testeur clients/commissions, 2026-11-23) : attaque de l
 Donnees FICTIVES.
 """
 from decimal import Decimal as D
-from unittest import expectedFailure
 
 from commissions.models import ClientCommission, CommissionPeriod
 from commissions.tests.test_commissions_v5 import COMM, Base5, api
@@ -25,6 +24,11 @@ class Base7(Base5):
 
     def carrier(self, debt='10000.00'):
         return ClientCommission.objects.get(client=self.c, deduction_debt=D(debt))
+
+    def zero(self, row):
+        """Zero decide par la comptabilite : par PATCH (pose deduction_manual), BUG-1014."""
+        r = api(self.comptable).patch(f'{COMM}{row.id}/', {'deduction_debt': '0', 'deduction_social': '0'}, format='json')
+        self.assertEqual(r.status_code, 200, getattr(r, 'data', None))
 
     def delete(self, row):
         r = api(self.direction).delete(f'{COMM}{row.id}/')
@@ -59,7 +63,6 @@ class Heuristique(Base7):
         self.assertEqual(self.total('deduction_debt'), D('10000.00'))
         self.assertEqual(len(self.rows()), 1)
 
-    @expectedFailure  # BUG-1013
     def test_porteuse_supprimee_seule_la_plus_recente_regeneree(self):
         """Seule la plus ancienne ligne non payee reporte : si on ne regenere que la plus recente, la retenue
         n'est reportee nulle part."""
@@ -69,7 +72,6 @@ class Heuristique(Base7):
         self.gen(remaining[-1].period.node)
         self.assertEqual(self.total('deduction_debt'), D('10000.00'), 'retenue perdue (BUG-1013)')
 
-    @expectedFailure  # BUG-1013
     def test_facture_de_la_porteuse_annulee_apres_suppression(self):
         """Cas realiste : la ligne est supprimee PARCE QUE la facture a ete annulee ; on regenere les autres."""
         self.three()
@@ -106,25 +108,23 @@ class Heuristique(Base7):
 
     def test_ligne_a_zero_manuel_toutes_lignes_presentes_conservee(self):
         self.three()
-        ClientCommission.objects.filter(pk=self.carrier().pk).update(deduction_debt=0, deduction_social=0)
+        self.zero(self.carrier())
         for n in self.ns:
             self.gen(n)
         self.assertEqual(self.total('deduction_debt'), D('0.00'))
 
-    @expectedFailure  # BUG-1014
     def test_zero_manuel_puis_ligne_non_porteuse_supprimee_zero_conserve(self):
         """Compta : retenue mise a 0 a la main (dette reglee). Une autre ligne est supprimee puis regeneration :
         le zero manuel ne doit pas etre ecrase."""
         self.three()
         c = self.carrier()
-        ClientCommission.objects.filter(pk=c.pk).update(deduction_debt=0, deduction_social=0)
+        self.zero(c)
         victim = [r for r in self.rows() if r.pk != c.pk][0]
         self.delete(victim)
         for n in self.ns:
             self.gen(n)
         self.assertEqual(self.total('deduction_debt'), D('0.00'), 'zero manuel ecrase par le report')
 
-    @expectedFailure  # BUG-1014
     def test_zero_manuel_et_facture_livree_apres_generation_d_une_autre_boulangerie(self):
         """Y1 generee avant la livraison de la facture du client ; Y2 porteuse puis zero manuel ; regeneration de
         Y2 : le zero manuel doit rester."""
@@ -135,7 +135,7 @@ class Heuristique(Base7):
         self.gen(n2)
         row = ClientCommission.objects.get(period__node=n2, client=self.c)
         self.assertEqual(row.deduction_debt, D('10000.00'))
-        ClientCommission.objects.filter(pk=row.pk).update(deduction_debt=0, deduction_social=0)
+        self.zero(row)
         self.gen(n2)
         row.refresh_from_db()
         self.assertEqual(row.deduction_debt, D('0.00'), 'zero manuel ecrase : Y1 facturee sans ligne')
