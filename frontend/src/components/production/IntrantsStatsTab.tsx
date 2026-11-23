@@ -177,7 +177,7 @@ export const IntrantsStatsTab: React.FC<Props> = ({ canFilterNode }) => {
       {!loading && !error && data && (
         <>
           <div style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginBottom: 6 }}>
-            {data.label} — unité : <strong>{unit}</strong> — situation du {data.date.split('-').reverse().join('/')}
+            {convertSalt ? 'Sel' : data.label} — unité : <strong>{unit}</strong> — situation du {data.date.split('-').reverse().join('/')}
           </div>
           {data.rows.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.72rem' }}>Aucune donnée pour cette date.</div>
