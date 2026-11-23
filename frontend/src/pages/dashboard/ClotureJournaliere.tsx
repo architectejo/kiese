@@ -27,7 +27,13 @@ export const formatFC = (value: string | number | null | undefined): string => {
   return Math.round(n).toLocaleString('fr-FR') + ' FC';
 };
 
-export const formatQty = (n: number | null | undefined): string => {
+const REPARTITION_BASE_LABELS: Record<'produit' | 'vendu_jour' | 'facture', string> = {
+  produit: 'sur la production',
+  vendu_jour: 'sur les ventes du jour',
+  facture: 'sur les pains facturés',
+};
+
+export const formatQty =(n: number | null | undefined): string => {
   if (n === null || n === undefined) return '—';
   return n.toLocaleString('fr-FR');
 };
@@ -247,6 +253,11 @@ export const ClotureJournaliere: React.FC = () => {
                 <option value="VALEUR">Répartition par valeur (FC)</option>
               </select>
             </div>
+            {totals.repartition_base && (
+              <p style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', margin: '0 0 8px' }}>
+                Pourcentages calculés {REPARTITION_BASE_LABELS[totals.repartition_base]}.
+              </p>
+            )}
             <div style={{ overflowX: 'auto' }}>
               <table className="premium-table">
                 <thead>
@@ -330,8 +341,10 @@ export const ClotureJournaliere: React.FC = () => {
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_effectue.fc)}</div>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        {formatQty(cat.appro_recu.quantity)}
-                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_recu.fc)}</div>
+                        {cat.appro_recu.quantity > 0 ? `−${formatQty(cat.appro_recu.quantity)}` : formatQty(cat.appro_recu.quantity)}
+                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
+                          {Number(cat.appro_recu.fc) > 0 ? `−${formatFC(cat.appro_recu.fc)}` : formatFC(cat.appro_recu.fc)}
+                        </div>
                       </td>
                       <td style={{ textAlign: 'right' }} title={NON_SERVI_INCLUT_HELP}>
                         {formatFC(nonServiCumul(cat).fc)}

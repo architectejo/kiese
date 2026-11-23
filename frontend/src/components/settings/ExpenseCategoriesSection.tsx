@@ -1,8 +1,15 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { FiEdit2, FiPackage, FiPlus, FiSave, FiTrash2, FiX } from 'react-icons/fi';
-import { coreApi, ExpenseCategory } from '@/api/services';
+import { coreApi, ExpenseCategory, ExpenseCategoryScope } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
+
+const SCOPE_LABELS: Record<ExpenseCategoryScope, string> = {
+  BOTH: 'Direction et boulangeries',
+  BAKERY: 'Boulangeries seulement',
+  DIRECTION: 'Direction seulement',
+};
+const SCOPE_KEYS: ExpenseCategoryScope[] = ['BOTH', 'BAKERY', 'DIRECTION'];
 
 interface ExpenseCategoriesSectionProps {
   initial: ExpenseCategory[];
@@ -15,12 +22,14 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
   const [showEcAdd, setShowEcAdd] = useState(false);
   const [ecNewCode, setEcNewCode] = useState('');
   const [ecNewLabel, setEcNewLabel] = useState('');
+  const [ecNewScope, setEcNewScope] = useState<ExpenseCategoryScope>('BOTH');
   const [ecAddError, setEcAddError] = useState<string | null>(null);
   // Edit state
   const [editingEcId, setEditingEcId] = useState<number | null>(null);
   const [ecEditCode, setEcEditCode] = useState('');
   const [ecEditLabel, setEcEditLabel] = useState('');
   const [ecEditActive, setEcEditActive] = useState(true);
+  const [ecEditScope, setEcEditScope] = useState<ExpenseCategoryScope>('BOTH');
   const [ecEditError, setEcEditError] = useState<string | null>(null);
 
   const handleEcCreate = async (e: React.FormEvent) => {
@@ -29,9 +38,9 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
     setEcAddError(null);
     setEcLoading(true);
     try {
-      const res = await coreApi.expenseCategories.create({ code: ecNewCode.toUpperCase(), label: ecNewLabel, is_active: true });
+      const res = await coreApi.expenseCategories.create({ code: ecNewCode.toUpperCase(), label: ecNewLabel, is_active: true, scope: ecNewScope });
       setExpenseCategories(prev => [...prev, res.data]);
-      setEcNewCode(''); setEcNewLabel(''); setShowEcAdd(false);
+      setEcNewCode(''); setEcNewLabel(''); setEcNewScope('BOTH'); setShowEcAdd(false);
     } catch (err: unknown) {
       const d = axios.isAxiosError(err)
         ? (err.response?.data as { detail?: string; code?: string[] } | undefined)
@@ -46,6 +55,7 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
     setEcEditCode(ec.code);
     setEcEditLabel(ec.label);
     setEcEditActive(ec.is_active);
+    setEcEditScope(ec.scope ?? 'BOTH');
     setEcEditError(null);
   };
 
@@ -54,7 +64,7 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
     if (!editingEcId) return;
     setEcEditError(null);
     try {
-      const res = await coreApi.expenseCategories.update(editingEcId, { code: ecEditCode.toUpperCase(), label: ecEditLabel, is_active: ecEditActive });
+      const res = await coreApi.expenseCategories.update(editingEcId, { code: ecEditCode.toUpperCase(), label: ecEditLabel, is_active: ecEditActive, scope: ecEditScope });
       setExpenseCategories(prev => prev.map(ec => ec.id === editingEcId ? res.data : ec));
       setEditingEcId(null);
     } catch (err: unknown) {
@@ -99,6 +109,12 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
                 <input type="text" value={ecNewLabel} onChange={e => setEcNewLabel(e.target.value)} placeholder="Ex: Salaires Temporaires" className="form-input" style={{ height: '32px', fontSize: '0.78rem', padding: '0 8px' }} required />
               </div>
             </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.65rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', textTransform: 'uppercase' }}>Portée</label>
+              <select value={ecNewScope} onChange={e => setEcNewScope(e.target.value as ExpenseCategoryScope)} className="form-input" style={{ height: '32px', fontSize: '0.78rem', padding: '0 8px' }}>
+                {SCOPE_KEYS.map(k => <option key={k} value={k}>{SCOPE_LABELS[k]}</option>)}
+              </select>
+            </div>
             {ecAddError && <div style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))' }}>{ecAddError}</div>}
             <div style={{ display: 'flex', gap: '8px' }}>
               <button type="submit" disabled={ecLoading} className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '0.75rem' }}>Créer</button>
@@ -129,6 +145,12 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
                       <option value="false">Inactif</option>
                     </select>
                   </div>
+                  <div>
+                    <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', fontWeight: 700, marginBottom: '2px', textTransform: 'uppercase' }}>Portée</div>
+                    <select value={ecEditScope} onChange={e => setEcEditScope(e.target.value as ExpenseCategoryScope)} className="form-input" style={{ height: '28px', fontSize: '0.73rem', padding: '0 4px' }}>
+                      {SCOPE_KEYS.map(k => <option key={k} value={k}>{SCOPE_LABELS[k]}</option>)}
+                    </select>
+                  </div>
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button type="submit" className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '0.72rem' }}><FiSave size={11} /> OK</button>
                     <button type="button" onClick={() => setEditingEcId(null)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '0.72rem' }}><FiX size={11} /></button>
@@ -136,11 +158,12 @@ export const ExpenseCategoriesSection: React.FC<ExpenseCategoriesSectionProps> =
                   {ecEditError && <div style={{ fontSize: '0.65rem', color: 'hsl(var(--color-danger))', width: '100%' }}>{ecEditError}</div>}
                 </form>
               ) : (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                     <span className="badge badge-info" style={{ fontSize: '0.55rem', padding: '1px 5px', fontFamily: 'monospace' }}>{ec.code}</span>
                     <span style={{ fontWeight: 800, fontSize: '0.82rem' }}>{ec.label}</span>
                     <span className={`badge ${ec.is_active ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '0.55rem', padding: '1px 5px' }}>{ec.is_active ? 'ACTIF' : 'INACTIF'}</span>
+                    <span className="badge badge-info" style={{ fontSize: '0.55rem', padding: '1px 5px' }}>{SCOPE_LABELS[ec.scope ?? 'BOTH']}</span>
                   </div>
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button onClick={() => startEditEc(ec)} className="theme-picker-btn" style={{ padding: '4px 5px', color: 'hsl(var(--accent-color))' }} title="Modifier">

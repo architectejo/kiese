@@ -504,6 +504,8 @@ export interface DailyClosureTotals {
   reste_du_jour_jour_fc?: string | null;
   repartition_pct_par_quantite: DailyClosureRepartitionRow[];
   repartition_pct_par_valeur: DailyClosureRepartitionRow[];
+  /** BUG-676 : base de calcul des pourcentages. */
+  repartition_base?: 'produit' | 'vendu_jour' | 'facture';
 }
 
 export interface DailyClosureReport {
@@ -1058,8 +1060,12 @@ export interface ExpenseCategory {
   code: string;
   label: string;
   is_active: boolean;
+  /** BUG-677 : BOTH = tous, BAKERY = boulangeries, DIRECTION = direction. */
+  scope?: ExpenseCategoryScope;
   updated_at?: string;
 }
+
+export type ExpenseCategoryScope = 'BOTH' | 'BAKERY' | 'DIRECTION';
 
 export interface FinancialYear {
   id: string;
