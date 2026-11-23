@@ -122,11 +122,15 @@ class V9Legitimate(V9Base):
                                                    'quantity': q})[0], 'REJECTED', q)
         for rate in ('0.31', '0.301', '0.3001', '-0.01', 'NaN', '1'):
             self.assertEqual(push(self.a1, LBL_I, self.inv(commission_rate=rate))[0], 'REJECTED', rate)
-        for qty in ('0.2500', '0.3333', '10000000', '-0.001', '1E+3'):
+        for qty in ('0.2500', '0.3333', '10000000', '-0.001', '-0.0001', '1E+3'):
             res = push(self.a1, LBL_M, {'id': uid(), 'node': self.k1.code, 'consumable_type': 'SALT',
                                         'movement_type': 'ENTRY', 'quantity': qty})[0]
-            # 0.2500 a 4 decimales mais quantize == valeur : accepte ; 1E+3 vaut 1000 : accepte
-            if qty in ('0.2500', '1E+3'):
+            # Changement de specification voulu BUG-1019/BUG-1020 (parite REST/push, decision client
+            # BUG-216 : mouvements negatifs acceptes) : '-0.001' (3 decimales) est ACCEPTE ; '-0.0001'
+            # (4 decimales) reste refuse. '0.2500' (quantize == valeur) accepte.
+            # Regle canonique BUG-1015 a 1019 : exposants refuses, donc '1E+3' REJECTED
+            # (avant : accepte car vaut 1000).
+            if qty in ('0.2500', '-0.001'):
                 self.assertEqual(res, 'ACCEPTED', qty)
             else:
                 self.assertEqual(res, 'REJECTED', qty)

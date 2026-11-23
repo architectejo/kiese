@@ -18,7 +18,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from core.models import Config, Node, BreadPrice
 from core.numeric import ASCII_SPACES, NumericError, parse_ascii_decimal, parse_ascii_int
-from core.permissions import IsGerant, IsGerantWriteNoAccountant, IsHeadquarters, IsFacturier
+from core.permissions import IsGerant, IsGerantWriteNoAccountant, IsHeadquarters, IsFacturier, IsFacturierOrLivreur
 from core.utils import log_activity, create_notification
 from core.workday import (
     work_date_for, work_time_info, current_team, team_for_work_date, team_at_day_start,
@@ -3623,7 +3623,7 @@ class DailyOpeningConfirmationView(APIView):
             de sécurité) → `needs_confirmation = not teams.A.confirmed and
             not teams.B.confirmed` (UNE confirmation, A OU B, suffit).
     """
-    permission_classes = [IsFacturier]
+    permission_classes = [IsFacturierOrLivreur]  # BUG-1050 (Q-027)
 
     def get(self, request):
         from django.utils.dateparse import parse_date
@@ -4020,7 +4020,7 @@ class TeamAssignmentView(APIView):
     déjà désignée est permis (correction), journalisé avec l'ancienne valeur.
     Permissions : `IsFacturier` (FACTURIER, GERANT et supérieurs).
     """
-    permission_classes = [IsFacturier]
+    permission_classes = [IsFacturierOrLivreur]  # BUG-1050 (Q-027)
 
     @staticmethod
     def _payload(node, now, assignment):

@@ -301,7 +301,8 @@ class InvoiceViewSet(
         if action_permission_classes is not None:
             return [perm() for perm in action_permission_classes]
         if self.action == 'create':
-            return [IsFacturier()]
+            # BUG-1050 (Q-027) : le livreur a les mêmes écrans que le facturier.
+            return [IsFacturierOrLivreur()]
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]
         return [IsGerant()]
@@ -1004,7 +1005,7 @@ class InvoiceViewSet(
             return Response({'detail': exc.detail}, status=exc.status_code)
         return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsFacturier])
+    @action(detail=True, methods=['post'], permission_classes=[IsFacturierOrLivreur])  # BUG-1050
     def cancel(self, request, pk=None):
         """Gérant or Facturier can cancel a PENDING order. Restores bread stock and reverses client debt."""
         invoice = self._get_object_retry()  # filtre par nœud (404 hors périmètre)
