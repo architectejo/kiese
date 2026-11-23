@@ -4,7 +4,6 @@ Code applicatif non modifie.
 """
 import datetime as dt
 import uuid
-from unittest import expectedFailure
 from datetime import timedelta
 from decimal import Decimal as Dc
 
@@ -179,7 +178,6 @@ class L973(Base13):
         n = SystemNotification.objects.filter(title__startswith='Ventes bloquées')
         self.assertEqual((n.count(), n.first().severity), (1, 'WARNING'))
 
-    @expectedFailure
     def test_BUG_987_rafale_de_ventes_refusees_inonde_les_notifications(self):
         """Un POS qui re-tente (ou 10 clics) cree 1 notification WARNING par tentative : le centre de
         notifications du siege est inonde (meme defaut que BUG-982 cote sync). Attendu : une
@@ -214,7 +212,6 @@ class L973(Base13):
         self.assertEqual(self.sale(special_code='NS').status_code, 403)
         self.assertEqual(self.sale(special_code='RG').status_code, 403)
 
-    @expectedFailure
     def test_BUG_988_vente_datee_d_hier_contourne_le_verrou(self):
         """Avec `Config.allow_backdated_sales` actif, un facturier qui ajoute `invoice_date=hier`
         vend MAINTENANT apres l'heure de cloture sans que le verrou s'applique (exclusion
@@ -353,7 +350,6 @@ class V981_984(Base13):
         c = CashClosure.objects.get(pk=rec['id'])
         self.assertEqual((c.is_rejected, c.rejection_reason), (True, 'recompter'))
 
-    @expectedFailure
     def test_BUG_985_recomptage_identique_ne_peut_jamais_lever_le_rejet(self):
         """REST (perform_update, BUG-034/860) : le gerant qui recompte et retrouve le MEME billetage
         resoumet (PUT) et le rejet est leve. En mode synchronise, une resoumission strictement

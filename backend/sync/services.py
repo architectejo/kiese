@@ -953,10 +953,24 @@ def _push_cash_closure(node, record):
                     if record.get('total_expenses') not in (None, '') else existing.total_expenses)
         changed = (any(getattr(existing, n) != v for n, v in bills.items())
                    or entries != existing.total_entries or expenses != existing.total_expenses)
-        if changed:
+        # BUG-985 : marqueur explicite de resoumission. `resubmit_count` (compteur posé par REST
+        # perform_update sur le poste) strictement supérieur à celui du cloud = nouvelle
+        # resoumission, même à contenu identique ; égal = rejeu, ignoré. Un poste ancien sans
+        # compteur peut envoyer `resubmitted: true` ; sans marqueur : comportement BUG-983.
+        raw_count = record.get('resubmit_count')
+        marker = False
+        if isinstance(raw_count, int) and not isinstance(raw_count, bool):
+            marker = raw_count > existing.resubmit_count
+        elif raw_count is None and record.get('resubmitted') is True:
+            marker = True
+        if changed or marker:
             with transaction.atomic():
                 locked = type(existing).objects.select_for_update().get(pk=existing.pk)
                 if locked.is_rejected and not locked.is_validated:
+                    if isinstance(raw_count, int) and not isinstance(raw_count, bool):
+                        locked.resubmit_count = max(locked.resubmit_count, min(raw_count, 10 ** 6))
+                    else:
+                        locked.resubmit_count += 1
                     for n, v in bills.items():
                         setattr(locked, n, v)
                     locked.total_entries, locked.total_expenses = entries, expenses
@@ -966,7 +980,8 @@ def _push_cash_closure(node, record):
                     locked.is_rejected, locked.rejection_reason = False, ''
                     locked.save(update_fields=[*bills, 'total_entries', 'total_expenses', 'notes', 'net_cash',
                                                'physical_cash_total', 'cash_gap', 'is_rejected',
-                                               'rejection_reason', 'updated_at'], _sync_bypass=True)
+                                               'rejection_reason', 'resubmit_count', 'updated_at'],
+                                _sync_bypass=True)
                     from core.utils import log_activity
                     log_activity(None, "Resoumission Clôture de Caisse",
                                  f"Clôture {locked.node.code} {locked.date} resoumise par le poste — "

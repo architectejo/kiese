@@ -250,6 +250,7 @@ def build_outbound_payload(node_code):
             'bills_1000': c.bills_1000, 'bills_500': c.bills_500, 'bills_200': c.bills_200,
             'bills_100': c.bills_100, 'bills_50': c.bills_50,
             'is_validated': c.is_validated, 'notes': c.notes, 'node_origin': c.node_origin,
+            'resubmit_count': c.resubmit_count,
         }
         for c in CashClosure.objects.filter(node_origin=node_code, is_synced=False)
     ]

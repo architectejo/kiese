@@ -580,12 +580,30 @@ class InvoiceViewSet(
         if not is_debt_repayment and not is_backdated_invoice:
             from treasury.closure_lock import sales_blocked_for, SALES_BLOCKED_DETAIL
             if sales_blocked_for(node):
-                create_notification(
-                    title=f"Ventes bloquées — {node.code}",
-                    message=f"Tentative de vente par {request.user.username} après l'heure de clôture, clôture du jour non validée.",
-                    severity='WARNING', node_origin=node.code,
-                )
+                # BUG-987 : une seule notification par boulangerie et par jour tant qu'elle
+                # n'est pas lue (un POS qui re-tente ne doit pas inonder le centre d'alertes).
+                from core.models import SystemNotification
+                blocked_title = f"Ventes bloquées — {node.code}"
+                day_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+                if not SystemNotification.objects.filter(
+                        title=blocked_title, node_origin=node.code, is_read=False,
+                        created_at__gte=day_start).exists():
+                    create_notification(
+                        title=blocked_title,
+                        message=f"Tentative de vente par {request.user.username} après l'heure de clôture, clôture du jour non validée.",
+                        severity='WARNING', node_origin=node.code,
+                    )
                 return Response({'detail': SALES_BLOCKED_DETAIL}, status=status.HTTP_403_FORBIDDEN)
+
+        # BUG-988 : une vente antidatée sur un jour dont la clôture est confirmée est refusée
+        # (cohérent avec BUG-961 pour les dépenses) ; sur un jour non clôturé elle reste permise.
+        if is_backdated_invoice and not is_debt_repayment:
+            from treasury.models import CashClosure
+            if CashClosure.objects.filter(node=node, date=requested_invoice_date, is_validated=True).exists():
+                return Response(
+                    {'detail': f"Vente refusée : la clôture du {requested_invoice_date} est déjà confirmée "
+                               "par la direction, aucune vente ne peut plus y être ajoutée."},
+                    status=status.HTTP_403_FORBIDDEN)
 
         payment_amount = data['payment_amount']
 
@@ -1167,6 +1185,17 @@ class InvoiceViewSet(
         )
         if date_error:
             return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        # BUG-988 : un ajustement (+) crée de la valeur ; refusé sur un jour dont la clôture est
+        # confirmée (les ajustements (−) restent possibles : ils corrigent une erreur).
+        if adjustment_sign == 1:
+            from treasury.models import CashClosure
+            if CashClosure.objects.filter(node=original.node, date=requested_invoice_date,
+                                          is_validated=True).exists():
+                return Response(
+                    {'detail': f"Ajustement refusé : la clôture du {requested_invoice_date} est déjà confirmée "
+                               "par la direction, aucune vente ne peut plus y être ajoutée."},
+                    status=status.HTTP_403_FORBIDDEN)
 
         client = original.client
         # BUG-181 : nature de l'originale. NS : jamais de stock (rien n'a été
