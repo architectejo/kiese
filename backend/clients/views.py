@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
 from core.models import Config, Node
-from core.permissions import IsGerant, IsHeadquarters, IsFacturier
+from core.permissions import IsGerant, IsHeadquarters, IsFacturierOrLivreur
+from sync.connectivity import node_is_online
 from core.utils import log_activity, create_notification
 from django.utils import timezone
 from .models import Client, SocialContribution, SocialDistribution, SocialDistributionLine, _generate_client_code
@@ -56,7 +57,9 @@ class ClientViewSet(viewsets.ModelViewSet):
             # restent réservées à GERANT+ : un facturier ne doit ni modifier
             # un plafond crédit (BUG-012), ni supprimer, ni déplacer un
             # client entre boulangeries.
-            return [IsFacturier()]
+            # BUG-1203 : le livreur a les memes ecrans que le facturier (Q-027) ;
+            # `perform_create` impose deja sa propre boulangerie.
+            return [IsFacturierOrLivreur()]
         return [IsGerant()]
 
     def get_queryset(self):
@@ -66,9 +69,14 @@ class ClientViewSet(viewsets.ModelViewSet):
             # BUG-506 : compte lié à une boulangerie mais sans nœud = aucune donnée.
             return qs.none()
         if not user.can_access_all_nodes:
-            # Facturiers and Livreurs see all nodes — a client from any bakery
-            # may present at a different bakery and must be invoiced without issue.
-            if user.role not in ('FACTURIER', 'LIVREUR'):
+            # Facturiers : tous les noeuds (un client d'une autre boulangerie peut se
+            # presenter). Q-025 / BUG-507 / BUG-1106 : le livreur n'a cet acces que
+            # si son poste est en ligne (`sync.connectivity.node_is_online`) ; hors
+            # ligne il ne voit que les clients de sa boulangerie.
+            if user.role == 'LIVREUR':
+                if not node_is_online(user.node):
+                    qs = qs.filter(node=user.node)
+            elif user.role != 'FACTURIER':
                 qs = qs.filter(node=user.node)
         return qs
 

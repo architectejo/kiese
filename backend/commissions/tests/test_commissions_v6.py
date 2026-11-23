@@ -108,7 +108,8 @@ class Multi(Base5):
     def test_net_a_payer_exact_de_chaque_ligne(self):
         for r in self.rows():
             carry = r.deduction_debt != 0
-            retenues = D('700') + (D('11500') if carry else D('0'))  # carte + dette 10 000 + sociale 1 500
+            # BUG-1104 : la carte (700) n'est retenue qu'une fois, sur la ligne porteuse
+            retenues = (D('700') + D('11500')) if carry else D('0')  # carte + dette 10 000 + sociale 1 500
             self.assertEqual(r.commission_gross, D('12500.00'))
             self.assertEqual(r.net_payable, D('12500.00') - retenues)
 

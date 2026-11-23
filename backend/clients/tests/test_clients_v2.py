@@ -238,9 +238,13 @@ class CreationTests(Base):
         c = Client.objects.get(pk=r.data['id'])
         self.assertEqual((c.credit_limit, c.commission_rate), (D('50000.00'), D('0.25')))
 
-    def test_livreur_ne_cree_pas_de_client(self):
-        r = api(self.l1).post(CL, {'first_name': 'A', 'last_name': 'B'}, format='json')
-        self.assertEqual(r.status_code, 403)
+    def test_livreur_cree_client_dans_sa_boulangerie_seulement(self):
+        # BUG-1203 / Q-027 : le livreur a les memes ecrans que le facturier (ancienne regle : 403).
+        # Il ne cree que dans SA boulangerie ; modification/suppression restent fermees
+        # (voir test_dev_b3_livreur_en_ligne).
+        r = api(self.l1).post(CL, {'first_name': 'A', 'last_name': 'B', 'node': self.k3.pk}, format='json')
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(Client.objects.get(pk=r.data['id']).node, self.k1)
 
     def test_current_debt_et_total_breads_non_modifiables_par_api(self):
         c = self.mk(self.k1, 'A', 'B')

@@ -79,8 +79,10 @@ class RetenueUniqueHorlogeGrossiere(Base5):
         self.assertEqual(sum(r.deduction_debt for r in rows), D('10000.00'))
         self.assertEqual(sum(r.deduction_social for r in rows), D('1500.00'))
         self.assertEqual(sum(1 for r in rows if r.deduction_debt != 0), 1)
-        for r in rows:  # carte propre a chaque boulangerie
-            self.assertEqual(r.deduction_prints, D('700.00'))
+        # BUG-1104 : carte = UNE retenue par client et par mois (700 = valeur des boulangeries de test)
+        self.assertEqual(sum(r.deduction_prints for r in rows), D('700.00'))
+        self.assertEqual(sum(1 for r in rows if r.card_applied), 1)
+        for r in rows:
             self.assertEqual(r.commission_gross, D('12500.00'))  # 100 x 500 x 0,25 par boulangerie
         return rows
 

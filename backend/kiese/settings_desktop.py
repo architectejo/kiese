@@ -124,6 +124,8 @@ KIESE_DATA_DIR = str(DATA_DIR)
 KIESE_NODE_CODE = os.environ.get('KIESE_NODE_CODE', '')
 KIESE_CLOUD_URL = os.environ.get('KIESE_CLOUD_URL', '')
 KIESE_NODE_TOKEN = os.environ.get('KIESE_NODE_TOKEN', '')
+# Q-025 / BUG-1106 : fenetre (minutes) du dernier echange reussi pour etre « en ligne ».
+KIESE_ONLINE_WINDOW_MINUTES = os.environ.get('KIESE_ONLINE_WINDOW_MINUTES', '15')
 KIESE_APP_VERSION = os.environ.get('KIESE_APP_VERSION', '0.0.0')
 
 # ─── Journalisation (DESKTOP.md §8 : logs/backend.log, rotation 10×5 Mo) ──
