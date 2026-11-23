@@ -94,10 +94,14 @@ class Creation(Base):
             self.assertEqual(before, self.snapshot(), repr(bad))
 
     def test_creation_bornes(self):
-        for v in (0, 1, '3', MAX_LINE_QUANTITY):
+        # BUG-919/938/940 : sans id, une ligne de meme (facture, categorie) est retrouvee par cle
+        # naturelle et mise a jour (idempotence) ; une CREATION exige donc une categorie libre.
+        for i, v in enumerate((0, 1, '3', MAX_LINE_QUANTITY)):
+            bp = make_bread_price(f'QC{i}', f'Pain QC{i}', 500 + i)
             n = InvoiceLine.objects.count()
-            self.assertEqual(self.push(with_id=False, quantity=v)['status'], 'ACCEPTED', repr(v))
+            self.assertEqual(self.push(with_id=False, quantity=v, bread_price=bp.pk)['status'], 'ACCEPTED', repr(v))
             self.assertEqual(InvoiceLine.objects.count(), n + 1)
+            self.assertEqual(InvoiceLine.objects.get(invoice=self.inv, bread_price=bp).quantity, int(v))
 
     def test_creation_sans_quantite(self):
         rec = {'invoice': str(self.inv.pk), 'bread_price': self.bp.pk}

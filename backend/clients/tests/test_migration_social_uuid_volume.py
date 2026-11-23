@@ -58,9 +58,30 @@ class SocialSyncableUUIDMigrationVolumeTests(unittest.TestCase):
         self.addCleanup(lambda: connections.databases.pop(self.ALIAS, None))
 
         self.connection = connections[self.ALIAS]
+        # Les RunPython des migrations (ex. core 0021) interrogent `Model.objects` sans `using` : sans
+        # routeur temporaire elles taperaient la base 'default' au lieu de la base jetable.
+        alias = self.ALIAS
+
+        class _Router:
+            def db_for_read(self, model, **hints):
+                return alias
+
+            db_for_write = db_for_read
+
+            def allow_migrate(self, db, app_label, **hints):
+                return db == alias
+
+        from django.db import router as _db_router
+        old_routers = list(_db_router.routers)
+        _db_router.routers = [_Router()]
+        self.addCleanup(lambda: setattr(_db_router, 'routers', old_routers))
         self.executor = MigrationExecutor(self.connection)
 
     def test_realistic_volume_survives_uuid_pk_migration_without_loss_or_collision(self):
+        # Deux appels : d'abord clients 0007 et ses dependances, graphe reconstruit, puis la feuille core
+        # (le plan combine depend de l'ordre des migrations core ajoutees depuis).
+        self.executor.migrate([('clients', '0007_bug057_schema_drift_fix')])
+        self.executor.loader.build_graph()
         core_leaf = next(
             node for node in self.executor.loader.graph.leaf_nodes() if node[0] == 'core'
         )

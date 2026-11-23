@@ -51,8 +51,12 @@ class V891(b5.B5):
         for who, raw in (('em', self.raw1), ('re', self.raw2), ('tiers', self.raw3)):
             for st in ('RESPONDED', 'CONFIRMED', 'DISPUTED', 'CANCELLED', 'pending', 'FOO', None, 5, ['PENDING']):
                 t = self._create(raw, self.k1, self.k2, st)
-                if t is not None and t.transfer_status != 'PENDING':
+                # BUG-958 : seul l'envoi direct de l'emettrice (RESPONDED, sans quantite recue) naît « repondu » ;
+                # tout autre jeton/statut reste PENDING ou refuse.
+                if t is not None and t.transfer_status != 'PENDING' and not (who == 'em' and st == 'RESPONDED'):
                     bad.append((who, st, t.transfer_status))
+                if t is not None and who == 'em' and st == 'RESPONDED':
+                    self.assertEqual((t.transfer_status, t.quantity_received), ('RESPONDED', None))
         self.assertEqual(bad, [])
 
     def test_BUG_891_creation_pending_reste_possible_pour_les_deux_parties_et_defaut(self):
@@ -276,7 +280,7 @@ class V896(TBase):
 
     def test_BUG_896_valeurs_non_ascii_exponentielles_signes_et_formats_exotiques_refuses(self):
         bad = []
-        for q in (ARAB, FULL, '१', '１', '1e3', '1E3', '+3', '3e0', '0x3', '1_0', '3.5', '١٢', '３.０', '1,5', ' ', '', 'abc',
+        for q in (ARAB, FULL, '१', '１', '1e3', '1E3', '3e0', '0x3', '1_0', '3.5', '١٢', '３.０', '1,5', ' ', '', 'abc',
                   '٣.٠', '3.0e0', '3. 0', '٣٣'):
             r = self._post(q)
             if r.status_code != 400:
@@ -285,7 +289,8 @@ class V896(TBase):
 
     def test_BUG_896_valeurs_legitimes_toujours_acceptees(self):
         """Pas de regression : entier en chaine, avec point zero, negatif (ajustement), entier JSON."""
-        for i, q in enumerate(('5', '12', '5.0', '5.00', 5, 0, '0')):
+        # '+7' : signe explicite accepte (parseur partage core/numeric.py, BUG-1012/1015, d55)
+        for i, q in enumerate(('5', '12', '5.0', '5.00', 5, 0, '0', '+7')):
             team = 'A' if i % 2 == 0 else 'B'
             r = self._post(q, team)
             self.assertIn(r.status_code, (200, 201), (q, r.status_code, getattr(r, 'data', None)))
