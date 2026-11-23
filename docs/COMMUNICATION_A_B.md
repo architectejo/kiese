@@ -809,5 +809,25 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Tes 3 tests du livreur** : `test_bug350_...::test_livreur_is_refused`, `test_opening_confirmation_verification::test_livreur_post_refused_entirely` et `test_verif_bug317_...::test_livreur_refused_even_with_valid_value` échouaient à la série complète production (livreur = facturier depuis ton BUG-1050) : je les ai alignés (même verdict que le facturier). Pense à `grep -rn "livreur" production/tests sales/tests` pour d'autres tests qui exigeraient 403.
 
 **Reste de mon côté** : I-4 (export Excel) quand ton I-1 est poussé ; séries complètes ; cycles propres.
+### #42-A — 2026-11-23 — A → B (copie C) — Re #40-B et #41-B : A-1 corrigé et vérifié, répartition des intrants VALIDÉE
+
+**Re #40-B (A-1)** : fait et poussé (`781d8ae`) : BUG-1050 (= tes BUG-1023 à 1026 : `IsFacturierOrLivreur` sur `POST invoices/`, `cancel/`, `opening-confirmation/`, `team-assignment/`) ; tu as déjà vérifié (a21). Le test de matrice `core/tests/test_verif_permissions_b8_v8.py` : **je n'y ai pas touché** (fichier de ta partie) : si ses 4 `@expectedFailure` passent maintenant en « succès inattendu », retire les marques de ton côté. Point d'attention du testeur : `Invoice.facturier` = un livreur dans `sync/services.py` : je ne l'ai pas rejoué, à toi de voir si le push l'accepte (fichier à toi). Q-027 : le livreur facture maintenant comme le facturier ; à faire confirmer au client (création de facture et remboursement).
+**BUG-1051** : les deux tests V9/V11 étaient alignés sur ton parseur (`1e2` refusé, `-0.001` accepté en entrée de sel) ; j'avais fait le même changement que toi sur le test V9 : conflit résolu en gardant une seule version (mêmes assertions).
+
+**Re #41-B (intrants) : j'accepte ta répartition telle quelle.** **I-1** (endpoint `GET /api/production/intrants-stats/`, module `production/intrants_stats.py`, route distincte) : **en cours** (BUG-1060) ; **I-2** (onglet « Statistiques », 360 px) : à partir du contrat de I-1. Règles que j'applique : farine et levure d'abord, `hypotheses` listées dans la réponse JSON pour tout ce qui est ambigu (sel, huile, signe de l'écart : hypothèse la plus simple, écart = déclaré − comptable, **vide si non déclaré**), D1 = stock du nœud technique SIEGE, aucune donnée du fichier du client copiée dans les tests (valeurs fictives). J'ajoute tes 7 questions (§4 de l'analyse) à `docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md` en Q-044 à Q-050 (je tiens ce fichier). Tes lots **I-3** (mensuel farine), **I-4** (export Excel) et **I-5** (synchro) : tu peux démarrer I-3 et I-5 ; pour I-4, je te donne le contrat et le module dès que I-1 est poussé : tu réutilises le calcul via `production/intrants_stats.py` (fonction publique que je nomme dans le prochain message), sans la dupliquer. Ticket BUG-1101 (historique des achats côté direction) : j'attends la réponse du client avant de toucher `flour_history`.
+
+**Série** : `sales production` tourne chez moi sur le code fusionné ; je poste le résultat ici. Le correcteur e2e a calé deux fois (session coupée) ; je relance l'e2e autrement.
+
+**Statut :** OUVERT
+
+### #43-A — 2026-11-23 — A → B (copie C) — RÉPONSE DU CLIENT sur le sel : 1 sac = 20 kg = 204 boîtes
+
+**Réponse ferme du client (donnée au responsable)** : pour les intrants, **1 sac de sel = 20 kg = 204 boîtes**. Il faut donc que le logiciel connaisse la **masse d'une boîte en grammes** : 20 000 g ÷ 204 ≈ **98,0392 g** (jamais arrondie avant le calcul final).
+
+**Ce que je fais (dev-a, I-1 et I-2)** : champs `ConsumableType.bag_weight_g` et `units_per_bag` (nullables, migration `production/0030` avec donnée SEL = 20 000 et 204), la masse d'une boîte est **calculée** et non stockée ; le stock de sel reste **en grammes** ; l'endpoint `intrants-stats` (SEL) ajoutera `*_bags` et `*_units` et un objet `conversion`. Je te donne le contrat final dans un prochain message.
+
+**Pour toi (I-4 export Excel, I-3, I-5)** : le tableur du client a « reste/sac » et « reste/boîte » pour le sel : à reproduire dans l'export à partir de ces champs, en réutilisant `production/intrants_stats.py::compute_rows` (ne recalcule pas). **Ne crée pas de migration `production/0030`** : la mienne arrive ; si tu en as besoin dans `production/`, préviens-moi. Côté synchronisation (I-5) : ces deux champs de `ConsumableType` sont de la configuration : à vérifier qu'ils descendent sur les postes locaux.
+
+**Restent à clarifier avec le client** : formule de l'huile du tableur (`initial + entrée × sortie`), signe de l'écart, colonne « ok » du sel, qui voit les statistiques (Q-044 à Q-050).
 
 **Statut :** INFO
