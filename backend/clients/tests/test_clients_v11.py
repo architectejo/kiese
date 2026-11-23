@@ -363,7 +363,9 @@ class PullPosteNeuf(Base):
         apply_pull_response(payload)
         self.assertEqual(Client.objects.count(), self.N)
         c = Client.objects.get(code='K1-P00007')
-        self.assertEqual((c.first_name, c.credit_limit), ('Prénom7', D('50000.00')))
+        # i=7 -> i % 7 == 0 -> plafond du seed = 80 000 (valeur du cloud, pas le defaut)
+        self.assertEqual((c.first_name, c.credit_limit), ('Prénom7', D('80000.00')))
+        self.assertEqual(Client.objects.get(code='K1-P00008').credit_limit, D('50000.00'))
 
     def test_poste_existant_recoit_identite_et_plafond_du_cloud(self):
         c = self.mk(self.k1, 'Ancien', 'Nom', credit_limit=D('50000.00'))

@@ -245,11 +245,33 @@ class Migration0011(unittest.TestCase):
         }
         self.addCleanup(connections[self.ALIAS].close)
         self.addCleanup(lambda: connections.databases.pop(self.ALIAS, None))
+        # Les RunPython des migrations (ex. core 0021) interrogent `Model.objects` sans `using` : sans
+        # routeur elles taperaient la base 'default' (deja a jour) au lieu de la base jetable.
+        alias = self.ALIAS
+
+        class _Router:
+            def db_for_read(self, model, **hints):
+                return alias
+
+            db_for_write = db_for_read
+
+            def allow_migrate(self, db, app_label, **hints):
+                return db == alias
+
+        from django.db import router as _db_router
+        self._old_routers = list(_db_router.routers)
+        _db_router.routers = [_Router()]
+        self.addCleanup(lambda: setattr(_db_router, 'routers', self._old_routers))
         self.executor = MigrationExecutor(connections[self.ALIAS])
 
     def test_clients_existants_conserves_identity_NULL_et_dette_intacte(self):
+        # Deux appels : d'abord clients 0010 et ses dependances, graphe reconstruit, puis la feuille core
+        # (le plan combine depend de l'ordre des migrations core/sync/treasury ajoutees depuis).
+        self.executor.migrate([('clients', '0010_bug289')])
+        self.executor.loader.build_graph()
         core_leaf = next(n for n in self.executor.loader.graph.leaf_nodes() if n[0] == 'core')
         self.executor.migrate([core_leaf, ('clients', '0010_bug289')])
+        self.executor.loader.build_graph()
         old = self.executor.loader.project_state([('clients', '0010_bug289')]).apps
         Node, OldClient = old.get_model('core', 'Node'), old.get_model('clients', 'Client')
         node = Node.objects.using(self.ALIAS).create(code='ZZ', name='Noeud fictif')
