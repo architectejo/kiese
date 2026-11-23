@@ -1779,7 +1779,8 @@ def _push_bread_transfer(node, record):
                     existing.quantity_received = qty_recv
                     changed_fields.append('quantity_received')
         if changed_fields:
-            existing.save(update_fields=changed_fields, _sync_bypass=True)
+            # BUG-1003 : `updated_at` avance avec le statut (date de comptage partagée, clôture journalière).
+            existing.save(update_fields=changed_fields + ['updated_at'], _sync_bypass=True)
             if existing.transfer_status in _TRANSFER_LOCKED:
                 # BUG-921 : le lot qui termine le transfert peut encore pousser ses lignes.
                 _batch_terminal_parents().add(str(existing.pk))

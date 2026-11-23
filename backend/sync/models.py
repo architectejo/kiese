@@ -322,6 +322,9 @@ class TransferMirror(models.Model):
     node = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='transfer_mirrors')
     transfer_id = models.UUIDField(db_index=True)
     applied = models.JSONField(default=dict)
+    # BUG-1000 : plus hautes bornes [envoyé, reçu] connues du cloud pour ce poste (historique des
+    # lignes vues au push/pull) : distingue un marqueur « périmé » d'un marqueur forgé.
+    peak = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

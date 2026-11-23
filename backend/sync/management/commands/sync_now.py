@@ -608,7 +608,11 @@ def _apply_pulled_transfers(transfers, lines, local_code=None, mirrors=None):
     - Copie locale CANCELLED et acquittée (`is_synced`) alors que le cloud est RESPONDED/DISPUTED/
       CONFIRMED : conflit perdu (BUG-992), le cloud prévaut et le poste se réaligne.
     """
+    from datetime import timezone as dt_timezone
+
     from django.db import transaction
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
 
     from core.models import BreadPrice, Node
     from core.utils import create_notification
@@ -663,8 +667,15 @@ def _apply_pulled_transfers(transfers, lines, local_code=None, mirrors=None):
                 if rank[status] > rank[old_status] or lost_conflict:
                     local.transfer_status = status
                     local.quantity_received = qrecv
-                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
-                               _sync_bypass=True)
+                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced',
+                                              'updated_at'], _sync_bypass=True)
+                    # BUG-1003 : la date de comptage (clôture journalière) est celle du cloud, la même
+                    # pour les deux copies (émettrice et réceptrice).
+                    cloud_at = parse_datetime(td['updated_at']) if isinstance(td.get('updated_at'), str) else None
+                    if cloud_at is not None:
+                        if timezone.is_naive(cloud_at):
+                            cloud_at = timezone.make_aware(cloud_at, dt_timezone.utc)
+                        BreadTransfer.objects.filter(pk=local.pk).update(updated_at=cloud_at)
             is_to = bool(local_code) and local.to_node.code == local_code
             is_from = bool(local_code) and local.from_node.code == local_code
             before = old_status in ('RESPONDED', 'DISPUTED')   # stock émettrice déjà déduit (copie locale)

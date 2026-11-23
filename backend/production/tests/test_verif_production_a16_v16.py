@@ -7,7 +7,6 @@ Banc : 3 postes simules K1/K2/K3 (Q1/Q2/Q3) + cloud (A15Base). Donnees fictives.
 import datetime as dt
 import uuid
 from datetime import date as ddate, timedelta
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -124,7 +123,6 @@ class A16Mirror(A16Base):
         self.assertEqual(self.total(self.b3), 100)
 
     # ------------------------------------------------ pistes de contournement
-    @expectedFailure   # BUG-1000
     def test_observation_k1_honnete_ne_declenche_pas_d_alerte_apres_resolution_siege_received(self):
         """Apres ALIGN_ON_RECEIVED au siege, la ligne cloud passe de 100 a 98 ; K1 n'a pas encore pull et pousse
         son marqueur honnete [100, 0] : il ne doit pas etre traite comme une falsification."""
@@ -134,7 +132,6 @@ class A16Mirror(A16Base):
         self.cycles(1, ('K1',))
         self.assertEqual(self.oob().count(), 0)
 
-    @expectedFailure   # BUG-1000
     def test_observation_k2_honnete_ne_declenche_pas_d_alerte_apres_resolution_siege_sent(self):
         tid = self.send_from('K1', [self.L(self.b3, 100)], 'K2')
         self.cycles(2)
@@ -144,7 +141,6 @@ class A16Mirror(A16Base):
         self.cycles(1, ('K2',))
         self.assertEqual(self.oob().count(), 0)
 
-    @expectedFailure   # BUG-1001
     def test_marqueur_perime_poste_k1_reinstalle_juste_apres_resolution_received_aucun_credit_fantome(self):
         tid, _ = self.to_dispute_direct()
         self.resolve(tid, 'ALIGN_ON_RECEIVED')
@@ -152,7 +148,6 @@ class A16Mirror(A16Base):
         self.cycles(3)
         self.assertEqual(self.own('K1', self.b3), 0)
 
-    @expectedFailure   # BUG-1001
     def test_marqueur_perime_poste_k2_reinstalle_juste_apres_resolution_sent_aucun_debit_fantome(self):
         tid = self.send_from('K1', [self.L(self.b3, 100)], 'K2')
         self.cycles(2)
@@ -163,7 +158,6 @@ class A16Mirror(A16Base):
         self.cycles(3)
         self.assertGreaterEqual(self.own('K2', self.b3), 0)
 
-    @expectedFailure   # BUG-1002
     def test_BUG_1002_marqueur_emetteur_gonfle_sur_demande_pending_efface_la_deduction(self):
         """La borne `quantity_sent` d'une demande PENDING est la quantite DEMANDEE (rien n'est deduit) : K1
         pousse [100, 0] avant d'avoir vu la demande ; la reponse du siege est ensuite creditee a K2 sans
@@ -211,7 +205,6 @@ class A16Sweep(A16Base):
         self.assertEqual(k1['appro_effectue']['fc'], '30000.00')
         self.assertEqual(k2['facture_mvm_interne']['fc'], '-30000.00')
 
-    @expectedFailure   # BUG-1003
     def test_BUG_1003_envoi_la_veille_confirme_aujourd_hui_apres_sync_k1_compte_l_appro_le_meme_jour_que_k2(self):
         """Envoye hier, receptionne aujourd'hui : en REST (une base) `updated_at` passe a aujourd'hui pour les
         deux boulangeries. Via la synchronisation, la copie de K1 recoit le statut CONFIRMED sans que son

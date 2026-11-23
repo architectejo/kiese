@@ -121,23 +121,36 @@ def _store_mirrors(node, raw):
             cleaned[tid] = mirror
     if not cleaned:
         return
-    mine = set(BreadTransfer.objects.filter(pk__in=list(cleaned)).filter(
-        Q(from_node=node) | Q(to_node=node)).values_list('pk', flat=True))
-    from production.models import BreadTransferLine
+    mine_qs = BreadTransfer.objects.filter(pk__in=list(cleaned)).filter(
+        Q(from_node=node) | Q(to_node=node)).prefetch_related('lines')
+    mine_objs = {t.pk: t for t in mine_qs}
+    mine = set(mine_objs)
+    _bump_peaks(node, mine_objs.values())
     bounds = {}
-    for tid, bp, qs, qr in BreadTransferLine.objects.filter(transfer_id__in=list(mine)).values_list(
-            'transfer_id', 'bread_price_id', 'quantity_sent', 'quantity_received'):
-        bounds[(tid, str(bp))] = (qs, qr or 0)
+    for tid, t in mine_objs.items():
+        for bp, pair in _effective_line_bounds(t).items():
+            bounds[(tid, bp)] = pair
     for tid, mirror in cleaned.items():
         if tid not in mine:
             continue
         existing = TransferMirror.objects.filter(node=node, transfer_id=tid).first()
         old = dict(existing.applied) if existing is not None else {}
+        peak = existing.peak if existing is not None and isinstance(existing.peak, dict) else {}
+        # BUG-1000 : un poste qui n'a pas encore tiré la dernière modification du transfert (résolution
+        # au siège) peut légitimement pousser un marqueur au-dessus de la borne actuelle, jusqu'à la
+        # plus haute valeur historique connue du cloud.
+        stale = (mine_objs[tid].transfer_status != 'PENDING'
+                 and (node.last_sync is None or node.last_sync < mine_objs[tid].updated_at))
         merged = dict(old)
         rejected = []
         for bp, (sent, recv) in mirror.items():
             bound = bounds.get((tid, bp))
-            if bound is None or sent > bound[0] or recv > bound[1]:
+            upper = bound
+            if bound is not None and stale:
+                hp = peak.get(bp)
+                if isinstance(hp, (list, tuple)) and len(hp) == 2:
+                    upper = (max(bound[0], hp[0]), max(bound[1], hp[1]))
+            if bound is None or sent > upper[0] or recv > upper[1]:
                 # BUG-997 : marqueur hors borne (ou ligne inconnue du cloud) : ignoré.
                 rejected.append(bp)
                 continue
@@ -157,6 +170,46 @@ def _store_mirrors(node, raw):
                 SyncConflictLog.objects.filter(pk=conflict.pk).update(occurrences=conflict.occurrences + 1)
         if merged != old:
             TransferMirror.objects.update_or_create(node=node, transfer_id=tid, defaults={'applied': merged})
+
+
+def _effective_line_bounds(transfer):
+    """{bread_price_id: (envoyé_déduit_max, reçu_max)} d'un transfert (lignes préchargées).
+    BUG-1002 : tant que le transfert est en attente (PENDING) ou annulé, rien n'est déduit
+    chez l'émettrice : borne d'envoi = 0."""
+    deducted = transfer.transfer_status in ('RESPONDED', 'DISPUTED', 'CONFIRMED')
+    return {
+        str(l.bread_price_id): ((l.quantity_sent or 0) if deducted else 0, l.quantity_received or 0)
+        for l in transfer.lines.all()
+    }
+
+
+def _bump_peaks(node, transfers):
+    """BUG-1000 : retient pour (nœud, transfert) la plus haute borne [envoyé, reçu] vue par le cloud."""
+    for t in transfers:
+        cur = _effective_line_bounds(t)
+        if not cur:
+            continue
+        row = TransferMirror.objects.filter(node=node, transfer_id=t.pk).first()
+        peak = dict(row.peak) if row is not None and isinstance(row.peak, dict) else {}
+        new = dict(peak)
+        for bp, (s, r) in cur.items():
+            hp = peak.get(bp) or [0, 0]
+            new[bp] = [max(hp[0], s), max(hp[1], r)]
+        if new != peak or row is None:
+            TransferMirror.objects.update_or_create(node=node, transfer_id=t.pk, defaults={'peak': new})
+
+
+def _clamped_mirror(applied, transfer):
+    """BUG-1001 : marqueur descendu borné aux quantités actuelles des lignes cloud
+    (la somme du groupe reste nulle pour un poste réinstallé après une résolution)."""
+    lines = {str(l.bread_price_id): l for l in transfer.lines.all()}
+    out = {}
+    for bp, pair in applied.items():
+        l = lines.get(bp)
+        if l is None or not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        out[bp] = [min(pair[0], l.quantity_sent or 0), min(pair[1], l.quantity_received or 0)]
+    return out
 
 
 class PushView(APIView):
@@ -431,9 +484,12 @@ class PullView(APIView):
         payload['transfer_lines'] = transfer_lines
         # BUG-989/990 : marqueur « miroir déjà appliqué par CE poste » pour les transferts
         # descendus ({} = cloud récent, aucun marqueur ; clé absente = cloud ancien).
+        _bump_peaks(node, list(transfers_qs))
+        by_id = {t.id: t for t in transfers_qs}
         payload['mirrors'] = {
-            str(m.transfer_id): m.applied
-            for m in TransferMirror.objects.filter(node=node, transfer_id__in=[t.id for t in transfers_qs])
+            str(m.transfer_id): _clamped_mirror(m.applied, by_id[m.transfer_id])
+            for m in TransferMirror.objects.filter(node=node, transfer_id__in=list(by_id))
+            if m.applied
         }
         # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
         # émettrice ou réceptrice (effets de stock miroir, alertes).
