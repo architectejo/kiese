@@ -1290,6 +1290,12 @@ def _push_bread_transfer(node, record):
         new_status = record.get('transfer_status')
         changed_fields = []
         if new_status and new_status != existing.transfer_status:
+            # BUG-874 : seule la réceptrice valide la réception (CLAUDE.md 5.4).
+            if (new_status == BreadTransfer.TransferStatus.CONFIRMED
+                    and node.pk != existing.to_node_id):
+                return _record_result(
+                    record_id, False,
+                    "seule la boulangerie réceptrice peut confirmer la réception")
             if new_status in allowed_forward.get(existing.transfer_status, set()):
                 existing.transfer_status = new_status
                 changed_fields.append('transfer_status')
@@ -1311,6 +1317,13 @@ def _push_bread_transfer(node, record):
     # BUG-788 : seul un nœud partie au transfert (émetteur ou récepteur) peut le créer.
     if node.pk not in (from_bakery.pk, to_bakery.pk):
         return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
+    # BUG-874 : l'émettrice ne crée pas un transfert déjà reçu/confirmé.
+    if node.pk != to_bakery.pk and (
+            record.get('quantity_received') is not None
+            or record.get('transfer_status') == BreadTransfer.TransferStatus.CONFIRMED):
+        return _record_result(
+            record_id, False,
+            "seule la boulangerie réceptrice peut confirmer la réception")
 
     bread_price = None
     bp_id = record.get('bread_price')
@@ -1356,6 +1369,11 @@ def _push_bread_transfer_line(node, record):
         return _record_result(record_id, False, "dépendance manquante : transfer")
     if node.pk not in (transfer.from_node_id, transfer.to_node_id):
         return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
+    # BUG-874 : la quantité reçue ne vient que de la boulangerie réceptrice.
+    if record.get('quantity_received') is not None and node.pk != transfer.to_node_id:
+        return _record_result(
+            record_id, False,
+            "seule la boulangerie réceptrice peut renseigner la quantité reçue")
     bread_price = BreadPrice.objects.filter(pk=record.get('bread_price')).first()
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")

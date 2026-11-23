@@ -89,7 +89,7 @@ class CaisseSocialeV5(Base):
         self.assertEqual(r.status_code, 201, r.data)
         return r.data['id']
 
-    @expectedFailure  # BUG-872
+    # (BUG-87x corrigé)
     def test_distribution_close_non_supprimable_par_un_gerant(self):
         """Une distribution close est figee (BUG-295/313/752) : sa suppression efface les montants distribues."""
         d = self._distrib(self.k1)
@@ -154,13 +154,13 @@ from rest_framework.test import APIClient  # noqa: E402
 class CorpsNonObjetCore(Base):
     ME = '/api/core/auth/me/'
 
-    @expectedFailure  # BUG-873
+    # (BUG-87x corrigé)
     def test_profil_patch_corps_non_objet_est_400(self):
         for body in ([], [1], 5):
             r = api(self.f1).patch(self.ME, body, format='json')
             self.assertEqual(r.status_code, 400, (body, r.status_code))
 
-    @expectedFailure  # BUG-873
+    # (BUG-87x corrigé)
     def test_profil_patch_new_password_non_texte_est_400(self):
         r = api(self.f1).patch(self.ME, {'new_password': 12345678, 'old_password': 'x'}, format='json')
         self.assertEqual(r.status_code, 400, r.status_code)

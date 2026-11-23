@@ -77,7 +77,7 @@ class PorteeV5(TestCase):
         return BreadTransfer.objects.create(from_node=self.k1, to_node=self.k2, bread_price=self.bp,
                                             quantity_sent=100, transfer_status=status, node_origin='K1')
 
-    @expectedFailure  # BUG-874
+    # (BUG-87x corrigé)
     def test_emetteur_ne_confirme_pas_la_reception_de_son_propre_transfert(self):
         """La validation par la boulangerie receptrice est la regle (5.4) : l'emetteur ne peut pas la court-circuiter."""
         t = self._transfer('RESPONDED')
@@ -85,7 +85,7 @@ class PorteeV5(TestCase):
         t.refresh_from_db()
         self.assertNotEqual(t.transfer_status, 'CONFIRMED', r.data)
 
-    @expectedFailure  # BUG-874
+    # (BUG-87x corrigé)
     def test_emetteur_ne_cree_pas_un_transfert_deja_confirme_avec_quantite_recue(self):
         rec = {'id': str(uuid.uuid4()), 'from_node': 'K1', 'to_node': 'K2', 'bread_price': self.bp.pk,
                'quantity_sent': 100, 'quantity_received': 100, 'transfer_status': 'CONFIRMED', 'node_origin': 'K1'}
@@ -94,7 +94,7 @@ class PorteeV5(TestCase):
         ok = t is None or (t.quantity_received is None and t.transfer_status != 'CONFIRMED')
         self.assertTrue(ok, f"recu et confirme sans la receptrice : {r.data}")
 
-    @expectedFailure  # BUG-874
+    # (BUG-87x corrigé)
     def test_emetteur_ne_cree_pas_une_ligne_avec_quantite_recue(self):
         t = self._transfer('PENDING')
         rec = {'transfer': str(t.pk), 'bread_price': self.bp.pk,

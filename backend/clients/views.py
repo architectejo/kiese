@@ -755,6 +755,13 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                 line.compute()
                 line.save(update_fields=['remise', 'total_payer', 'updated_at'])
 
+    def destroy(self, request, *args, **kwargs):
+        # BUG-872 : une distribution clôturée est figée, sa suppression effacerait les montants.
+        if self.get_object().is_closed:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Distribution clôturée : suppression impossible.'})
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=True, methods=['post'])
     @transaction.atomic  # BUG-753 : tout ou rien
     def refresh_indices(self, request, pk=None):
