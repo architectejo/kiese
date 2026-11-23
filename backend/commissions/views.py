@@ -365,9 +365,16 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
+        log_activity(  # BUG-944
+            self.request.user, "Création Commission",
+            f"Commission de {commission.client.full_name} ({commission.period}) créée : "
+            f"net à payer {commission.net_payable} FC.",
+            node_origin=commission.period.node.code,
+        )
 
     def perform_update(self, serializer):
         config = Config.get_instance()
+        old_net = serializer.instance.net_payable
         commission = serializer.save()
         commission.compute(float(config.annual_bonus_rate))
         commission.save(update_fields=[
@@ -375,6 +382,21 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
+        log_activity(  # BUG-944
+            self.request.user, "Modification Commission",
+            f"Commission de {commission.client.full_name} ({commission.period}) modifiée : "
+            f"net à payer {old_net} -> {commission.net_payable} FC.",
+            node_origin=commission.period.node.code,
+        )
+
+    def perform_destroy(self, instance):
+        label = f"{instance.client.full_name} ({instance.period}) — net à payer {instance.net_payable} FC"
+        node_code = instance.period.node.code
+        instance.delete()
+        log_activity(  # BUG-944
+            self.request.user, "Suppression Commission",
+            f"Commission de {label} supprimée.", node_origin=node_code,
+        )
 
     @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def summary(self, request):

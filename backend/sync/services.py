@@ -73,11 +73,13 @@ def recompute_client_debt(client_id, opening=None):
                 )['total'] or Decimal('0.00')
                 if opening:
                     total = total + opening
+                old_category = client.category
                 client.current_debt = total
                 client.refresh_category()
                 # BUG-787 : `updated_at` doit avancer pour que le pull
                 # incrémental renvoie ce client aux autres postes.
                 client.save(update_fields=['current_debt', 'category', 'updated_at'])
+                client.notify_risk_transition(old_category)  # BUG-945
                 return client
         except OperationalError as exc:
             last_exc = exc
@@ -292,6 +294,74 @@ def _to_decimal(value, default=Decimal('0')):
         return default
 
 
+_CLIENT_TEXT_FIELDS = (('first_name', 100, True), ('last_name', 100, True), ('phone', 25, False),
+                       ('address', None, False), ('notes', None, False))
+
+
+def _apply_client_identity_push(existing, record):
+    """
+    BUG-941 (SYNC.md §5.1) : identité et paramètres d'un client (nom, téléphone,
+    adresse, plafond, taux, cotisation, type) = dernier écrivain gagne, poussés
+    par le nœud propriétaire. `current_debt`, `total_breads_received` et le
+    stock ne sont JAMAIS touchés (§2.2). Un enregistrement plus ancien que la
+    version du Cloud (`updated_at`) est ignoré (no-op accepté). Champ invalide :
+    tout l'enregistrement est rejeté, rien n'est écrit.
+    """
+    from clients.models import Client
+
+    record_id = record.get('id')
+    try:
+        sent_at = _parse_aware_datetime(record.get('updated_at'))
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+    if sent_at is not None and sent_at < existing.updated_at:
+        return _record_result(record_id, True)
+
+    changes = {}
+    try:
+        for name, max_len, required in _CLIENT_TEXT_FIELDS:
+            if name not in record:
+                continue
+            val = record[name]
+            if val is None and not required:
+                val = ''
+            if not isinstance(val, str) or (required and not val.strip()) or (max_len and len(val) > max_len):
+                raise ValueError(f"« {name} » invalide")
+            changes[name] = val
+        if record.get('credit_limit') not in (None, ''):
+            changes['credit_limit'] = _sync_decimal(record['credit_limit'], 'credit_limit', 2,
+                                                    Decimal('0'), Decimal('10000000'))
+        if record.get('commission_rate') not in (None, ''):
+            changes['commission_rate'] = _sync_decimal(record['commission_rate'], 'commission_rate', 2,
+                                                       Decimal('0'), MAX_SYNC_COMMISSION_RATE)
+        if 'cotisation_sociale' in record:
+            raw = record['cotisation_sociale']
+            changes['cotisation_sociale'] = (None if raw in (None, '') else
+                                             _sync_decimal(raw, 'cotisation_sociale', 2, Decimal('0'), max_digits=10))
+        if record.get('client_type') not in (None, ''):
+            if record['client_type'] not in Client.ClientType.values:
+                raise ValueError("« client_type » invalide")
+            changes['client_type'] = record['client_type']
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+
+    changes = {k: v for k, v in changes.items() if getattr(existing, k) != v}
+    if not changes:
+        return _record_result(record_id, True)
+    with transaction.atomic():
+        locked = Client.objects.select_for_update().get(pk=existing.pk)
+        old_category = locked.category
+        for k, v in changes.items():
+            setattr(locked, k, v)
+        fields = list(changes)
+        if 'credit_limit' in changes:
+            locked.refresh_category()
+            fields.append('category')
+        locked.save(update_fields=fields + ['updated_at'], _sync_bypass=True)
+        locked.notify_risk_transition(old_category)
+    return _record_result(record_id, True)
+
+
 def _push_client(node, record):
     from clients.models import Client
 
@@ -313,7 +383,7 @@ def _push_client(node, record):
                 f"Le nœud {node.code} a tenté de modifier un client appartenant à {existing.node_origin}."
             )
             return _record_result(record_id, False, "nœud non propriétaire de ce client")
-        return _record_result(record_id, True)
+        return _apply_client_identity_push(existing, record)  # BUG-941
 
     bakery_code = record.get('node') or node.code
     try:

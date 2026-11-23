@@ -12,7 +12,6 @@ Donnees FICTIVES. Code applicatif non modifie.
 import uuid
 from datetime import date
 from decimal import Decimal as D
-from unittest import expectedFailure
 from unittest import mock
 
 from django.db.models import F
@@ -79,7 +78,6 @@ class V915Verif(Base):
         self.assertEqual(self._bulk(amount='9999').data, {'created': 0, 'skipped': 1})
         self.assertEqual(SocialContribution.objects.get(client=self.c1).amount, D('2500.50'))
 
-    @expectedFailure
     def test_BUG_950_montant_zero_explicite_remplace_par_la_cotisation_par_defaut(self):
         # `manual_amount if manual_amount else default` : 0 explicite est traite comme « absent ».
         r = self._bulk(amount='0')
@@ -244,7 +242,6 @@ class SweepRest(Base):
                 r = api(self.direction).post(CL + route, {'ids': bad, 'node': str(self.k3.pk)}, format='json')
                 self.assertLess(r.status_code, 500, (route, bad, r.status_code))
 
-    @expectedFailure
     def test_BUG_946_annee_cotisation_sans_borne_rest(self):
         # le push (BUG-917) refuse 1999 et 99999 ; bulk_create_month 2000-2100 ; la REST accepte n'importe quelle annee.
         for year in (0, 1, 1999, 32767):
@@ -267,7 +264,6 @@ class SweepRest(Base):
         r = api(self.g1).patch(f'{LINES}{self.line.pk}/', {'client': str(self.c1.id)}, format='json')
         self.assertEqual(r.status_code, 400, r.status_code)
 
-    @expectedFailure
     def test_BUG_947_cotisation_is_paid_par_patch_sans_paid_at(self):
         # toggle_paid pose paid_at ; PATCH/POST is_paid=true laisse paid_at vide (et is_paid=false le conserve).
         r = api(self.g1).patch(f'{CONTRIB}{self.contrib.pk}/', {'is_paid': True}, format='json')
@@ -276,7 +272,6 @@ class SweepRest(Base):
         self.assertTrue(self.contrib.is_paid)
         self.assertIsNotNone(self.contrib.paid_at, "cotisation payee sans date de paiement")
 
-    @expectedFailure
     def test_BUG_947b_cotisation_is_paid_false_efface_paid_at(self):
         api(self.g1).post(f'{CONTRIB}{self.contrib.pk}/toggle_paid/')
         r = api(self.g1).patch(f'{CONTRIB}{self.contrib.pk}/', {'is_paid': False}, format='json')
@@ -285,7 +280,6 @@ class SweepRest(Base):
         self.assertFalse(self.contrib.is_paid)
         self.assertIsNone(self.contrib.paid_at, "cotisation non payee mais paid_at conserve")
 
-    @expectedFailure
     def test_BUG_948_siege_peut_rattacher_une_cotisation_a_un_client_d_une_autre_boulangerie(self):
         # perform_create controle client.node == node ; la mise a jour (HQ) ne controle rien.
         c3 = self.mk(self.k3, 'Far', 'Away')
@@ -294,14 +288,12 @@ class SweepRest(Base):
         self.assertTrue(r.status_code >= 400 or self.contrib.client.node_id == self.contrib.node_id,
                         (r.status_code, self.contrib.client.node_id, self.contrib.node_id))
 
-    @expectedFailure
     def test_BUG_948b_siege_peut_deplacer_une_ligne_ou_cotisation_vers_une_autre_boulangerie(self):
         r = api(self.direction).patch(f'{CONTRIB}{self.contrib.pk}/', {'node': self.k3.pk}, format='json')
         self.contrib.refresh_from_db()
         self.assertTrue(r.status_code >= 400 or self.contrib.client.node_id == self.contrib.node_id,
                         (r.status_code, self.contrib.client.node_id, self.contrib.node_id))
 
-    @expectedFailure
     def test_BUG_949_patch_node_siege_ne_regenere_pas_le_code(self):
         # bulk_move regenere le code (prefixe = boulangerie) ; PATCH node par le siege laisse « K1-... » sur K3.
         r = api(self.direction).patch(f'{CL}{self.c1.pk}/', {'node': self.k3.pk}, format='json')
@@ -389,7 +381,6 @@ class DebtMixed(Base):
         c.refresh_from_db()
         self.assertEqual((c.current_debt, c.category), (D('5000.00'), Client.Category.NORMAL))
 
-    @expectedFailure
     def test_BUG_943_patch_client_ecrase_la_dette_modifiee_pendant_la_requete(self):
         # `serializer.save()` ecrit TOUTES les colonnes lues par get_object() : une livraison validee
         # entre la lecture et l'ecriture (F()) est perdue. Simulation deterministe (cf. BUG-735).
@@ -410,7 +401,6 @@ class DebtMixed(Base):
         self.assertEqual((c.current_debt, c.total_breads_received), (D('5000.00'), 50),
                          "la livraison concurrente (+4000 FC, +50 pains) a ete ecrasee par le PATCH")
 
-    @expectedFailure
     def test_BUG_945_pas_de_notification_quand_la_poussee_fait_passer_un_client_a_risque(self):
         c = self.mk(self.k1, 'N', 'N', credit_limit=D('50000.00'))
         before = SystemNotification.objects.exclude(title__icontains="onfiguration").count()
@@ -420,7 +410,6 @@ class DebtMixed(Base):
         # la livraison REST notifie « Alerte Crédit » ; le meme franchissement par push est silencieux
         self.assertGreater(SystemNotification.objects.exclude(title__icontains="onfiguration").count(), before)
 
-    @expectedFailure
     def test_BUG_945b_pas_de_notification_quand_baisser_le_plafond_met_le_client_a_risque(self):
         c = self.mk(self.k1, 'N', 'N', credit_limit=D('50000.00'), current_debt=D('20000.00'))
         before = SystemNotification.objects.exclude(title__icontains="onfiguration").count()
@@ -551,7 +540,6 @@ class Journal(Base):
         self.assertEqual(r.status_code, 201)
         self.assertEqual(self.count(), before + 1)
 
-    @expectedFailure
     def test_BUG_944_modification_plafond_et_taux_client_non_journalisee(self):
         before = self.count()
         r = api(self.g1).patch(f'{CL}{self.c1.pk}/', {'credit_limit': '80000', 'commission_rate': '0.30'},
@@ -559,7 +547,6 @@ class Journal(Base):
         self.assertEqual(r.status_code, 200, r.data)
         self.assertGreater(self.count(), before)
 
-    @expectedFailure
     def test_BUG_944b_suppression_client_unitaire_non_journalisee(self):
         c = self.mk(self.k1, 'D', 'D')
         before = self.count()
@@ -567,15 +554,12 @@ class Journal(Base):
         self.assertEqual(r.status_code, 204)
         self.assertGreater(self.count(), before)
 
-    @expectedFailure
-    @expectedFailure
     def test_BUG_944_caisse_sociale_paiement_cotisation_non_journalise(self):
         before = self.count()
         r = api(self.g1).post(f'{CONTRIB}{self.contrib.pk}/toggle_paid/')
         self.assertEqual(r.status_code, 200)
         self.assertGreater(self.count(), before, "toggle_paid : encaissement de cotisation sans trace")
 
-    @expectedFailure
     def test_BUG_944b_caisse_sociale_generation_mensuelle_non_journalisee(self):
         before = self.count()
         r = api(self.g1).post(CONTRIB + 'bulk_create_month/', {'node': str(self.k1.pk), 'month': 8, 'year': 2026},
@@ -583,7 +567,6 @@ class Journal(Base):
         self.assertEqual(r.data['created'], 1)
         self.assertGreater(self.count(), before)
 
-    @expectedFailure
     def test_BUG_944c_cloture_distribution_irreversible_non_journalisee(self):
         before = self.count()
         r = api(self.direction).patch(f'{DISTRIB}{self.dist.pk}/', {'is_closed': True}, format='json')
@@ -591,7 +574,6 @@ class Journal(Base):
         self.assertTrue(SocialDistribution.objects.get(pk=self.dist.pk).is_closed)
         self.assertGreater(self.count(), before, "cloture irreversible de la caisse sociale sans trace")
 
-    @expectedFailure
     def test_BUG_944d_modification_ligne_distribution_non_journalisee(self):
         line = SocialDistributionLine.objects.create(distribution=self.dist, client=self.c1)
         before = self.count()
@@ -599,15 +581,12 @@ class Journal(Base):
         self.assertEqual(r.status_code, 200, r.data)
         self.assertGreater(self.count(), before)
 
-    @expectedFailure
-    @expectedFailure
     def test_BUG_944_creation_modification_suppression_commission_non_journalisees(self):
         before = self.count()
         r = api(self.direction).patch(f'{COMMS}{self.cc.pk}/', {'deduction_other': '300'}, format='json')
         self.assertEqual(r.status_code, 200, r.data)
         self.assertGreater(self.count(), before, "retenue modifiee (net a payer change) sans trace")
 
-    @expectedFailure
     def test_BUG_944b_suppression_commission_non_journalisee(self):
         before = self.count()
         r = api(self.direction).delete(f'{COMMS}{self.cc.pk}/')
@@ -643,7 +622,6 @@ class DeuxPostes(Base):
         c = Client.objects.get(pk=self.own.pk)
         self.assertEqual((c.phone, c.credit_limit), ('', D('50000.00')))
 
-    @expectedFailure
     def test_BUG_941_modification_du_proprietaire_acceptee_mais_jamais_appliquee(self):
         # SYNC.md 5.1 : identite (nom, telephone, plafond) = dernier ecrivain gagne, proprietaire ou Cloud.
         r = self._push_edit(self.n1, phone='0812345678', credit_limit='80000', last_name='Renomme')
@@ -659,7 +637,6 @@ class DeuxPostes(Base):
         row = [c for c in r.data['clients'] if c['id'] == str(self.own.id)][0]
         self.assertEqual(row['credit_limit'], '12000.00')
 
-    @expectedFailure
     def test_BUG_942_pull_n_applique_ni_plafond_ni_identite_sur_le_poste(self):
         from sync.management.commands.sync_now import apply_pull_response
         # etat du poste : copie locale avec l'ancien plafond ; le Cloud a un plafond modifie et une dette en RISK

@@ -234,6 +234,8 @@ class PullView(APIView):
             {
                 'id': str(c.id), 'code': c.code, 'current_debt': str(c.current_debt),
                 'credit_limit': str(c.credit_limit), 'category': c.category,
+                'first_name': c.first_name, 'last_name': c.last_name,
+                'phone': c.phone, 'address': c.address,
                 'updated_at': c.updated_at.isoformat(),
             }
             for c in client_qs

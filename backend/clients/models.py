@@ -201,6 +201,21 @@ class Client(SyncableModel):
         else:
             self.category = self.Category.NORMAL
 
+    def notify_risk_transition(self, old_category):
+        """BUG-945 : alerte quand le client passe à « risque » (push de mouvement, baisse de plafond)."""
+        if self.category != self.Category.RISK or old_category == self.Category.RISK:
+            return
+        from core.utils import create_notification
+        create_notification(
+            title=f"Alerte Risque Client — {self.full_name}",
+            message=(
+                f"Le client {self.code} {self.full_name} dépasse son plafond "
+                f"({self.credit_limit:,.0f} FC). Encours : {self.current_debt:,.0f} FC."
+            ),
+            severity='DANGER',
+            node_origin=self.node.code,
+        )
+
 
 class SocialContribution(SyncableModel):
     """Monthly social fund contribution per client (Caisse Sociale)."""

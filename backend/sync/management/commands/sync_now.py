@@ -552,9 +552,41 @@ def apply_pull_response(payload):
             # (curseur `updated_at` du Cloud) la redescend.
             if DebtMovement.objects.filter(client_id=client_id, is_synced=False).exists():
                 continue
-            Client.objects.filter(pk=client_id).update(
-                current_debt=debt.quantize(Decimal('0.01')), category=category,
-            )
+            locked = Client.objects.select_for_update().filter(pk=client_id).first()
+            if locked is None:
+                continue
+            old_category = locked.category
+            locked.current_debt = debt.quantize(Decimal('0.01'))
+            fields = ['current_debt', 'category']
+            # BUG-942 : plafond et identité du Cloud appliqués (valeurs invalides ignorées).
+            limit = client_data.get('credit_limit')
+            if limit is not None and not isinstance(limit, bool):
+                try:
+                    limit = Decimal(str(limit))
+                except InvalidOperation:
+                    limit = None
+                if limit is not None and limit.is_finite() and Decimal('0') <= limit <= Decimal('10000000'):
+                    locked.credit_limit = limit.quantize(Decimal('0.01'))
+                    fields.append('credit_limit')
+                else:
+                    limit = None
+            else:
+                limit = None
+            for name, max_len in (('first_name', 100), ('last_name', 100), ('phone', 25), ('address', None)):
+                val = client_data.get(name)
+                if isinstance(val, str) and (max_len is None or len(val) <= max_len) \
+                        and (name not in ('first_name', 'last_name') or val.strip()):
+                    setattr(locked, name, val)
+                    fields.append(name)
+            locked.category = category
+            if limit is not None:
+                # La catégorie doit rester cohérente avec le plafond appliqué.
+                if locked.current_debt >= locked.credit_limit:
+                    locked.category = Client.Category.RISK
+                elif category == Client.Category.RISK:
+                    locked.refresh_category()
+            locked.save(update_fields=fields, _sync_bypass=True)
+            locked.notify_risk_transition(old_category)
     # `config`/`bread_prices` : appliqués par le futur backend desktop sur
     # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
     # appliquer ici quand la commande est testée contre la même base que
