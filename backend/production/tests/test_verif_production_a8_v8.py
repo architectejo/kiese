@@ -6,7 +6,6 @@ signe appro recu, BUG-675). Donnees fictives. Les `@expectedFailure` referencent
 import uuid
 from datetime import date as ddate, timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from rest_framework.test import APIClient
 
@@ -107,19 +106,15 @@ class V8SessionBounds(PushBase):
         self.assertEqual(res[0], 'REJECTED', (kw, res))
         self.assertFalse(ProductionSession.objects.filter(pk=rec['id']).exists())
 
-    @expectedFailure  # BUG-901
     def test_BUG_901_future_date_refused(self):
         self._assert_refused(date=str(ddate.today() + timedelta(days=30)))
 
-    @expectedFailure  # BUG-902
     def test_BUG_902_negative_flour_refused(self):
         self._assert_refused(flour_sacks_used='-3')
 
-    @expectedFailure  # BUG-902
     def test_BUG_902_non_ascii_flour_refused(self):
         self._assert_refused(flour_sacks_used=AR)
 
-    @expectedFailure  # BUG-902
     def test_BUG_902_flour_above_100000_refused(self):
         self._assert_refused(flour_sacks_used='999999')
 
@@ -145,23 +140,19 @@ class V8LinePush(PushBase):
             self.assertEqual(self._line(bread_price=self.b5.pk, quantity=q)[0], 'REJECTED', q)
         self.assertEqual(self._count(), 1)
 
-    @expectedFailure  # BUG-903
     def test_BUG_903_huge_quantity_refused(self):
         self.assertEqual(self._line(quantity=10 ** 12)[0], 'REJECTED')
         self.assertEqual(self._count(), 0)
 
-    @expectedFailure  # BUG-903
     def test_BUG_903_non_ascii_quantity_refused(self):
         self.assertEqual(self._line(quantity=AR + '0')[0], 'REJECTED')
         self.assertEqual(self._count(), 0)
 
-    @expectedFailure  # BUG-904
     def test_BUG_904_null_quantity_not_silently_accepted(self):
         st = self._line(quantity=None)[0]
         # soit REJECTED, soit une ligne creee ; jamais ACCEPTED sans aucune ligne (perte silencieuse)
         self.assertTrue(st == 'REJECTED' or self._count() == 1, (st, self._count()))
 
-    @expectedFailure  # BUG-905
     def test_BUG_905_line_on_closed_session_refused(self):
         push(self.a1, 'production.ProductionSession', dict(self.rec, is_closed=True, closed_at='2026-11-23T20:00:00Z'))
         self.assertTrue(ProductionSession.objects.get(pk=self.rec['id']).is_closed)
@@ -192,13 +183,11 @@ class V8DisposalPush(PushBase):
         d, res = self._d(quantity=-5, disposal_type='REMAINING')  # reste du jour negatif autorise (BUG-158)
         self.assertEqual(res[0], 'ACCEPTED')
 
-    @expectedFailure  # BUG-906
     def test_BUG_906_quantity_above_rest_bound_refused(self):
         d, res = self._d(quantity=3_000_000_000)
         self.assertEqual(res[0], 'REJECTED')
         self.assertFalse(BreadDisposal.objects.filter(pk=d['id']).exists())
 
-    @expectedFailure  # BUG-906
     def test_BUG_906_blank_disposal_type_refused(self):
         d, res = self._d(disposal_type='')
         self.assertEqual(res[0], 'REJECTED')
@@ -224,7 +213,6 @@ class V8MovementPush(PushBase):
         self.assertEqual(self._m(quantity='99999999999')[1][0], 'REJECTED')
         self.assertEqual(self._m(node=self.k2.code)[1][0], 'REJECTED')
 
-    @expectedFailure  # BUG-907
     def test_BUG_907_negative_entry_refused_and_stock_untouched(self):
         self._m(quantity='10')
         d, res = self._m(quantity='-5')
@@ -232,18 +220,15 @@ class V8MovementPush(PushBase):
         self.assertEqual(self._qty(), Dc('10'))
         self.assertFalse(ConsumableMovement.objects.filter(pk=d['id']).exists())
 
-    @expectedFailure  # BUG-907
     def test_BUG_907_non_ascii_quantity_refused(self):
         d, res = self._m(quantity=AR)
         self.assertEqual(res[0], 'REJECTED')
         self.assertEqual(self._qty(), 0)
 
-    @expectedFailure  # BUG-907
     def test_BUG_907_negative_unit_price_refused(self):
         d, res = self._m(unit_price='-3')
         self.assertEqual(res[0], 'REJECTED')
 
-    @expectedFailure  # BUG-907
     def test_BUG_907_more_than_three_decimals_refused_not_rounded(self):
         d, res = self._m(quantity='0.3333')
         self.assertEqual(res[0], 'REJECTED')
@@ -276,20 +261,16 @@ class V8InvoicePush(PushBase):
                 inv = Invoice.objects.get(pk=rec['id'])
                 self.assertEqual((inv.status, inv.order_total, inv.payment_amount), (term, Dc('5000'), Dc('5000')), (term, kw))
 
-    @expectedFailure  # BUG-908
     def test_BUG_908_commission_rate_out_of_range_refused(self):
         self._assert_refused(commission_rate='5')
         self._assert_refused(commission_rate='-1')
 
-    @expectedFailure  # BUG-908
     def test_BUG_908_future_delivered_at_refused(self):
         self._assert_refused(status='DELIVERED', delivered_at='2099-01-01T00:00:00Z')
 
-    @expectedFailure  # BUG-908
     def test_BUG_908_non_ascii_receipt_number_refused(self):
         self._assert_refused(receipt_number=AR * 3)
 
-    @expectedFailure  # BUG-909
     def test_BUG_909_new_line_on_delivered_or_cancelled_invoice_refused(self):
         for term in ('DELIVERED', 'CANCELLED'):
             rec = self.inv(status=term)

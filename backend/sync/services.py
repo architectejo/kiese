@@ -5,6 +5,7 @@ indépendamment du transport HTTP (SYNC.md §2.2, §3).
 
 import logging
 import random
+import threading
 import time
 from datetime import date as _date
 from decimal import Decimal, InvalidOperation
@@ -238,6 +239,19 @@ PUSH_MODEL_ORDER = [
 ACCEPTED = 'ACCEPTED'
 REJECTED = 'REJECTED'
 
+# BUG-905/909 : une ligne ne s'ajoute pas à une fournée clôturée ni à une
+# facture livrée/annulée (comme la voie REST). Exception légitime : le nœud
+# pousse la fournée/facture DÉJÀ terminée avec ses lignes dans le MÊME lot
+# (le parent précède ses lignes dans PUSH_MODEL_ORDER). Le lot en cours
+# retient donc les parents créés/passés à l'état terminal par ce lot.
+_batch_ctx = threading.local()
+
+
+def _batch_terminal_parents():
+    if not hasattr(_batch_ctx, 'parents'):
+        _batch_ctx.parents = set()
+    return _batch_ctx.parents
+
 
 def _record_result(record_id, accepted, reason=None):
     result = {'id': str(record_id)[:64], 'status': ACCEPTED if accepted else REJECTED}
@@ -418,6 +432,8 @@ def _push_invoice(node, record):
                         changed_fields.append(fname)
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if 'status' in changed_fields and existing.status in ('DELIVERED', 'CANCELLED'):
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     bakery_code = record.get('node') or node.code
@@ -453,6 +469,8 @@ def _push_invoice(node, record):
         node_origin=record.get('node_origin', bakery_code),
     )
     invoice.save(_sync_bypass=True)
+    if invoice.status in ('DELIVERED', 'CANCELLED'):
+        _batch_terminal_parents().add(str(invoice.pk))
     return _record_result(record_id, True)
 
 
@@ -578,6 +596,10 @@ def _push_invoice_line(node, record):
     # BUG-732 (a) : jamais de ligne sur la facture d'une autre boulangerie.
     if invoice.node_id != node.pk:
         return _record_result(record_id, False, "facture d'une autre boulangerie : ligne refusée")
+    # BUG-909 : pas de nouvelle ligne sur une facture livrée/annulée (sauf
+    # facture poussée terminée dans ce même lot, avec ses lignes).
+    if invoice.status in ('DELIVERED', 'CANCELLED') and str(invoice.pk) not in _batch_terminal_parents():
+        return _record_result(record_id, False, "facture livrée ou annulée : ajout de ligne refusé")
     bp_id = record.get('bread_price')
     if isinstance(bp_id, bool) or not isinstance(bp_id, (int, str)) or not str(bp_id).strip().isdigit():
         return _record_result(record_id, False, "dépendance manquante : bread_price")
@@ -765,6 +787,8 @@ def _push_production_session(node, record):
                 changed_fields.append('closure_summary')
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if 'is_closed' in changed_fields:
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     if not record.get('date'):
@@ -797,6 +821,8 @@ def _push_production_session(node, record):
         node_origin=record.get('node_origin', bakery_code),
     )
     session.save(_sync_bypass=True)
+    if session.is_closed:
+        _batch_terminal_parents().add(str(session.pk))
     return _record_result(record_id, True)
 
 
@@ -817,11 +843,22 @@ def _push_production_session_line(node, record):
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
+    # BUG-904 : une quantité absente/nulle n'est jamais « acceptée » sans ligne.
+    if record.get('quantity', 0) is None:
+        return _record_result(record_id, False, "« quantity » manquante")
+    quantity = _sync_int(record.get('quantity', 0), 'quantity')
+    # BUG-905 : pas de ligne sur une fournée clôturée (rejeu idempotent d'une
+    # ligne déjà présente pour cette catégorie : accepté).
+    if session.is_closed and str(session.pk) not in _batch_terminal_parents():
+        if ProductionSessionLine.objects.filter(session=session, bread_price=bread_price).exists():
+            return _record_result(record_id, True)
+        return _record_result(record_id, False, "fournée clôturée : ajout de ligne refusé")
+
     # BUG-142 : propage `source` (DECLARED/CARRYOVER) si le nœud source l'a
     # envoyé ; sinon le défaut du modèle (DECLARED) s'applique — compatible
     # avec un nœud distant pas encore mis à jour (champ absent du payload).
     kwargs = dict(
-        session=session, bread_price=bread_price, quantity=record.get('quantity', 0),
+        session=session, bread_price=bread_price, quantity=quantity,
         source=record.get('source', 'DECLARED'),
     )
     if record_id:
@@ -1879,6 +1916,8 @@ def _validate_fields(label, record):
         elif itype == 'DecimalField':
             if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
                 return bad
+            if isinstance(value, str) and not value.isascii():  # BUG-902/907 : chiffres 0-9 uniquement
+                return bad
             try:
                 dec = Decimal(str(value).strip())
                 if dec.is_finite():
@@ -1892,6 +1931,8 @@ def _validate_fields(label, record):
                        'SmallIntegerField', 'PositiveSmallIntegerField'):
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 return bad
+            if isinstance(value, str) and not value.isascii():  # BUG-903 : chiffres 0-9 uniquement
+                return bad
             if isinstance(value, float) and (value != value or value in (float('inf'), float('-inf'))
                                              or value != int(value)):
                 return bad
@@ -1903,6 +1944,165 @@ def _validate_fields(label, record):
         except (ValidationError, ValueError, TypeError, OverflowError):
             return bad
     return None
+
+
+# ─── Contrôles stricts alignés sur la voie REST (BUG-901 à 909) ─────────
+#
+# `_validate_fields` appelle `field.clean(value, None)` : aucune plage métier,
+# aucun contrôle ASCII (Decimal/int Python acceptent « ٣ »), aucune date
+# future. Les helpers ci-dessous complètent ce contrôle générique, par modèle,
+# avec les mêmes bornes que l'API REST. Un rejet = motif français, les autres
+# enregistrements du lot passent.
+
+MAX_FLOUR_SACKS_SYNC = Decimal('100000')   # ProductionSessionSerializer.MAX_FLOUR_SACKS
+MAX_SYNC_INT = 2_000_000_000               # production.views._strict_int
+MAX_SYNC_COMMISSION_RATE = Decimal('0.30')  # ClientBoundsMixin.MAX_COMMISSION_RATE
+
+
+def _sync_decimal(raw, name, places, minimum=None, maximum=None, max_digits=None):
+    """
+    Décimal strict (ASCII, fini, `places` décimales au plus SANS arrondi
+    silencieux, bornes incluses). Renvoie un Decimal ou lève ValueError
+    (message français). Valeurs None/'' : à traiter par l'appelant.
+    """
+    bad = f"« {name} » invalide ou hors plage"
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float, Decimal)):
+        raise ValueError(bad)
+    text = str(raw).strip()
+    if not text.isascii():
+        raise ValueError(f"« {name} » : chiffres 0-9 uniquement")
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        raise ValueError(bad)
+    if not dec.is_finite():
+        raise ValueError(bad)
+    try:
+        quantized = dec.quantize(Decimal(1).scaleb(-places))
+    except InvalidOperation:
+        raise ValueError(bad)
+    if quantized != dec:
+        raise ValueError(f"« {name} » : {places} décimale(s) au maximum")
+    if minimum is not None and quantized < minimum:
+        raise ValueError(f"« {name} » ne peut pas être inférieur à {minimum}")
+    if maximum is not None and quantized > maximum:
+        raise ValueError(f"« {name} » ne peut pas dépasser {maximum}")
+    if max_digits is not None and len(quantized.as_tuple().digits) > max_digits:
+        raise ValueError(bad)
+    return quantized
+
+
+def _sync_int(raw, name, minimum=0, maximum=MAX_SYNC_INT):
+    """Entier strict ASCII borné (comme la voie REST), ValueError français sinon."""
+    try:
+        dec = _sync_decimal(raw, name, 0, minimum=Decimal(minimum), maximum=Decimal(maximum))
+    except ValueError as exc:
+        raise ValueError(str(exc))
+    return int(dec)
+
+
+def _sync_not_future_date(node, value, name):
+    """Date (objet date) non postérieure à la date de travail du serveur."""
+    from core.workday import work_date_for
+    if value > work_date_for(node):
+        raise ValueError(f"« {name} » ne peut pas être dans le futur")
+
+
+def _check_production_session(node, record):
+    if 'date' in record and record['date'] not in (None, ''):
+        day = _strict_date(record['date'])
+        if day is None:
+            return "« date » invalide (AAAA-MM-JJ attendu)"
+        try:
+            _sync_not_future_date(node, day, 'date')
+        except ValueError as exc:
+            return str(exc)
+    raw = record.get('flour_sacks_used')
+    if raw not in (None, ''):
+        try:
+            _sync_decimal(raw, 'flour_sacks_used', 2, Decimal('0'), MAX_FLOUR_SACKS_SYNC)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_production_session_line(node, record):
+    if 'quantity' in record:
+        if record['quantity'] is None:
+            return "« quantity » manquante"
+        try:
+            _sync_int(record['quantity'], 'quantity')
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_bread_disposal(node, record):
+    from production.models import BreadDisposal
+    dtype = record.get('disposal_type')
+    if dtype is None and record.get('id') and BreadDisposal.objects.filter(pk=record['id']).exists():
+        return None  # rejeu minimal d'une disposition connue : le handler reste idempotent
+    if dtype not in BreadDisposal.DisposalType.values:
+        return "« disposal_type » manquant ou invalide"
+    if 'quantity' in record and record['quantity'] not in (None, ''):
+        low = -MAX_SYNC_INT if dtype == 'REMAINING' else 0
+        try:
+            _sync_int(record['quantity'], 'quantity', minimum=low)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('unit_price_sold') not in (None, ''):
+        try:
+            _sync_int(record['unit_price_sold'], 'unit_price_sold')
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_consumable_movement(node, record):
+    if record.get('quantity') not in (None, ''):
+        try:
+            _sync_decimal(record['quantity'], 'quantity', 3, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('unit_price') not in (None, ''):
+        try:
+            _sync_decimal(record['unit_price'], 'unit_price', 4, Decimal('0'), max_digits=16)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_invoice(node, record):
+    from django.utils import timezone
+
+    if record.get('commission_rate') not in (None, ''):
+        try:
+            _sync_decimal(record['commission_rate'], 'commission_rate', 2,
+                          Decimal('0'), MAX_SYNC_COMMISSION_RATE)
+        except ValueError as exc:
+            return str(exc)
+    for name in ('delivered_at', 'not_served_at'):
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            moment = _parse_aware_datetime(record[name])
+            _sync_not_future_date(node, timezone.localtime(moment).date(), name)
+        except ValueError as exc:
+            return str(exc)
+    receipt = record.get('receipt_number')
+    if receipt not in (None, ''):
+        if not isinstance(receipt, str) or not receipt.isascii():
+            return "« receipt_number » : caractères ASCII uniquement"
+    return None
+
+
+_STRICT_CHECKS = {
+    'production.ProductionSession': _check_production_session,
+    'production.ProductionSessionLine': _check_production_session_line,
+    'production.BreadDisposal': _check_bread_disposal,
+    'production.ConsumableMovement': _check_consumable_movement,
+    'sales.Invoice': _check_invoice,
+}
 
 
 def _check_node_scope(node, label, record):
@@ -1949,6 +2149,8 @@ def _preflight(node, label, record):
         return None, _record_result(rid, False, reason)
 
     reason = _validate_fields(label, record)
+    if not reason and label in _STRICT_CHECKS:
+        reason = _STRICT_CHECKS[label](node, record)
     if reason:
         return None, _record_result(rid, False, reason)
 
@@ -1991,6 +2193,7 @@ def process_push_batch(node, records_by_model):
     from django.db import transaction as _tx
 
     results = {}
+    _batch_ctx.parents = set()
     for model_label in PUSH_MODEL_ORDER:
         records = records_by_model.get(model_label) or []
         handler = PUSH_HANDLERS[model_label]
