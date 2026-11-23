@@ -123,9 +123,40 @@ def _store_mirrors(node, raw):
         return
     mine = set(BreadTransfer.objects.filter(pk__in=list(cleaned)).filter(
         Q(from_node=node) | Q(to_node=node)).values_list('pk', flat=True))
+    from production.models import BreadTransferLine
+    bounds = {}
+    for tid, bp, qs, qr in BreadTransferLine.objects.filter(transfer_id__in=list(mine)).values_list(
+            'transfer_id', 'bread_price_id', 'quantity_sent', 'quantity_received'):
+        bounds[(tid, str(bp))] = (qs, qr or 0)
     for tid, mirror in cleaned.items():
-        if tid in mine:
-            TransferMirror.objects.update_or_create(node=node, transfer_id=tid, defaults={'applied': mirror})
+        if tid not in mine:
+            continue
+        existing = TransferMirror.objects.filter(node=node, transfer_id=tid).first()
+        old = dict(existing.applied) if existing is not None else {}
+        merged = dict(old)
+        rejected = []
+        for bp, (sent, recv) in mirror.items():
+            bound = bounds.get((tid, bp))
+            if bound is None or sent > bound[0] or recv > bound[1]:
+                # BUG-997 : marqueur hors borne (ou ligne inconnue du cloud) : ignoré.
+                rejected.append(bp)
+                continue
+            prev = old.get(bp)
+            if prev is not None and len(prev) == 2 and prev[0] <= bound[0] and prev[1] <= bound[1]:
+                # Monotone, sauf rétablissement : l'ancien marqueur dépasse la borne actuelle
+                # (ex. résolution d'écart ayant réduit la ligne cloud) -> la valeur du poste prévaut.
+                sent, recv = max(sent, prev[0]), max(recv, prev[1])
+            merged[bp] = [sent, recv]
+        if rejected:
+            conflict, created = SyncConflictLog.objects.get_or_create(
+                node=node, model_label='sync.TransferMirror', object_id=str(tid)[:40],
+                conflict_type='MIRROR_OUT_OF_BOUNDS', resolved_at=None,
+                defaults={'detail': "Marqueur de miroir ignoré (hors borne des lignes du cloud) "
+                                    f"pour les catégories {', '.join(sorted(rejected))}."})
+            if not created:
+                SyncConflictLog.objects.filter(pk=conflict.pk).update(occurrences=conflict.occurrences + 1)
+        if merged != old:
+            TransferMirror.objects.update_or_create(node=node, transfer_id=tid, defaults={'applied': merged})
 
 
 class PushView(APIView):

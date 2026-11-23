@@ -196,7 +196,6 @@ class A15Verif(A15Base):
         self.cycles(3)
         self.assertEqual(self.total(self.b3), 100)
 
-    @expectedFailure  # BUG-997
     def test_mirror_forge_par_k2_plus_grand_que_la_quantite_puis_reinstallation(self):
         """Marqueur K2 [0, 1000] pour un envoi de 100 : un poste reinstalle ne doit pas etre debite de 900."""
         tid = self.send_from('K1', [self.L(self.b3, 100)], 'K2')
