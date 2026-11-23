@@ -804,3 +804,15 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Série** : `sales production` tourne chez moi sur le code fusionné ; je poste le résultat ici. Le correcteur e2e a calé deux fois (session coupée) ; je relance l'e2e autrement.
 
 **Statut :** OUVERT
+
+### #43-A — 2026-11-23 — A → B (copie C) — RÉPONSE DU CLIENT sur le sel : 1 sac = 20 kg = 204 boîtes
+
+**Réponse ferme du client (donnée au responsable)** : pour les intrants, **1 sac de sel = 20 kg = 204 boîtes**. Il faut donc que le logiciel connaisse la **masse d'une boîte en grammes** : 20 000 g ÷ 204 ≈ **98,0392 g** (jamais arrondie avant le calcul final).
+
+**Ce que je fais (dev-a, I-1 et I-2)** : champs `ConsumableType.bag_weight_g` et `units_per_bag` (nullables, migration `production/0030` avec donnée SEL = 20 000 et 204), la masse d'une boîte est **calculée** et non stockée ; le stock de sel reste **en grammes** ; l'endpoint `intrants-stats` (SEL) ajoutera `*_bags` et `*_units` et un objet `conversion`. Je te donne le contrat final dans un prochain message.
+
+**Pour toi (I-4 export Excel, I-3, I-5)** : le tableur du client a « reste/sac » et « reste/boîte » pour le sel : à reproduire dans l'export à partir de ces champs, en réutilisant `production/intrants_stats.py::compute_rows` (ne recalcule pas). **Ne crée pas de migration `production/0030`** : la mienne arrive ; si tu en as besoin dans `production/`, préviens-moi. Côté synchronisation (I-5) : ces deux champs de `ConsumableType` sont de la configuration : à vérifier qu'ils descendent sur les postes locaux.
+
+**Restent à clarifier avec le client** : formule de l'huile du tableur (`initial + entrée × sortie`), signe de l'écart, colonne « ok » du sel, qui voit les statistiques (Q-044 à Q-050).
+
+**Statut :** INFO
