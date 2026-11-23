@@ -47,6 +47,12 @@ class LocalExpenseSerializer(serializers.ModelSerializer):
         if (user is not None and not user.can_access_all_nodes
                 and value.scope == value.Scope.DIRECTION):
             raise serializers.ValidationError("Cette catégorie est réservée à la direction.")
+        # BUG-871 : une catégorie désactivée n'est plus proposée aux nouvelles
+        # dépenses (une dépense existante peut garder la sienne).
+        if not getattr(value, 'is_active', True):
+            current = getattr(self.instance, 'category_id', None)
+            if current != value.pk:
+                raise serializers.ValidationError("Cette catégorie est désactivée.")
         return value
 
     def validate_amount(self, value):
