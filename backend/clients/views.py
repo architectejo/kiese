@@ -185,6 +185,9 @@ class ClientViewSet(viewsets.ModelViewSet):
                 fields += ['node', 'code', 'node_origin']
             client.refresh_category()
             fields.append('category')
+            if data:
+                client.identity_updated_at = timezone.now()  # BUG-951
+                fields.append('identity_updated_at')
             client.save(update_fields=list(dict.fromkeys(fields + ['updated_at'])))
             client.notify_risk_transition(old_category)  # BUG-945
         serializer.instance = client
@@ -651,6 +654,26 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         if client is not None and client.node_id != node.pk:
             raise ValidationError({'client': "Ce client n'appartient pas à la boulangerie indiquée."})
         serializer.save(node=node)
+
+    def perform_update(self, serializer):
+        # BUG-954 : le PATCH direct de is_paid a le même effet que toggle_paid : journalisé.
+        was_paid = serializer.instance.is_paid
+        contrib = serializer.save()
+        if contrib.is_paid != was_paid:
+            log_activity(
+                self.request.user, "Cotisation Sociale " + ("payée" if contrib.is_paid else "annulée"),
+                f"Cotisation {contrib.month:02d}/{contrib.year} de {contrib.client.full_name} "
+                f"({contrib.amount} FC) marquée {'payée' if contrib.is_paid else 'non payée'}.",
+                node_origin=contrib.node.code,
+            )
+
+    def perform_destroy(self, instance):
+        # BUG-954 : la suppression d'une cotisation laisse une trace.
+        desc = (f"Cotisation {instance.month:02d}/{instance.year} de {instance.client.full_name} "
+                f"({instance.amount} FC, {'payée' if instance.is_paid else 'non payée'}) supprimée.")
+        node_code = instance.node.code
+        instance.delete()
+        log_activity(self.request.user, "Suppression Cotisation Sociale", desc, node_origin=node_code)
 
     @action(detail=True, methods=['post'])
     def toggle_paid(self, request, pk=None):

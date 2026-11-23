@@ -118,7 +118,6 @@ class PushIdentite(Base):
         old = (self.cur().updated_at - timedelta(hours=1)).isoformat()
         self.assertEqual(self.edit(phone='x' * 30, updated_at=old)['status'], 'REJECTED')
 
-    @expectedFailure
     def test_BUG_951_edition_identite_legitime_ignoree_apres_un_mouvement_de_dette_du_cloud(self):
         # le proprietaire edite hors ligne a T0 ; un autre poste (K3) facture ce client : le mouvement
         # pousse fait avancer updated_at du Cloud (BUG-787) ; le push d'identite date de T0 est ignore
@@ -185,7 +184,6 @@ class PullPlafondIdentite(Base):
         c = self.pull(first_name='Autre', credit_limit='1000.00')
         self.assertEqual((c.current_debt, c.first_name, c.credit_limit), (D('0.00'), 'Own', D('50000.00')))
 
-    @expectedFailure
     def test_BUG_952_pull_ecrase_une_edition_locale_non_encore_poussee(self):
         # poste : le gerant change le plafond (is_synced=False) ; un pull arrive avant le push
         # avec l'ancien plafond du Cloud : l'edition locale est ecrasee puis poussee telle quelle.
@@ -394,7 +392,6 @@ class CaisseSociale(Base):
         self.assertTrue(r.status_code == 400 and r2.status_code == 400,
                         (r.status_code, r2.status_code, "paiement annule apres cloture de la distribution"))
 
-    @expectedFailure
     def test_BUG_954_patch_is_paid_et_suppression_cotisation_non_journalises(self):
         # toggle_paid journalise (BUG-944) ; le PATCH direct (meme effet) et le DELETE d'une cotisation ne laissent
         # aucune trace.

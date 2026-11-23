@@ -314,7 +314,15 @@ def _apply_client_identity_push(existing, record):
         sent_at = _parse_aware_datetime(record.get('updated_at'))
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
-    if sent_at is not None and sent_at < existing.updated_at:
+    # BUG-951 : la garde porte sur la version de l'IDENTITÉ seule. Un mouvement de
+    # dette (d'un autre poste) fait avancer `updated_at` sans toucher l'identité :
+    # il ne doit jamais invalider une édition. Sans édition d'identité tracée, la
+    # référence est `updated_at` tant qu'aucun mouvement de dette n'existe ; sinon
+    # `updated_at` ne dit plus rien de l'identité et le propriétaire fait autorité.
+    reference = existing.identity_updated_at
+    if reference is None and not DebtMovement.objects.filter(client_id=existing.pk).exists():
+        reference = existing.updated_at
+    if sent_at is not None and reference is not None and sent_at < reference:
         return _record_result(record_id, True)
 
     changes = {}
@@ -357,7 +365,9 @@ def _apply_client_identity_push(existing, record):
         if 'credit_limit' in changes:
             locked.refresh_category()
             fields.append('category')
-        locked.save(update_fields=fields + ['updated_at'], _sync_bypass=True)
+        from django.utils import timezone
+        locked.identity_updated_at = timezone.now()  # BUG-951
+        locked.save(update_fields=fields + ['updated_at', 'identity_updated_at'], _sync_bypass=True)
         locked.notify_risk_transition(old_category)
     return _record_result(record_id, True)
 

@@ -138,6 +138,12 @@ class Client(SyncableModel):
     )
     is_active = models.BooleanField(default=True, verbose_name=_("Actif"))
     notes     = models.TextField(blank=True, default='', verbose_name=_("Notes internes"))
+    # BUG-951 : version de l'IDENTITÉ seule (nom, plafond, taux...). NULL = aucune
+    # édition d'identité tracée ; un mouvement de dette ne la touche jamais.
+    identity_updated_at = models.DateTimeField(
+        null=True, blank=True, default=None, editable=False,
+        verbose_name=_("Identité modifiée le"),
+    )
 
     class Meta:
         verbose_name = _("Client")

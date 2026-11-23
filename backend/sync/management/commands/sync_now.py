@@ -558,9 +558,16 @@ def apply_pull_response(payload):
             old_category = locked.category
             locked.current_debt = debt.quantize(Decimal('0.01'))
             fields = ['current_debt', 'category']
+            # BUG-952 : une édition locale d'identité/plafond pas encore poussée
+            # (is_synced=False et identity_updated_at renseigné) n'est jamais écrasée
+            # par le pull ; elle sera poussée ensuite (le propriétaire fait autorité,
+            # SYNC.md §5.1). La dette, elle, est toujours appliquée.
+            local_edit_pending = (not locked.is_synced) and locked.identity_updated_at is not None
             # BUG-942 : plafond et identité du Cloud appliqués (valeurs invalides ignorées).
             limit = client_data.get('credit_limit')
-            if limit is not None and not isinstance(limit, bool):
+            if local_edit_pending:
+                limit = None
+            elif limit is not None and not isinstance(limit, bool):
                 try:
                     limit = Decimal(str(limit))
                 except InvalidOperation:
@@ -573,13 +580,15 @@ def apply_pull_response(payload):
             else:
                 limit = None
             for name, max_len in (('first_name', 100), ('last_name', 100), ('phone', 25), ('address', None)):
-                val = client_data.get(name)
+                val = None if local_edit_pending else client_data.get(name)
                 if isinstance(val, str) and (max_len is None or len(val) <= max_len) \
                         and (name not in ('first_name', 'last_name') or val.strip()):
                     setattr(locked, name, val)
                     fields.append(name)
             locked.category = category
-            if limit is not None:
+            if local_edit_pending:
+                locked.refresh_category()  # catégorie sur le plafond LOCAL conservé
+            elif limit is not None:
                 # La catégorie doit rester cohérente avec le plafond appliqué.
                 if locked.current_debt >= locked.credit_limit:
                     locked.category = Client.Category.RISK
