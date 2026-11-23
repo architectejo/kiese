@@ -125,8 +125,9 @@ class V9Legitimate(V9Base):
         for qty in ('0.2500', '0.3333', '10000000', '-0.001', '1E+3'):
             res = push(self.a1, LBL_M, {'id': uid(), 'node': self.k1.code, 'consumable_type': 'SALT',
                                         'movement_type': 'ENTRY', 'quantity': qty})[0]
-            # 0.2500 a 4 decimales mais quantize == valeur : accepte ; 1E+3 vaut 1000 : accepte
-            if qty in ('0.2500', '1E+3'):
+            # 0.2500 a 4 decimales mais quantize == valeur : accepte ; -0.001 : ENTRY negatif accepte comme
+            # en REST (BUG-1020, decision client BUG-216) ; 1E+3 : exposant refuse (parseur partage BUG-1015)
+            if qty in ('0.2500', '-0.001'):
                 self.assertEqual(res, 'ACCEPTED', qty)
             else:
                 self.assertEqual(res, 'REJECTED', qty)

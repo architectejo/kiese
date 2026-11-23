@@ -45,15 +45,19 @@ class Bug289CotisationParBoulangerie(Base):
         self.assertEqual(self.row(self.generate(), c).deduction_social, D('500.00'))
 
     def test_commission_deja_creee_garde_son_montant_apres_changement_boulangerie(self):
+        # BUG-1013/1014 (BUG-1022) : un zéro jamais décidé n'est pas figé (la retenue du mois est
+        # reportée sur la plus ancienne ligne non payée). Une retenue DÉJÀ posée, elle, reste figée.
+        self.node.monthly_social_contribution = D('1000')
+        self.node.save()
         c = make_client(self.node)
         self.invoice(c, 10)
         cc = self.row(self.generate(), c)
-        self.assertEqual(cc.deduction_social, D('0'))
+        self.assertEqual(cc.deduction_social, D('1000'))
         self.node.monthly_social_contribution = D('2000')
         self.node.save()
         self.generate()                                       # régénération : retenue figée
         cc.refresh_from_db()
-        self.assertEqual(cc.deduction_social, D('0'))
+        self.assertEqual(cc.deduction_social, D('1000'))
 
     def test_champ_exposé_par_les_api_node_et_client(self):
         r = _api(self.direction).patch(f'/api/core/nodes/{self.node.pk}/',

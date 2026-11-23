@@ -229,7 +229,7 @@ class V11SessionUpdate(V11Base):
     def test_bornes_farine_sur_fournee_existante(self):
         s = self._open()
         for val, exp in (('100000', 'ACCEPTED'), ('100000.01', 'REJECTED'), ('-0.01', 'REJECTED'),
-                         ('2.001', 'REJECTED'), ('٣', 'REJECTED'), ('abc', 'REJECTED'), ('1e2', 'ACCEPTED'),
+                         ('2.001', 'REJECTED'), ('٣', 'REJECTED'), ('abc', 'REJECTED'), ('1e2', 'REJECTED'),
                          ('NaN', 'REJECTED'), ('Infinity', 'REJECTED'), (True, 'REJECTED'), ('0', 'ACCEPTED'),
                          ('0.25', 'ACCEPTED')):
             st = push(self.a1, LBL_S, dict(s, flour_sacks_used=val))
