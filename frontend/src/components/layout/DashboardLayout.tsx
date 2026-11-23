@@ -10,7 +10,9 @@ import {
   FiCoffee, FiBell, FiX, FiCheck, FiInfo, FiAlertTriangle, FiTrash2, FiList,
   FiMapPin, FiUserCheck, FiMenu, FiSave, FiKey, FiHardDrive, FiCalendar
 } from 'react-icons/fi';
-import { coreApi, productionApi, SystemNotificationItem, TeamAssignment } from '@/api/services';
+import { coreApi, productionApi, treasuryApi, SystemNotificationItem, TeamAssignment } from '@/api/services';
+import { ClosureModal } from '@/components/production/ClosureModal';
+import { useClosureStatusStore } from '@/store/closureStatusStore';
 import { ForcePasswordChange } from '@/components/auth/ForcePasswordChange';
 import { Modal } from '@/components/shared/Modal';
 import { ChatButton } from '@/components/chat/ChatButton';
@@ -284,6 +286,36 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   const teamAssignmentBlocking = teamAssignmentRequired && !restStepActive;
   const teamAssignmentOpen = teamAssignmentBlocking || (canSeeShiftEnd && rotationEnabled && teamAssignment !== null && teamEditOpen);
 
+  // BUG-973 : statut de clôture du jour (blocage des ventes + boîte de clôture du gérant). Relu au
+  // plus toutes les 30 s dans le sondage existant (pas de second `setInterval`), et tout de suite
+  // quand une page signale un 403 « Ventes bloquées » (`refreshTick`). Rôles concernés : mêmes que
+  // les ventes (GERANT / FACTURIER d'une boulangerie) ; un profil Siège n'est jamais bloqué.
+  const closureStatus = useClosureStatusStore(s => s.status);
+  const closureDismissedFor = useClosureStatusStore(s => s.dismissedFor);
+  const closureRefreshTick = useClosureStatusStore(s => s.refreshTick);
+  const closureCheckedAtRef = useRef(0);
+  const fetchClosureStatus = useCallback(async (force = false): Promise<void> => {
+    if (!canSeeShiftEnd) return;
+    if (!force && Date.now() - closureCheckedAtRef.current < 30000) return;
+    closureCheckedAtRef.current = Date.now();
+    try {
+      const { data } = await treasuryApi.closureStatus.get();
+      useClosureStatusStore.getState().setStatus(data);
+    } catch (error) {
+      console.error('Failed to fetch closure status', error);
+    }
+  }, [canSeeShiftEnd]);
+  useEffect(() => {
+    if (closureRefreshTick > 0) void fetchClosureStatus(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closureRefreshTick]);
+  // Boîte de clôture : gérant seulement, heure atteinte (blocked) et pas déjà reportée/soumise ce jour-là.
+  // Elle cède la place aux boîtes forcées plus prioritaires (reste du jour, désignation d'équipe).
+  const closureModalOpen = !!user && user.role === 'GERANT' && !user.can_access_all_nodes
+    && !!closureStatus && closureStatus.enabled && closureStatus.blocked && !closureStatus.validated
+    && !!closureStatus.closure_date && closureDismissedFor !== closureStatus.closure_date
+    && shiftEndPending === null && autoClosedNotices.length === 0 && !teamAssignmentOpen;
+
   const handleAutoClosedConfirm = (notice: AutoClosedNotice) => {
     if (shiftEndNodeKey) confirmAutoClosedNotice(shiftEndNodeKey, notice);
   };
@@ -309,15 +341,17 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
     fetchNotifications();
     fetchShiftEndStatus();
     fetchTeamAssignment();
+    void fetchClosureStatus(true);
     const interval = setInterval(() => {
       fetchNotifications();
       fetchShiftEndStatus();
       fetchTeamAssignment();
+      void fetchClosureStatus();
       // BUG-161 : même cycle (pas de second `setInterval`) ; sans effet hors rotation.
       if (rotationEnabledRef.current) setOpeningPollTick(t => t + 1);
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchShiftEndStatus, fetchTeamAssignment]);
+  }, [fetchShiftEndStatus, fetchTeamAssignment, fetchClosureStatus]);
 
   const handleLogout = async () => {
     await logout();
@@ -1177,6 +1211,21 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           notice={autoClosedNotices[0]}
           pendingCount={autoClosedNotices.length}
           onConfirm={handleAutoClosedConfirm}
+        />
+      )}
+
+      {/* BUG-973 : boîte de clôture du gérant à l'heure de clôture (sorties non valorisées +
+          choix d'équipe). Montée une seule fois ici, comme la boîte « stock de départ ». */}
+      {closureModalOpen && closureStatus && closureStatus.closure_date && (
+        <ClosureModal
+          closureDate={closureStatus.closure_date}
+          closureHour={closureStatus.closure_hour}
+          onLater={() => useClosureStatusStore.getState().dismiss(closureStatus.closure_date as string)}
+          onDone={() => {
+            useClosureStatusStore.getState().dismiss(closureStatus.closure_date as string);
+            void fetchClosureStatus(true);
+            setOpeningPollTick(t => t + 1);
+          }}
         />
       )}
 

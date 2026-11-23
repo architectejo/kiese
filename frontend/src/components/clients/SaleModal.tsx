@@ -2,6 +2,8 @@ import React from 'react';
 import { FiCheckCircle } from 'react-icons/fi';
 import { Modal } from '@/components/shared/Modal';
 import type { BreadPrice } from '@/api/services';
+import { ClosureBlockBanner } from '@/components/sales/ClosureBlockBanner';
+import { useSalesBlocked } from '@/store/closureStatusStore';
 import { ClientItem, effectiveUnitPrice } from './clientItem';
 
 interface SaleModalProps {
@@ -34,6 +36,8 @@ export const SaleModal: React.FC<SaleModalProps> = ({
   venteSoldee, setVenteSoldee, sansCommission, setSansCommission, versementJour, setVersementJour,
   isSubmitting, handleSaleSubmit, isCasualSale, allowBackdatedSales, workDate, orderDate, setOrderDate, saleError,
 }) => {
+  // BUG-973 : clôture du jour en attente de validation -> création de commande désactivée.
+  const { blocked: closureBlocked } = useSalesBlocked();
   return (
       <Modal
         isOpen={isSaleModalOpen && !!saleClient}
@@ -53,12 +57,12 @@ export const SaleModal: React.FC<SaleModalProps> = ({
               <button
                 type="submit"
                 form="sale-form"
-                disabled={isBlocked || isSubmitting}
+                disabled={isBlocked || isSubmitting || closureBlocked}
                 className="btn btn-primary"
-                style={{ flex: 2, padding: '8px 16px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: (isBlocked || isSubmitting) ? 0.55 : 1 }}
+                style={{ flex: 2, padding: '8px 16px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: (isBlocked || isSubmitting || closureBlocked) ? 0.55 : 1 }}
               >
                 <FiCheckCircle />
-                <span>{isSubmitting ? 'Enregistrement...' : isBlocked ? 'Plafond atteint — Versement insuffisant' : 'Confirmer la transaction'}</span>
+                <span>{closureBlocked ? 'Ventes bloquées — clôture en attente' : isSubmitting ? 'Enregistrement...' : isBlocked ? 'Plafond atteint — Versement insuffisant' : 'Confirmer la transaction'}</span>
               </button>
             </>
           );
@@ -66,6 +70,7 @@ export const SaleModal: React.FC<SaleModalProps> = ({
       >
           {saleClient && (
             <form id="sale-form" onSubmit={handleSaleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <ClosureBlockBanner />
 
               {/* Situation actuelle du client — BP affiché en premier */}
               {(() => {
