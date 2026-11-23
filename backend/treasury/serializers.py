@@ -4,6 +4,7 @@ from .models import (
     DailySavings, DisbursementVoucher, DirectionCashCount,
 )
 from core.models import Node
+from core.mixins import AsciiDigitsMixin
 from decimal import Decimal
 
 # BUG-201 : borne par coupure de billet. 100 000 billets de 20 000 FC = 2 milliards
@@ -26,7 +27,8 @@ _BILLS_EXTRA_KWARGS = {
 }
 
 
-class LocalExpenseSerializer(serializers.ModelSerializer):
+class LocalExpenseSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     node_display     = serializers.StringRelatedField(source='node', read_only=True)
     category_display = serializers.CharField(source='category.label', read_only=True)
 
@@ -62,7 +64,8 @@ class LocalExpenseSerializer(serializers.ModelSerializer):
         return value
 
 
-class FacturierReportSerializer(serializers.ModelSerializer):
+class FacturierReportSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     node_display      = serializers.StringRelatedField(source='node', read_only=True)
     facturier_display = serializers.SerializerMethodField()
 
@@ -93,7 +96,8 @@ class FacturierReportSerializer(serializers.ModelSerializer):
         return obj.facturier.get_full_name() if obj.facturier else None
 
 
-class CashClosureSerializer(serializers.ModelSerializer):
+class CashClosureSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     node_display        = serializers.StringRelatedField(source='node', read_only=True)
     gerant_display      = serializers.SerializerMethodField()
     has_cashbook_entry  = serializers.SerializerMethodField()
@@ -127,7 +131,8 @@ class CashClosureSerializer(serializers.ModelSerializer):
         return obj.cashbook_entries.exists()
 
 
-class JournalEntrySerializer(serializers.ModelSerializer):
+class JournalEntrySerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     node_display        = serializers.StringRelatedField(source='node', read_only=True)
     imput_display       = serializers.CharField(source='get_imput_display', read_only=True)
     recorded_by_display = serializers.SerializerMethodField()
@@ -165,7 +170,8 @@ class JournalEntrySerializer(serializers.ModelSerializer):
         return obj.recorded_by.get_full_name() if obj.recorded_by else None
 
 
-class DailySavingsSerializer(serializers.ModelSerializer):
+class DailySavingsSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     node_display  = serializers.StringRelatedField(source='node', read_only=True)
     # node is resolved in perform_create from user.node or request.data
     node = serializers.PrimaryKeyRelatedField(
@@ -220,7 +226,8 @@ class CashbookEntrySerializer(serializers.ModelSerializer):
         return obj.corrected_by.get_full_name() if obj.corrected_by else None
 
 
-class DisbursementVoucherSerializer(serializers.ModelSerializer):
+class DisbursementVoucherSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     created_by_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -242,7 +249,8 @@ class DisbursementVoucherSerializer(serializers.ModelSerializer):
         return obj.created_by.get_full_name() if obj.created_by else None
 
 
-class DirectionCashCountSerializer(serializers.ModelSerializer):
+class DirectionCashCountSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     """
     BUG-119 : comptage physique de billets au niveau Direction (CLAUDE.md
     §5.5), distinct et sans effet sur le chaînage SHA-256 de `CashbookEntry`

@@ -1458,9 +1458,27 @@ def _push_local_expense(node, record):
     if category is None:
         return _record_result(record_id, False, "dépendance manquante : category")
 
+    # BUG-899 : comme l'API REST (BUG-677), une catégorie réservée à la direction
+    # est refusée à un jeton de boulangerie. Une catégorie désactivée reste
+    # acceptée (dépense saisie hors ligne avant la désactivation).
+    if node.code != 'SIEGE' and category.scope == category.Scope.DIRECTION:
+        return _record_result(record_id, False, "catégorie réservée à la direction : refusée pour une boulangerie")
+
+    # BUG-898 : comme l'API REST (BUG-205), le montant doit être un nombre
+    # ASCII fini strictement positif (-500, 0, absent, texte, NaN -> rejet).
+    raw_amount = record.get('amount')
+    amount = None
+    if raw_amount is not None and not isinstance(raw_amount, bool) and str(raw_amount).isascii():
+        try:
+            amount = Decimal(str(raw_amount).strip())
+        except InvalidOperation:
+            amount = None
+    if amount is None or not amount.is_finite() or amount <= 0 or amount >= Decimal('1E12'):
+        return _record_result(record_id, False, "montant invalide : un nombre strictement positif est attendu")
+
     expense = LocalExpense(
         id=record_id, node=bakery, description=record.get('description', ''),
-        amount=_to_decimal(record.get('amount')), category=category,
+        amount=amount, category=category,
         date=_date.fromisoformat(record['date']),
         node_origin=record.get('node_origin', bakery_code),
     )

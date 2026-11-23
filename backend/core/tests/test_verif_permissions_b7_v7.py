@@ -166,7 +166,6 @@ class VPushTreasury(b5.B5):
         e = FacturierReport.objects.filter(pk=rid).first()
         self.assertTrue(e is None or e.node_id == self.k1.pk, e and e.node.code)
 
-    @expectedFailure
     def test_BUG_898_push_depense_montant_negatif_nul_ou_non_numerique(self):
         """BUG-898 : la voie REST exige amount > 0 (BUG-205) ; le push accepte -500, 0 ou 'abc' (->0)."""
         bad = []
@@ -178,7 +177,6 @@ class VPushTreasury(b5.B5):
                 bad.append((v, str(e.amount)))
         self.assertEqual(bad, [])
 
-    @expectedFailure
     def test_BUG_899_push_depense_categorie_reservee_direction_par_une_boulangerie(self):
         """BUG-899 : la voie REST refuse a une boulangerie une categorie scope=DIRECTION (BUG-677) ; le push l'accepte."""
         rid, _ = self.exp(self.raw1, cat=self.cat_dir)
@@ -379,7 +377,6 @@ class V895(b5.B5):
         src = inspect.getsource(imports)
         self.assertNotIn('Serializer', src)
 
-    @expectedFailure
     def test_BUG_897_noeud_cotisation_mensuelle_et_carte_chiffres_non_ascii_refuses(self):
         """BUG-897 : Node.monthly_social_contribution et card_fee_fc (meme serializer que sac_value_fc) acceptent « ٣ »."""
         bad = []
@@ -412,7 +409,6 @@ class VSweep(b5.B5):
             if r.status_code < 300:
                 results.append((label, field, v, r.status_code))
 
-    @expectedFailure
     def test_BUG_897_balayage_chiffres_non_ascii_serializers_voisins(self):
         res = []
         t = str(self.today)
@@ -503,7 +499,6 @@ class V890(SalesBase):
 
 
 class V890Voisin(SalesBase):
-    @expectedFailure
     def test_BUG_897_versement_et_ajustement_chiffres_non_ascii_refuses(self):
         bad = []
         for v in BAD_NUM:

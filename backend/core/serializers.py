@@ -11,7 +11,7 @@ User = get_user_model()
 
 
 class NodeSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
-    ascii_digit_fields = ('sac_value_fc',)
+    ascii_digit_fields = ('sac_value_fc', 'monthly_social_contribution', 'card_fee_fc')  # BUG-897
     display_name = serializers.CharField(source='__str__', read_only=True)
 
     class Meta:

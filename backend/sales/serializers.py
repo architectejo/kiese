@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from core.mixins import AsciiDigitsMixin
 from .models import Invoice, InvoiceLine
 
 
@@ -122,7 +123,8 @@ class InvoiceLineInputSerializer(serializers.Serializer):
     )
 
 
-class InvoiceCreateSerializer(serializers.Serializer):
+class InvoiceCreateSerializer(AsciiDigitsMixin, serializers.Serializer):
+    ascii_digit_fields = ('payment_amount',)  # BUG-897
     """Create an invoice with its lines in a single request."""
     # `Node` a une clé entière (BigAutoField, core/migrations/0001_initial.py),
     # pas une clé UUID (contrairement à `Client`/`Invoice`, qui héritent de
@@ -176,7 +178,8 @@ class InvoiceCreateSerializer(serializers.Serializer):
         return value
 
 
-class InvoiceAdjustSerializer(serializers.Serializer):
+class InvoiceAdjustSerializer(AsciiDigitsMixin, serializers.Serializer):
+    ascii_digit_fields = ('payment_amount',)  # BUG-897
     """
     BUG-097 : corrige/annule une commande déjà enregistrée via une nouvelle
     facture liée (« grande trace »), jamais une mutation de l'originale.

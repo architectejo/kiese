@@ -451,6 +451,8 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 try:
                     if isinstance(adj, (bool, list, dict)):
                         raise InvalidOperation
+                    if not str(adj).isascii():  # BUG-897 : chiffres non ASCII refusés
+                        raise InvalidOperation
                     value = Decimal(str(adj))
                     # BUG-745 : valeur finie, 12 chiffres entiers + 2 décimales max.
                     # BUG-745 (rouvert) : pas d'abs() (decimal.Overflow sur exposants géants).
