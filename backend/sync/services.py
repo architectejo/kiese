@@ -874,7 +874,10 @@ def _push_cash_closure(node, record):
             total_entries=_to_decimal(record.get('total_entries')),
             total_expenses=_to_decimal(record.get('total_expenses')),
             **_bills_kwargs(record),
-            is_validated=bool(record.get('is_validated', False)),
+            # BUG-971 : un jeton de boulangerie ne confirme jamais une clôture
+            # (remarque.md l.156, BUG-200) ; seule la voie REST IsHeadquarters
+            # (validate / push_to_cashbook) la confirme.
+            is_validated=False,
             notes=record.get('notes', ''),
             node_origin=record.get('node_origin', bakery_code),
         )

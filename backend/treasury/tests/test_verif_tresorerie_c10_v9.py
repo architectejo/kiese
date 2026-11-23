@@ -268,7 +268,9 @@ class V913_Cloture(Base10):
         for _ in range(3):
             self.push(self.raw1, CLO, rec)
         self.assertEqual(CashClosure.objects.filter(node=self.n1).count(), 1)
-        self.assertEqual(CashbookEntry.objects.count(), 1)
+        # BUG-971 : adapte, jamais confirmee ni versee par un jeton de boulangerie
+        self.assertFalse(CashClosure.objects.get(node=self.n1).is_validated)
+        self.assertEqual(CashbookEntry.objects.count(), 0)
         self.assertTrue(self.chain_ok())
 
     def test_cloture_valide_rejetee_ne_touche_pas_le_livre(self):

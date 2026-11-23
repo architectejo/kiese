@@ -175,7 +175,9 @@ class PushCloture(PushBase):
         self.push(self.raw1, 'treasury.CashClosure', {**rec, 'bills_10000': 9, 'total_entries': '1'})
         c = self.stored(rec)
         self.assertEqual(c.bills_10000, 1)
-        self.assertEqual(CashbookEntry.objects.filter(source_closure=c).count(), 1)
+        # BUG-971 : adapte, la cloture poussee n'est jamais confirmee ni versee par le sync
+        self.assertFalse(c.is_validated)
+        self.assertEqual(CashbookEntry.objects.filter(source_closure=c).count(), 0)
 
     def test_cloture_double_meme_jour_autre_id_refusee(self):
         a, b = self.clo(), self.clo()
@@ -223,7 +225,10 @@ class PushCloture(PushBase):
         self.assertEqual(CashbookEntry.objects.count(), 0)
 
     def test_cloture_validee_poussee_chaine_valide_et_piece(self):
-        rec = self.clo(is_validated=True)
+        rec = self.clo()
+        self.push(self.raw1, 'treasury.CashClosure', rec)
+        # BUG-971 : adapte, la confirmation vient du comptable (REST), simulee ici
+        CashClosure.objects.filter(pk=rec['id']).update(is_validated=True)
         self.push(self.raw1, 'treasury.CashClosure', rec)
         e = CashbookEntry.objects.get()
         self.assertEqual(e.piece_number, f"VC-C1-{today().strftime('%Y%m%d')}")

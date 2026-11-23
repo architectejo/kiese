@@ -33,7 +33,7 @@ from production.models import (
     ProductionSession, ProductionSessionLine, BreadDisposal,
     ConsumableMovement, ConsumableStock, BreadTransfer, BreadTransferLine,
 )
-from treasury.models import LocalExpense, FacturierReport, DisbursementVoucher, CashbookEntry
+from treasury.models import CashClosure, LocalExpense, FacturierReport, DisbursementVoucher, CashbookEntry
 
 
 def _node_client(node, raw_token):
@@ -478,6 +478,18 @@ class TreasuryExtensionSyncTests(TestCase):
                     'id': closure_id, 'node': 'K1', 'date': today,
                     'total_entries': '200000.00', 'total_expenses': '0.00',
                     'is_validated': True, 'node_origin': 'K1',
+                }],
+            },
+        }, format='json')
+        # BUG-971 : adapte, confirmation par le comptable (simulee) puis rejeu
+        CashClosure.objects.filter(pk=closure_id).update(is_validated=True)
+        self.api.post('/api/sync/push/', {
+            'batch_id': str(uuid.uuid4()),
+            'records': {
+                'treasury.CashClosure': [{
+                    'id': closure_id, 'node': 'K1', 'date': today,
+                    'total_entries': '200000.00', 'total_expenses': '0.00',
+                    'node_origin': 'K1',
                 }],
             },
         }, format='json')

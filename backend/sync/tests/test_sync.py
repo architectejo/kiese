@@ -358,7 +358,13 @@ class CashClosureOfflineSyncTests(TestCase):
         resp = api.post('/api/sync/push/', payload, format='json')
         self.assertEqual(resp.data['results']['treasury.CashClosure'][0]['status'], 'ACCEPTED')
 
+        # BUG-971 : adapte, la cloture poussee reste non confirmee ; le comptable
+        # (REST) la confirme, simule ici, puis le rejeu la verse au livre.
         closure = CashClosure.objects.get(pk=closure_id)
+        self.assertFalse(closure.is_validated)
+        self.assertFalse(closure.cashbook_entries.exists())
+        CashClosure.objects.filter(pk=closure_id).update(is_validated=True)
+        api.post('/api/sync/push/', {**payload, 'batch_id': str(uuid.uuid4())}, format='json')
         self.assertTrue(closure.cashbook_entries.exists())
 
         entries = list(CashbookEntry.objects.order_by('date', 'created_at'))
@@ -374,6 +380,8 @@ class CashClosureOfflineSyncTests(TestCase):
             'total_entries': '50000.00', 'total_expenses': '0.00',
             'is_validated': True, 'node_origin': 'K1',
         }
+        api.post('/api/sync/push/', {'batch_id': str(uuid.uuid4()), 'records': {'treasury.CashClosure': [record]}}, format='json')
+        CashClosure.objects.filter(pk=closure_id).update(is_validated=True)  # BUG-971 : adapte (comptable)
         api.post('/api/sync/push/', {'batch_id': str(uuid.uuid4()), 'records': {'treasury.CashClosure': [record]}}, format='json')
         api.post('/api/sync/push/', {'batch_id': str(uuid.uuid4()), 'records': {'treasury.CashClosure': [record]}}, format='json')
 

@@ -197,7 +197,6 @@ class V959_963(Base13):
 # Question ouverte BUG-960 : cloture poussee deja validee (decision : DEFAUT, BUG-971)
 # ======================================================================================
 class V960_Decision(Base13):
-    @expectedFailure
     def test_BUG_969_cloture_poussee_validee_ne_s_auto_confirme_pas(self):
         """remarque.md l.156 : « seul le comptable direction generale peut confirmer ou infirmer ».
         REST : validate/reject/push_to_cashbook = IsHeadquarters (BUG-200). Un jeton de boulangerie
@@ -215,6 +214,9 @@ class V960_Decision(Base13):
         self.report(self.n1, 'A', '10000')
         rec = self.clo(is_validated=True, total_entries='5000000', total_expenses='0', bills_10000=500)
         self.push(self.raw1, CLO, rec)
+        self.assertEqual(CashbookEntry.objects.count(), 0)  # BUG-971 : adapte, poussee non confirmee
+        self.assertEqual(self.valider(rec['id']).status_code, 200)
+        self.assertEqual(self.verser(rec['id']).status_code, 201)
         self.assertEqual(sum(e.entry_amount for e in CashbookEntry.objects.all()), Dc('10000'))
 
     def test_poussee_non_validee_puis_confirmation_rest_recalcule(self):
