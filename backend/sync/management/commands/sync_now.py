@@ -151,28 +151,32 @@ class Command(BaseCommand):
         data_dir = getattr(settings, 'KIESE_DATA_DIR', None)
         pull_params = load_pull_cursor(data_dir, cloud_url, node_code)
 
-        try:
-            pull_response, pull_attempts = _send_with_retry(
-                lambda: requests.get(f"{cloud_url}/api/sync/pull/", headers=headers, timeout=30,
-                                     params=pull_params),
-                max_retries, backoff, on_retry=_on_retry,
-            )
-        except requests.RequestException as exc:
-            raise CommandError(f"Push accepté mais pull impossible ({exc}) — prochain cycle réessaiera.")
+        for _page in range(200):  # BUG-998 : pull répété tant que le cloud annonce `has_more`
+            try:
+                pull_response, pull_attempts = _send_with_retry(
+                    lambda: requests.get(f"{cloud_url}/api/sync/pull/", headers=headers, timeout=30,
+                                         params=pull_params),
+                    max_retries, backoff, on_retry=_on_retry,
+                )
+            except requests.RequestException as exc:
+                raise CommandError(f"Push accepté mais pull impossible ({exc}) — prochain cycle réessaiera.")
 
-        if pull_response.status_code in TRANSIENT_STATUS_CODES:
-            raise CommandError(
-                f"Push accepté mais service cloud temporairement indisponible (503) au pull après "
-                f"{pull_attempts} nouvelle(s) tentative(s) — abandon. Relancez cette commande plus tard "
-                f"pour récupérer la descente Cloud → Local (le push, lui, est déjà confirmé)."
-            )
+            if pull_response.status_code in TRANSIENT_STATUS_CODES:
+                raise CommandError(
+                    f"Push accepté mais service cloud temporairement indisponible (503) au pull après "
+                    f"{pull_attempts} nouvelle(s) tentative(s) — abandon. Relancez cette commande plus tard "
+                    f"pour récupérer la descente Cloud → Local (le push, lui, est déjà confirmé)."
+                )
 
-        if pull_response.status_code >= 400:
-            raise CommandError(f"Pull refusé par le Cloud ({pull_response.status_code}) : {pull_response.text}")
+            if pull_response.status_code >= 400:
+                raise CommandError(f"Pull refusé par le Cloud ({pull_response.status_code}) : {pull_response.text}")
 
-        pull_data = pull_response.json()
-        apply_pull_response(pull_data)
-        save_pull_cursor(data_dir, cloud_url, pull_data, node_code)
+            pull_data = pull_response.json()
+            apply_pull_response(pull_data)
+            save_pull_cursor(data_dir, cloud_url, pull_data, node_code)
+            if not (isinstance(pull_data, dict) and pull_data.get('has_more') is True):
+                break
+            pull_params = load_pull_cursor(data_dir, cloud_url, node_code)
         self.stdout.write(self.style.SUCCESS("Synchronisation terminée (push + pull)."))
 
 
@@ -183,7 +187,10 @@ def build_outbound_payload(node_code):
     simple (pas de pagination à 200 par lot ici — V2, voir SYNC.md §3.2) :
     la volumétrie d'une boulangerie entre deux cycles de 30 s est faible.
     """
+    from datetime import timedelta
+
     from django.db.models import Q
+    from django.utils import timezone
 
     from clients.models import (
         Client, SocialContribution, SocialDistribution, SocialDistributionLine,
@@ -224,6 +231,7 @@ def build_outbound_payload(node_code):
             'special_code': i.special_code, 'is_debt_repayment': i.is_debt_repayment,
             'receipt_number': i.receipt_number,
             'delivered_at': i.delivered_at.isoformat() if i.delivered_at else None,
+            'invoice_date': i.invoice_date.isoformat() if i.invoice_date else None,  # BUG-993
             'node_origin': i.node_origin,
         }
         for i in invoices_qs
@@ -447,10 +455,31 @@ def build_outbound_payload(node_code):
         ).exclude(transfer_status__in=_TRANSFER_DONE).values_list('id', flat=True)[:1000]
     ]
 
+    # BUG-989/990 : miroir de stock appliqué par CE poste (l'état de ses lignes locales tient lieu
+    # de marqueur) : émettrice = quantité envoyée déduite ; réceptrice = quantité reçue créditée.
+    # Hors `records`, donc hors empreinte du lot. Borné (500 transferts, 30 derniers jours / ouverts).
+    mirrors = {}
+    mirror_qs = BreadTransfer.objects.filter(
+        Q(from_node__code=node_code) | Q(to_node__code=node_code),
+    ).filter(
+        Q(updated_at__gte=timezone.now() - timedelta(days=30)) | ~Q(transfer_status__in=_TRANSFER_DONE),
+    ).select_related('from_node', 'to_node').prefetch_related('lines').order_by('-updated_at')[:500]
+    for t in mirror_qs:
+        is_from = t.from_node.code == node_code
+        deducted = t.transfer_status in ('RESPONDED', 'DISPUTED', 'CONFIRMED')
+        mirrors[str(t.id)] = {
+            str(l.bread_price_id): [
+                (l.quantity_sent if (is_from and deducted) else 0),
+                (0 if is_from else (l.quantity_received or 0)),
+            ]
+            for l in t.lines.all()
+        }
+
     return {
         'node_code': node_code,
         'batch_id': str(uuid.uuid4()),
         'open_transfers': open_transfers,
+        'mirrors': mirrors,
         'records': {
             'clients.Client': clients,
             'sales.Invoice': invoices,
@@ -546,7 +575,7 @@ def _local_node_code(payload):
     return os.environ.get('KIESE_NODE_CODE') or None
 
 
-def _apply_pulled_transfers(transfers, lines, local_code=None):
+def _apply_pulled_transfers(transfers, lines, local_code=None, mirrors=None):
     """BUG-964/975/976/978/979 : applique les transferts descendus du cloud (émetteur OU récepteur).
 
     Contrat (SYNC.md §5.3) :
@@ -566,8 +595,24 @@ def _apply_pulled_transfers(transfers, lines, local_code=None):
         * émettrice : `sent += quantité_envoyée_cloud - quantité_envoyée_locale`, seulement si
           la copie locale était déjà « envoyée » (RESPONDED/DISPUTED : stock déjà déduit).
     Les entrées invalides sont ignorées silencieusement (BUG-781).
+
+    BUG-989 à 992 (contrat d43) :
+    - Transfert INCONNU et `mirrors` présent dans la réponse (cloud récent) : la copie est créée
+      puis le stock est appliqué par différence avec le marqueur du cloud pour (transfert, ce poste)
+      (absent = rien d'appliqué) : un envoi jamais vu est crédité/déduit une fois ; un poste
+      réinstallé qui rejoue l'historique (marqueur = état déjà appliqué) n'applique rien.
+      `mirrors` absent (cloud ancien) : ancien comportement, copie sans mouvement de stock.
+    - Émettrice : la déduction est due dès que le statut cloud est RESPONDED/DISPUTED/CONFIRMED
+      (y compris sur passage PENDING -> RESPONDED décidé au siège : BUG-990) ; elle est restituée
+      si le cloud est CANCELLED (BUG-992). Delta = (envoyé cloud si déduit) - (envoyé local si déjà déduit).
+    - Copie locale CANCELLED et acquittée (`is_synced`) alors que le cloud est RESPONDED/DISPUTED/
+      CONFIRMED : conflit perdu (BUG-992), le cloud prévaut et le poste se réaligne.
     """
+    from datetime import timezone as dt_timezone
+
     from django.db import transaction
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
 
     from core.models import BreadPrice, Node
     from core.utils import create_notification
@@ -577,6 +622,7 @@ def _apply_pulled_transfers(transfers, lines, local_code=None):
     if not isinstance(transfers, list):
         return
     rank = _TRANSFER_RANK
+    new_mode = isinstance(mirrors, dict)
     lines_by_transfer = {}
     for ld in lines if isinstance(lines, list) else []:
         if isinstance(ld, dict):
@@ -611,18 +657,30 @@ def _apply_pulled_transfers(transfers, lines, local_code=None):
                 )
                 local.save(_sync_bypass=True)
             else:
-                if (not local.is_synced or local.transfer_status in _TRANSFER_DONE
-                        or rank[status] < rank[local.transfer_status]):
+                lost_conflict = (local.transfer_status == 'CANCELLED' and local.is_synced
+                                 and status in ('RESPONDED', 'DISPUTED', 'CONFIRMED'))
+                if (not local.is_synced
+                        or (local.transfer_status in _TRANSFER_DONE and not lost_conflict)
+                        or (rank[status] < rank[local.transfer_status] and not lost_conflict)):
                     continue
                 old_status = local.transfer_status
-                if rank[status] > rank[old_status]:
+                if rank[status] > rank[old_status] or lost_conflict:
                     local.transfer_status = status
                     local.quantity_received = qrecv
-                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
-                               _sync_bypass=True)
+                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced',
+                                              'updated_at'], _sync_bypass=True)
+                    # BUG-1003 : la date de comptage (clôture journalière) est celle du cloud, la même
+                    # pour les deux copies (émettrice et réceptrice).
+                    cloud_at = parse_datetime(td['updated_at']) if isinstance(td.get('updated_at'), str) else None
+                    if cloud_at is not None:
+                        if timezone.is_naive(cloud_at):
+                            cloud_at = timezone.make_aware(cloud_at, dt_timezone.utc)
+                        BreadTransfer.objects.filter(pk=local.pk).update(updated_at=cloud_at)
             is_to = bool(local_code) and local.to_node.code == local_code
             is_from = bool(local_code) and local.from_node.code == local_code
-            sent_deducted = old_status in ('RESPONDED', 'DISPUTED')
+            before = old_status in ('RESPONDED', 'DISPUTED')   # stock émettrice déjà déduit (copie locale)
+            after = status in ('RESPONDED', 'DISPUTED', 'CONFIRMED')
+            marker = mirrors.get(str(tid)) if (created and new_mode) else None
             for ld in lines_by_transfer.get(str(tid), []):
                 bp = ld.get('bread_price')
                 if not isinstance(bp, int) or isinstance(bp, bool):
@@ -636,23 +694,35 @@ def _apply_pulled_transfers(transfers, lines, local_code=None):
                 if line is None:
                     BreadTransferLine.objects.create(
                         transfer=local, bread_price=price, quantity_sent=ls, quantity_received=lr)
-                    d_sent, d_recv = ls, (lr or 0)
+                    base_sent, base_recv, new_recv = 0, 0, lr
+                    if created:   # déjà appliqué selon le marqueur du cloud (BUG-989)
+                        pair = marker.get(str(bp)) if isinstance(marker, dict) else None
+                        if isinstance(pair, (list, tuple)) and len(pair) == 2 and all(
+                                isinstance(v, int) and not isinstance(v, bool) for v in pair):
+                            base_sent, base_recv = pair
                 else:
                     new_recv = line.quantity_received if lr is None else lr
-                    d_sent, d_recv = ls - line.quantity_sent, (new_recv or 0) - (line.quantity_received or 0)
-                    if d_sent or new_recv != line.quantity_received:
+                    base_sent, base_recv = (line.quantity_sent if before else 0), (line.quantity_received or 0)
+                    if ls != line.quantity_sent or new_recv != line.quantity_received:
                         line.quantity_sent, line.quantity_received = ls, new_recv
                         line.save(update_fields=['quantity_sent', 'quantity_received'])
-                if created:
-                    continue  # copie d'un état : pas de mouvement de stock
+                if created and not new_mode:
+                    continue  # cloud ancien : copie d'un état, pas de mouvement de stock
+                d_sent, d_recv = (ls if after else 0) - base_sent, (new_recv or 0) - base_recv
                 if is_to and d_recv:
                     _adjust_bread_stock(local.to_node, price, received=d_recv)
-                if is_from and sent_deducted and d_sent:
+                if is_from and d_sent:
                     _adjust_bread_stock(local.from_node, price, sent=d_sent)
 
             # BUG-978 : alertes régénérées localement (une fois : la création ou l'avance de
             # statut n'a lieu qu'une fois par poste ; un rejeu n'avance plus rien).
-            if local_code and (is_to or is_from) and (created or rank[status] > rank[old_status]):
+            if local_code and is_from and old_status == 'CANCELLED' and status != 'CANCELLED':
+                create_notification(
+                    title=f"Conflit Transfert — {local.from_node.code}→{local.to_node.code}",
+                    message=("Votre refus local est arrivé après la réponse du siège : "
+                             "la réponse du siège prévaut, le stock a été ajusté en conséquence."),
+                    severity='WARNING', node_origin=local.from_node.code)
+            elif local_code and (is_to or is_from) and (created or rank[status] > rank[old_status]):
                 lines_txt = ', '.join(
                     f"{l.quantity_sent}×{l.bread_price.label}"
                     for l in local.lines.select_related('bread_price')) or '—'
@@ -715,6 +785,158 @@ def _apply_pulled_closures(closures, local_code):
                 is_validated=validated, is_rejected=rejected, rejection_reason=reason[:2000])
 
 
+_PULL_CREATE_BATCH = 500
+
+
+def _build_pulled_client(row, nodes):
+    """BUG-994 : construit (sans l'enregistrer) un `Client` à partir d'une ligne de pull, ou None
+    si la ligne est invalide / incomplète. Aucune dette n'est recalculée : `current_debt` est celle
+    du cloud (pas de DebtMovement, pas de notification)."""
+    from decimal import Decimal, InvalidOperation
+
+    from clients.models import Client
+    from sync.services import MAX_DEBT_ABS, _strict_uuid
+
+    cid = _strict_uuid(row.get('id'))
+    if cid is None or row.get('category') not in Client.Category.values:
+        return None
+    code = row.get('code')
+    if not isinstance(code, str) or not code.strip() or len(code) > 20:
+        return None
+    texts = {}
+    for name, max_len, required in (('first_name', 100, True), ('last_name', 100, True), ('phone', 25, False),
+                                    ('address', None, False), ('notes', None, False)):
+        val = row.get(name, '')
+        if val is None and not required:
+            val = ''
+        if not isinstance(val, str) or (required and not val.strip()) or (max_len and len(val) > max_len):
+            return None
+        texts[name] = val
+    node = nodes.get(row.get('node')) if isinstance(row.get('node'), str) else None
+    if node is None:
+        return None  # nœud inconnu localement (ou cloud ancien sans `node`) : ignoré, journalisé par l'appelant
+
+    def dec(name, low, high, default=None, places='0.01'):
+        raw = row.get(name)
+        if raw is None or raw == '':
+            return default
+        if isinstance(raw, bool):
+            raise ValueError(name)
+        try:
+            value = Decimal(str(raw))
+        except InvalidOperation:
+            raise ValueError(name)
+        if not value.is_finite() or not (low <= value <= high):
+            raise ValueError(name)
+        return value.quantize(Decimal(places))
+
+    try:
+        debt = dec('current_debt', -MAX_DEBT_ABS + 1, MAX_DEBT_ABS - 1, Decimal('0.00'))
+        limit = dec('credit_limit', Decimal('0'), Decimal('10000000'), Decimal('50000.00'))
+        rate = dec('commission_rate', Decimal('0'), Decimal('0.99'), Decimal('0.25'))
+        cotisation = dec('cotisation_sociale', Decimal('0'), Decimal('99999999'), None)
+    except ValueError:
+        return None
+    ctype = row.get('client_type') or Client.ClientType.DETAILLANT
+    if ctype not in Client.ClientType.values:
+        return None
+    total = row.get('total_breads_received', 0)
+    if isinstance(total, bool) or not isinstance(total, int) or not (0 <= total <= 2_000_000_000):
+        return None
+    origin = row.get('node_origin')
+    if not isinstance(origin, str) or not origin or len(origin) > 10:
+        origin = node.code
+    active = row.get('is_active', True)  # BUG-999 : absent (cloud ancien) = actif
+    if not isinstance(active, bool):
+        active = True
+    return Client(
+        id=cid, code=code, node=node, node_origin=origin, is_synced=True, category=row['category'],
+        is_active=active,
+        current_debt=debt, credit_limit=limit, commission_rate=rate, cotisation_sociale=cotisation,
+        client_type=ctype, total_breads_received=total, **texts,
+    )
+
+
+def _report_client_code_conflict(obj, local_code=None):
+    """BUG-998 : un client du cloud dont le code est déjà pris localement par un AUTRE client n'est pas
+    créé (pas de doublon) ; le conflit est journalisé (`CODE_CLIENT_EN_CONFLIT`) et notifié UNE SEULE
+    fois par client tant qu'il n'est pas résolu au siège."""
+    from core.models import Node
+    from core.utils import create_notification
+    from sync.models import SyncConflictLog
+
+    node = Node.objects.filter(code=local_code).first() if local_code else None
+    node = node or obj.node
+    _conflict, created = SyncConflictLog.objects.get_or_create(
+        node=node, model_label='clients.Client', object_id=str(obj.id)[:40],
+        conflict_type='CODE_CLIENT_EN_CONFLIT', resolved_at=None,
+        defaults={'detail': f"Le client du cloud {obj.code} ({obj.node.code}) n'a pas pu être descendu : "
+                            "ce code est déjà utilisé par un autre client de ce poste."})
+    if created:
+        create_notification(
+            title=f"Client {obj.code} non synchronisé (code en conflit)",
+            message=(f"Le client {obj.code} d'une autre boulangerie ne peut pas être ajouté à ce poste : "
+                     "un client local utilise déjà ce code. Signalez-le au siège pour le résoudre."),
+            severity='WARNING', node_origin=node.code if node else obj.node.code)
+
+
+def _create_unknown_pulled_clients(rows, local_code=None):
+    """BUG-994 : crée en bloc (bulk_create par lots, requêtes par lots : pas de N+1) les clients de
+    la réponse du pull que ce poste ne connaît pas. Idempotent (un second passage ne trouve plus
+    rien d'inconnu). Le code client reste celui du cloud ; un code déjà pris par un AUTRE client local
+    est ignoré avec journal. Renvoie l'ensemble des UUID créés."""
+    import logging
+
+    from django.db import transaction
+
+    from clients.models import Client
+    from core.models import Node
+    from sync.services import _strict_uuid
+
+    log = logging.getLogger(__name__)
+    candidates = {}
+    for row in rows:
+        if isinstance(row, dict):
+            cid = _strict_uuid(row.get('id'))
+            if cid is not None and cid not in candidates:
+                candidates[cid] = row
+    if not candidates:
+        return set()
+    ids = list(candidates)
+    known = set()
+    for i in range(0, len(ids), _PULL_CREATE_BATCH):
+        known.update(Client.objects.filter(pk__in=ids[i:i + _PULL_CREATE_BATCH]).values_list('pk', flat=True))
+    unknown = [cid for cid in ids if cid not in known]
+    if not unknown:
+        return set()
+    nodes = {n.code: n for n in Node.objects.all()}
+    built = []
+    for cid in unknown:
+        obj = _build_pulled_client(candidates[cid], nodes)
+        if obj is None:
+            log.warning("Pull : client %s inconnu ignoré (ligne incomplète, invalide ou nœud inconnu)", cid)
+        elif not obj.is_active and local_code and obj.node.code != local_code:
+            continue  # BUG-999/998 : un client inactif d'une autre boulangerie n'est jamais créé
+        else:
+            built.append(obj)
+    seen_codes, taken = set(), set()
+    codes = [o.code for o in built]
+    for i in range(0, len(codes), _PULL_CREATE_BATCH):
+        taken.update(Client.objects.filter(code__in=codes[i:i + _PULL_CREATE_BATCH]).values_list('code', flat=True))
+    to_create = []
+    for obj in built:
+        if obj.code in taken or obj.code in seen_codes:
+            log.warning("Pull : code client %s déjà utilisé localement, client %s ignoré", obj.code, obj.id)
+            _report_client_code_conflict(obj, local_code)
+            continue
+        seen_codes.add(obj.code)
+        to_create.append(obj)
+    for i in range(0, len(to_create), _PULL_CREATE_BATCH):
+        with transaction.atomic():
+            Client.objects.bulk_create(to_create[i:i + _PULL_CREATE_BATCH], ignore_conflicts=True)
+    return {o.id for o in to_create}
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -734,18 +956,23 @@ def apply_pull_response(payload):
     # d'exception : entrées invalides ignorées, rien d'écrit à tort.
     if isinstance(payload, dict):
         _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'),
-                                _local_node_code(payload))
+                                _local_node_code(payload), payload.get('mirrors'))
     if isinstance(payload, dict):
         _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return
+    # BUG-994 : clients inconnus de ce poste (poste neuf) créés en bloc depuis la réponse du pull.
+    created_ids = _create_unknown_pulled_clients(clients, _local_node_code(payload))
+    # Perf (BUG-998) : mises à jour par lots de _PULL_CREATE_BATCH (une transaction, un verrou et un
+    # `bulk_update` par lot) au lieu d'une requête par client ; sémantique inchangée.
+    valid = []
     for client_data in clients:
         if not isinstance(client_data, dict):
             continue
         client_id = _strict_uuid(client_data.get('id'))
         category = client_data.get('category')
-        if client_id is None or category not in Client.Category.values:
+        if client_id is None or category not in Client.Category.values or client_id in created_ids:
             continue
         raw_debt = client_data.get('current_debt')
         if isinstance(raw_debt, bool) or raw_debt is None:
@@ -756,26 +983,51 @@ def apply_pull_response(payload):
             continue
         if not debt.is_finite() or abs(debt) >= MAX_DEBT_ABS:
             continue
-        with transaction.atomic():
-            # BUG-780 : un mouvement local pas encore poussé n'est pas dans la
-            # valeur Cloud : écraser la dette locale la ferait redescendre et
-            # fausserait BP et plafond. Le client est ignoré ; une fois le
-            # mouvement poussé, la dette Cloud le contient et un prochain pull
-            # (curseur `updated_at` du Cloud) la redescend.
-            if DebtMovement.objects.filter(client_id=client_id, is_synced=False).exists():
-                continue
-            locked = Client.objects.select_for_update().filter(pk=client_id).first()
-            if locked is None:
+        valid.append((client_id, category, debt, client_data))
+    for i in range(0, len(valid), _PULL_CREATE_BATCH):
+        _apply_pulled_client_batch(valid[i:i + _PULL_CREATE_BATCH], _local_node_code(payload))
+    # `config`/`bread_prices` : appliqués par le futur backend desktop sur
+    # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
+    # appliquer ici quand la commande est testée contre la même base que
+    # le Cloud (ce serait un no-op de toute façon).
+
+
+def _apply_pulled_client_batch(batch, local_code=None):
+    """Applique un lot de clients connus (dette, plafond, identité, catégorie) du cloud.
+    BUG-780 : client ignoré si un mouvement de dette local n'est pas poussé ; BUG-952 : une édition
+    locale non poussée d'identité/plafond n'est jamais écrasée (la dette, elle, est appliquée)."""
+    from decimal import Decimal, InvalidOperation
+
+    from django.db import transaction
+
+    from clients.models import Client
+    from sync.models import DebtMovement
+
+    from core.models import Node
+
+    ids = [b[0] for b in batch]
+    nodes = {n.code: n for n in Node.objects.all()}
+    # BUG-1004 : codes demandés par le cloud, pour détecter un code déjà pris par un AUTRE client local.
+    wanted = [str(b[3].get('code')) for b in batch if isinstance(b[3].get('code'), str)]
+    holders = {}
+    for i in range(0, len(wanted), _PULL_CREATE_BATCH):
+        holders.update(Client.objects.filter(code__in=wanted[i:i + _PULL_CREATE_BATCH]).values_list('code', 'pk'))
+    batch_codes = set()
+    config = None  # lu paresseusement par `refresh_category` (comme avant : pas de création de Config inutile)
+    notify = []
+    with transaction.atomic():
+        pending = set(DebtMovement.objects.filter(client_id__in=ids, is_synced=False)
+                      .values_list('client_id', flat=True))
+        locked_by_id = {c.pk: c for c in Client.objects.select_for_update().select_related('node').filter(pk__in=ids)}
+        changed, all_fields = [], set()
+        for client_id, category, debt, client_data in batch:
+            locked = locked_by_id.get(client_id)
+            if locked is None or client_id in pending:
                 continue
             old_category = locked.category
             locked.current_debt = debt.quantize(Decimal('0.01'))
-            fields = ['current_debt', 'category']
-            # BUG-952 : une édition locale d'identité/plafond pas encore poussée
-            # (is_synced=False et identity_updated_at renseigné) n'est jamais écrasée
-            # par le pull ; elle sera poussée ensuite (le propriétaire fait autorité,
-            # SYNC.md §5.1). La dette, elle, est toujours appliquée.
+            fields = {'current_debt', 'category'}
             local_edit_pending = (not locked.is_synced) and locked.identity_updated_at is not None
-            # BUG-942 : plafond et identité du Cloud appliqués (valeurs invalides ignorées).
             limit = client_data.get('credit_limit')
             if local_edit_pending:
                 limit = None
@@ -786,29 +1038,50 @@ def apply_pull_response(payload):
                     limit = None
                 if limit is not None and limit.is_finite() and Decimal('0') <= limit <= Decimal('10000000'):
                     locked.credit_limit = limit.quantize(Decimal('0.01'))
-                    fields.append('credit_limit')
+                    fields.add('credit_limit')
                 else:
                     limit = None
             else:
                 limit = None
             for name, max_len in (('first_name', 100), ('last_name', 100), ('phone', 25), ('address', None)):
                 val = None if local_edit_pending else client_data.get(name)
-                if isinstance(val, str) and (max_len is None or len(val) <= max_len) \
-                        and (name not in ('first_name', 'last_name') or val.strip()):
+                if isinstance(val, str) and (max_len is None or len(val) <= max_len)                         and (name not in ('first_name', 'last_name') or val.strip()):
                     setattr(locked, name, val)
-                    fields.append(name)
+                    fields.add(name)
+            if not local_edit_pending:
+                # BUG-999 : état actif/inactif du cloud (jamais sur une édition locale non poussée, BUG-952).
+                active = client_data.get('is_active')
+                if isinstance(active, bool):
+                    locked.is_active = active
+                    fields.add('is_active')
+                # BUG-1004 : client déplacé de boulangerie au cloud (node + code régénéré).
+                new_code, new_node = client_data.get('code'), nodes.get(client_data.get('node'))
+                if (isinstance(new_code, str) and new_code.strip() and len(new_code) <= 20 and new_node is not None
+                        and (new_code != locked.code or new_node.pk != locked.node_id)):
+                    holder = holders.get(new_code)
+                    if (holder is not None and holder != locked.pk) or (new_code in batch_codes and new_code != locked.code):
+                        _report_client_code_conflict(
+                            Client(id=locked.pk, code=new_code, node=new_node), local_code)
+                    else:
+                        batch_codes.add(new_code)
+                        locked.code, locked.node = new_code, new_node
+                        origin = client_data.get('node_origin')
+                        locked.node_origin = origin if isinstance(origin, str) and origin and len(origin) <= 10 else new_node.code
+                        fields |= {'code', 'node', 'node_origin'}
             locked.category = category
             if local_edit_pending:
-                locked.refresh_category()  # catégorie sur le plafond LOCAL conservé
+                locked.refresh_category(config)
             elif limit is not None:
-                # La catégorie doit rester cohérente avec le plafond appliqué.
                 if locked.current_debt >= locked.credit_limit:
                     locked.category = Client.Category.RISK
                 elif category == Client.Category.RISK:
-                    locked.refresh_category()
-            locked.save(update_fields=fields, _sync_bypass=True)
-            locked.notify_risk_transition(old_category)
-    # `config`/`bread_prices` : appliqués par le futur backend desktop sur
-    # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
-    # appliquer ici quand la commande est testée contre la même base que
-    # le Cloud (ce serait un no-op de toute façon).
+                    locked.refresh_category(config)
+            changed.append(locked)
+            all_fields |= fields
+            notify.append((locked, old_category))
+        if changed:
+            # `bulk_update` n'appelle ni `save()` ni `auto_now` : `is_synced` et `updated_at` intacts
+            # (équivalent de `save(update_fields=..., _sync_bypass=True)`). Valeurs inchangées réécrites.
+            Client.objects.bulk_update(changed, sorted(all_fields), batch_size=_PULL_CREATE_BATCH)
+    for locked, old_category in notify:
+        locked.notify_risk_transition(old_category)

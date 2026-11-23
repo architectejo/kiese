@@ -587,6 +587,26 @@ select.form-input {
   }
 }
 
+/* POS Android (≈ 360 px) : l'en-tête ne doit jamais dépasser la largeur de l'écran. */
+@media (max-width: 480px) {
+  .dashboard-header-left {
+    gap: 8px !important;
+    min-width: 0;
+    flex: 1 1 0;
+  }
+  .dashboard-header-title {
+    font-size: 0.95rem !important;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dashboard-header-actions {
+    gap: 8px !important;
+    flex-shrink: 0;
+  }
+}
+
 @media (max-width: 1100px) {
   .dashboard-content-area {
     padding: 20px;

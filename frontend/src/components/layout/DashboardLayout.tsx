@@ -656,7 +656,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
             zIndex: 10
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div className="dashboard-header-left" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {/* §6.5 Mobile hamburger button */}
             <button
               className="mobile-hamburger"
@@ -665,12 +665,12 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
             >
               {mobileMenuOpen ? <FiX /> : <FiMenu />}
             </button>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+            <h2 className="dashboard-header-title" style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
               {filteredNavItems.find(item => location.pathname === item.to)?.label || 'Console de Gestion'}
             </h2>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <div className="dashboard-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <ChatButton />
 
             {/* Notification Bell with Badge Count */}
@@ -1220,6 +1220,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
         <ClosureModal
           closureDate={closureStatus.closure_date}
           closureHour={closureStatus.closure_hour}
+          rotationEnabled={rotationEnabled}
           onLater={() => useClosureStatusStore.getState().dismiss(closureStatus.closure_date as string)}
           onDone={() => {
             useClosureStatusStore.getState().dismiss(closureStatus.closure_date as string);

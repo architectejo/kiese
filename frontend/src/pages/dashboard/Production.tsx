@@ -418,14 +418,14 @@ export const Production: React.FC = () => {
 
       {/* Header */}
       <div className="glass-card animate-fade-in" style={{ background: 'linear-gradient(135deg, hsl(var(--bg-tertiary)) 0%, hsl(var(--bg-secondary)) 100%)', borderLeft: '4px solid hsl(var(--accent-color))', padding: '14px 20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <h1 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: '2px' }}>Production, Stocks & Transferts</h1>
             <p style={{ color: 'hsl(var(--text-secondary))', fontSize: '0.72rem' }}>
               Déclaration fournée · Rendement théorique · Approvisionnements · Transferts inter-boulangeries · Réconciliation
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             {user?.can_access_all_nodes && (
               <select
                 value={viewNode}

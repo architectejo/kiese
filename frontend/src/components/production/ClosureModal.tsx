@@ -28,13 +28,15 @@ export interface ClosureModalProps {
   /** Jour de clôture (AAAA-MM-JJ) fourni par `closure-status`. */
   closureDate: string;
   closureHour: string | null;
+  /** Vrai si la boulangerie est en rotation d'équipes de 24 h : seul cas où le choix d'équipe est proposé. */
+  rotationEnabled: boolean;
   /** Reporte la boîte (la bannière de blocage reste affichée). */
   onLater: () => void;
   /** Saisie envoyée : la boîte se ferme jusqu'à la validation par la direction. */
   onDone: () => void;
 }
 
-export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closureHour, onLater, onDone }) => {
+export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closureHour, rotationEnabled, onLater, onDone }) => {
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [sessions, setSessions] = useState<ProductionSession[]>([]);
   const [assignment, setAssignment] = useState<TeamAssignment | null>(null);
@@ -58,12 +60,17 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
         if (cancelled) return;
         setBreadPrices(prices.data.filter(b => b.is_active));
         setSessions(sess.data);
-        // Désignation d'équipe : disponible seulement en rotation de 24 h (sinon la section est masquée).
-        try {
-          const { data } = await productionApi.teamAssignment.get();
-          if (!cancelled) { setAssignment(data); setTeam(data.team ?? data.suggested); }
-        } catch {
-          if (!cancelled) setAssignment(null);
+        // Désignation d'équipe : proposée seulement en rotation de 24 h (le serveur répond aussi hors rotation :
+        // la section doit donc être masquée côté interface, pas déduite d'une erreur).
+        if (rotationEnabled) {
+          try {
+            const { data } = await productionApi.teamAssignment.get();
+            if (!cancelled) { setAssignment(data); setTeam(data.team ?? data.suggested); }
+          } catch {
+            if (!cancelled) setAssignment(null);
+          }
+        } else if (!cancelled) {
+          setAssignment(null);
         }
       } catch (err: unknown) {
         if (!cancelled) setLoadError(getErrorDetail(err, 'Impossible de charger les catégories de pains.'));
@@ -72,7 +79,7 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
       }
     })();
     return () => { cancelled = true; };
-  }, [closureDate]);
+  }, [closureDate, rotationEnabled]);
 
   // Fournée de rattachement : la dernière du jour de clôture (le serveur exige une session).
   const targetSession = useMemo(
@@ -117,7 +124,7 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
     }
   };
 
-  const cellStyle: React.CSSProperties = { height: '44px', fontSize: '1rem', textAlign: 'center', width: '100%', minWidth: '64px' };
+  const cellStyle: React.CSSProperties = { height: '44px', fontSize: '1rem', textAlign: 'center', width: '100%', minWidth: '52px' };
 
   return (
     <Modal
@@ -159,18 +166,18 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left', padding: '4px 6px' }}>Catégorie</th>
+                    <th style={{ textAlign: 'left', padding: '4px 4px' }}>Catégorie</th>
                     {CLOSURE_TYPES.map(t => (
-                      <th key={t} title={DISPOSAL_LABELS[t]} style={{ padding: '4px 6px', fontSize: '0.7rem' }}>{SHORT_LABELS[t]}</th>
+                      <th key={t} title={DISPOSAL_LABELS[t]} style={{ padding: '4px 4px', fontSize: '0.7rem' }}>{SHORT_LABELS[t]}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {breadPrices.map(bp => (
                     <tr key={bp.id}>
-                      <td style={{ padding: '4px 6px', fontWeight: 700 }}>{bp.label}</td>
+                      <td style={{ padding: '4px 4px', fontWeight: 700 }}>{bp.label}</td>
                       {CLOSURE_TYPES.map(t => (
-                        <td key={t} style={{ padding: '4px 6px' }}>
+                        <td key={t} style={{ padding: '4px 4px' }}>
                           <input
                             type="text" inputMode="numeric" className="form-input" placeholder="0"
                             aria-label={`${bp.label} — ${SHORT_LABELS[t]}`}

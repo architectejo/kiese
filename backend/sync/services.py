@@ -256,6 +256,18 @@ def _batch_terminal_parents():
     return _batch_ctx.parents
 
 
+def _batch_transfer_sets():
+    """BUG-991/992 : ensembles propres au lot en cours : `sent_ok` (transferts dont l'émettrice
+    pousse sa réponse RESPONDED : sa quantité envoyée fait foi) et `conflict` (transferts dont
+    l'état poussé a perdu face au cloud : leurs lignes sont ignorées)."""
+    if not hasattr(_batch_ctx, 'sent_ok'):
+        _batch_ctx.sent_ok, _batch_ctx.conflict = set(), set()
+    return _batch_ctx.sent_ok, _batch_ctx.conflict
+
+
+TRANSFER_STATE_CONFLICT = 'TRANSFER_STATE_CONFLICT'
+
+
 def _record_result(record_id, accepted, reason=None):
     result = {'id': str(record_id)[:64], 'status': ACCEPTED if accepted else REJECTED}
     if reason:
@@ -406,10 +418,16 @@ def _apply_client_identity_push(existing, record, node):
         old_category = locked.category
         if future_drift:
             overwritten = ", ".join(f"{k}: {getattr(locked, k)!r} -> {v!r}" for k, v in changes.items())
-            _log_conflict(
+            clock_conflict = _log_conflict(
                 node, 'clients.Client', record_id, 'HORLOGE_POSTE_EN_AVANCE',
                 f"Édition du client {locked.code} poussée par {node.code} avec un horodatage dans le futur "
                 f"({sent_at.isoformat()}) : appliquée, valeurs écrasées conservées ici — {overwritten}.")
+            clock_conflict.refresh_from_db()
+            if clock_conflict.occurrences > 1:
+                # BUG-995 : conflit dédoublonné (BUG-723) : l'historique des valeurs écrasées est conservé.
+                clock_conflict.detail = (
+                    f"{clock_conflict.detail} || Écrasement suivant ({sent_at.isoformat()}) : {overwritten}.")[:20000]
+                clock_conflict.save(update_fields=['detail'])
         for k, v in changes.items():
             setattr(locked, k, v)
         fields = list(changes)
@@ -528,6 +546,22 @@ def _push_invoice(node, record):
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
 
+    # BUG-993 : date de la facture du poste (ISO ASCII AAAA-MM-JJ strict, ni future ni absurde).
+    # Absente (poste ancien) : comportement historique (date du jour du push).
+    invoice_date = None
+    raw_date = record.get('invoice_date')
+    if raw_date not in (None, ''):
+        invoice_date = _strict_date(raw_date) if (
+            isinstance(raw_date, str) and raw_date.isascii() and len(raw_date.strip()) == 10) else None
+        if invoice_date is None:
+            return _record_result(record_id, False, "« invoice_date » invalide (AAAA-MM-JJ attendu)")
+        if invoice_date < MIN_SYNC_INVOICE_DATE:
+            return _record_result(record_id, False, "« invoice_date » trop ancienne")
+        try:
+            _sync_not_future_date(node, invoice_date, 'invoice_date')
+        except ValueError as exc:
+            return _record_result(record_id, False, str(exc))
+
     # BUG-725 : montants jamais négatifs (la BP négative se porte par
     # `debt_before`/`debt_after`, pas par la commande ni le versement).
     for fname in ('order_total', 'payment_amount', 'initial_order_total'):
@@ -599,10 +633,28 @@ def _push_invoice(node, record):
         delivered_at=delivered_at,
         node_origin=record.get('node_origin', bakery_code),
     )
+    if invoice_date is not None:
+        invoice.invoice_date = invoice_date
     invoice.save(_sync_bypass=True)
+    if invoice_date is not None and client is not None and invoice_date != _date_today_local():
+        # BUG-083 (reproduit de la voie REST) : facture datée dans une période de commission close.
+        try:
+            from sales.views import _warn_if_commission_period_locked
+            _warn_if_commission_period_locked(invoice, client)
+        except Exception:  # l'avertissement ne doit jamais faire échouer le lot
+            logger.warning("Avertissement période de commission close non créé (%s)", record_id)
     if invoice.status in ('DELIVERED', 'CANCELLED'):
         _batch_terminal_parents().add(str(invoice.pk))
     return _record_result(record_id, True)
+
+
+def _date_today_local():
+    from django.utils import timezone
+    return timezone.localdate()
+
+
+# Borne basse d'une date de facture poussée par un poste (BUG-993).
+MIN_SYNC_INVOICE_DATE = _date(2020, 1, 1)
 
 
 # BUG-331/332 : borne haute d'une quantité de ligne (line_total est un
@@ -1656,6 +1708,28 @@ def _push_bread_transfer(node, record):
         }
         new_status = record.get('transfer_status')
         changed_fields = []
+        TSc = BreadTransfer.TransferStatus
+        sent_ok, conflict_set = _batch_transfer_sets()
+        if (new_status == TSc.RESPONDED and node.pk == existing.from_node_id
+                and existing.transfer_status in (TSc.PENDING, TSc.RESPONDED)
+                and existing.flow == BreadTransfer.Flow.REQUEST):
+            # BUG-991 : la réponse de l'émettrice peut ajuster la quantité envoyée (lignes du lot).
+            sent_ok.add(str(existing.pk))
+        # BUG-992 : conflit de précédence « premier terminal gagne ». L'état déjà posé au cloud
+        # prévaut : le refus (CANCELLED) de l'émettrice sur une demande déjà répondue, ou une
+        # réponse sur une demande déjà annulée, est ACQUITTÉ (le poste ne reste pas non synchronisé
+        # à vie), tracé dans SyncConflictLog, et le poste se réaligne au pull (stock restitué/déduit).
+        if (node.pk == existing.from_node_id and new_status and new_status != existing.transfer_status
+                and ((new_status == TSc.CANCELLED and existing.transfer_status != TSc.PENDING)
+                     or (existing.transfer_status == TSc.CANCELLED
+                         and new_status in (TSc.RESPONDED, TSc.DISPUTED, TSc.CONFIRMED)))):
+            conflict_set.add(str(existing.pk))
+            sent_ok.discard(str(existing.pk))
+            _log_conflict(
+                node, 'production.BreadTransfer', existing.pk, TRANSFER_STATE_CONFLICT,
+                f"Le nœud {node.code} a poussé « {new_status} » ; le cloud était déjà « "
+                f"{existing.transfer_status} » : l'état du cloud prévaut, le poste se réaligne.")
+            return _record_result(record_id, True, "conflit : l'état du cloud prévaut (réalignement au prochain pull)")
         if new_status and new_status != existing.transfer_status:
             # BUG-874 : seule la réceptrice valide la réception (CLAUDE.md 5.4).
             # BUG-966 : exception : la sortie de litige (DISPUTED -> CONFIRMED) peut
@@ -1705,7 +1779,8 @@ def _push_bread_transfer(node, record):
                     existing.quantity_received = qty_recv
                     changed_fields.append('quantity_received')
         if changed_fields:
-            existing.save(update_fields=changed_fields, _sync_bypass=True)
+            # BUG-1003 : `updated_at` avance avec le statut (date de comptage partagée, clôture journalière).
+            existing.save(update_fields=changed_fields + ['updated_at'], _sync_bypass=True)
             if existing.transfer_status in _TRANSFER_LOCKED:
                 # BUG-921 : le lot qui termine le transfert peut encore pousser ses lignes.
                 _batch_terminal_parents().add(str(existing.pk))
@@ -1797,6 +1872,9 @@ def _push_bread_transfer_line(node, record):
     locked = (transfer.transfer_status in _TRANSFER_LOCKED
               and str(transfer.pk) not in _batch_terminal_parents())
 
+    sent_ok, conflict_set = _batch_transfer_sets()
+    if str(transfer.pk) in conflict_set:
+        return _record_result(record_id, True)  # BUG-992 : l'état du cloud prévaut, ligne sans effet
     existing = BreadTransferLine.objects.filter(transfer=transfer, bread_price=bread_price).first()
     if existing is not None:
         # BUG-788 : la quantité reçue n'est modifiable que par la boulangerie réceptrice.
@@ -1810,6 +1888,12 @@ def _push_bread_transfer_line(node, record):
             # l'envoyé sur la quantité reçue déclarée par la réceptrice.
             new_sent = _sync_int(sent, 'quantity_sent')
             if in_dispute and existing.quantity_received is not None and new_sent == existing.quantity_received:
+                existing.quantity_sent = new_sent
+                update_fields.append('quantity_sent')
+            elif (str(transfer.pk) in sent_ok and existing.quantity_received is None
+                  and transfer.transfer_status == 'RESPONDED' and new_sent >= 0):
+                # BUG-991 : réponse de l'émettrice à une demande avec quantité ajustée : la
+                # quantité envoyée finale est celle de l'émettrice (rien n'a encore été reçu).
                 existing.quantity_sent = new_sent
                 update_fields.append('quantity_sent')
             else:
@@ -2908,6 +2992,7 @@ def process_push_batch(node, records_by_model):
 
     results = {}
     _batch_ctx.parents = set()
+    _batch_ctx.sent_ok, _batch_ctx.conflict = set(), set()
     for model_label in PUSH_MODEL_ORDER:
         seen_ids = set()
         records = records_by_model.get(model_label) or []

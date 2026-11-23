@@ -307,3 +307,44 @@ class NodeOpenTransfers(models.Model):
     class Meta:
         verbose_name = _("Transferts ouverts d'un poste")
         verbose_name_plural = _("Transferts ouverts des postes")
+
+
+class TransferMirror(models.Model):
+    """
+    BUG-989/990 : marqueur « miroir de stock appliqué » par (nœud, transfert), rapporté par
+    le poste dans le champ `mirrors` de son push (état de SES lignes locales : quantité
+    envoyée déduite pour l'émettrice, quantité reçue créditée pour la réceptrice).
+    `applied` = {"<bread_price_id>": [envoyé_déduit, reçu_crédité]}. Le cloud ne tient
+    aucun stock de pains pour les postes : ce marqueur sert uniquement à dire à un poste qui
+    découvre un transfert (jamais vu, ou poste réinstallé qui rejoue l'historique) ce qu'il a
+    DÉJÀ appliqué ; la différence avec l'état du cloud est ce qu'il lui reste à appliquer.
+    """
+    node = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='transfer_mirrors')
+    transfer_id = models.UUIDField(db_index=True)
+    applied = models.JSONField(default=dict)
+    # BUG-1000 : plus hautes bornes [envoyé, reçu] connues du cloud pour ce poste (historique des
+    # lignes vues au push/pull) : distingue un marqueur « périmé » d'un marqueur forgé.
+    peak = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Miroir de stock d'un transfert")
+        verbose_name_plural = _("Miroirs de stock des transferts")
+        unique_together = [['node', 'transfer_id']]
+
+
+class TransferPull(models.Model):
+    """
+    BUG-1007 : instant (début de réponse) du dernier PULL abouti qui a livré ce transfert à ce
+    poste. Absence de ligne = jamais livré. Critère « poste en retard » de `_store_mirrors`
+    (au lieu de `Node.last_sync`, posé aussi par chaque push). Table séparée de TransferMirror
+    pour ne pas modifier le schéma intermédiaire 0004/0005.
+    """
+    node = models.ForeignKey(Node, on_delete=models.CASCADE, related_name='transfer_pulls')
+    transfer_id = models.UUIDField(db_index=True)
+    pulled_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = _("Dernier pull d'un transfert")
+        verbose_name_plural = _("Derniers pulls des transferts")
+        unique_together = [['node', 'transfer_id']]

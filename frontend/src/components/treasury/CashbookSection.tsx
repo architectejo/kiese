@@ -49,7 +49,7 @@ export const CashbookSection: React.FC<Props> = ({
             §5.1.3 — Livre de Caisse Direction (Grand Livre Immuable)
           </h2>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', flexWrap: 'wrap' }}>
               <label style={{ color: 'hsl(var(--text-secondary))', fontWeight: 600 }}>Du</label>
               <input type="date" value={dateFrom} onChange={e => onDateFromChange(e.target.value)} className="form-input" style={{ height: '28px', fontSize: '0.72rem', padding: '0 6px' }} />
               <label style={{ color: 'hsl(var(--text-secondary))', fontWeight: 600 }}>Au</label>

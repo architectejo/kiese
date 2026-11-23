@@ -25,7 +25,7 @@ from core.permissions import IsHeadquarters
 from .authentication import NodeTokenAuthentication
 from .exceptions import TransientSyncError
 from .permissions import IsValidNodeToken
-from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog
+from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog, TransferMirror, TransferPull
 from .serializers import SyncConflictLogSerializer
 from .services import process_push_batch
 
@@ -77,6 +77,141 @@ def _store_open_transfers(node, raw):
             except (TypeError, ValueError):
                 continue
     NodeOpenTransfers.objects.update_or_create(node=node, defaults={'transfer_ids': sorted(set(ids))})
+
+
+_MAX_MIRRORS = 500
+
+
+def _clean_mirror(raw):
+    """{bread_price_id: [envoyé_déduit, reçu_crédité]} borné ; None si la forme est invalide."""
+    if not isinstance(raw, dict) or len(raw) > 200:
+        return None
+    out = {}
+    for bp, pair in raw.items():
+        if (not isinstance(bp, str) or not bp.isascii() or not bp.isdigit() or len(bp) > 12
+                or not isinstance(pair, (list, tuple)) or len(pair) != 2):
+            return None
+        vals = []
+        for v in pair:
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > 2_000_000_000:
+                return None
+            vals.append(v)
+        out[str(int(bp))] = vals
+    return out
+
+
+def _store_mirrors(node, raw):
+    """BUG-989/990 : mémorise le miroir de stock appliqué par le poste (état de ses lignes
+    locales). Champ absent / invalide : rien n'est modifié. Un transfert étranger au nœud ou
+    inconnu est ignoré. Appliqué seulement pour un lot NEUF (jamais sur un rejeu : un ancien
+    lot ne doit pas ramener le marqueur en arrière)."""
+    from django.db.models import Q
+
+    from production.models import BreadTransfer
+    if not isinstance(raw, dict):
+        return
+    cleaned = {}
+    for key, value in list(raw.items())[:_MAX_MIRRORS]:
+        try:
+            tid = uuid.UUID(key) if isinstance(key, str) and len(key) <= 40 else None
+        except (TypeError, ValueError):
+            tid = None
+        mirror = _clean_mirror(value)
+        if tid is not None and mirror is not None:
+            cleaned[tid] = mirror
+    if not cleaned:
+        return
+    mine_qs = BreadTransfer.objects.filter(pk__in=list(cleaned)).filter(
+        Q(from_node=node) | Q(to_node=node)).prefetch_related('lines')
+    mine_objs = {t.pk: t for t in mine_qs}
+    mine = set(mine_objs)
+    _bump_peaks(node, mine_objs.values())
+    pulled = dict(TransferPull.objects.filter(node=node, transfer_id__in=list(mine)).values_list(
+        'transfer_id', 'pulled_at'))
+    bounds = {}
+    for tid, t in mine_objs.items():
+        for bp, pair in _effective_line_bounds(t).items():
+            bounds[(tid, bp)] = pair
+    for tid, mirror in cleaned.items():
+        if tid not in mine:
+            continue
+        existing = TransferMirror.objects.filter(node=node, transfer_id=tid).first()
+        old = dict(existing.applied) if existing is not None else {}
+        peak = existing.peak if existing is not None and isinstance(existing.peak, dict) else {}
+        # BUG-1000 : un poste qui n'a pas encore tiré la dernière modification du transfert (résolution
+        # au siège) peut légitimement pousser un marqueur au-dessus de la borne actuelle, jusqu'à la
+        # plus haute valeur historique connue du cloud.
+        stale = (mine_objs[tid].transfer_status != 'PENDING'
+                 and (tid not in pulled or pulled[tid] < mine_objs[tid].updated_at))
+        merged = dict(old)
+        rejected = []
+        for bp, (sent, recv) in mirror.items():
+            bound = bounds.get((tid, bp))
+            upper = bound
+            if bound is not None and stale:
+                hp = peak.get(bp)
+                if isinstance(hp, (list, tuple)) and len(hp) == 2:
+                    upper = (max(bound[0], hp[0]), max(bound[1], hp[1]))
+            if bound is None or sent > upper[0] or recv > upper[1]:
+                # BUG-997 : marqueur hors borne (ou ligne inconnue du cloud) : ignoré.
+                rejected.append(bp)
+                continue
+            prev = old.get(bp)
+            if prev is not None and len(prev) == 2 and prev[0] <= bound[0] and prev[1] <= bound[1]:
+                # Monotone, sauf rétablissement : l'ancien marqueur dépasse la borne actuelle
+                # (ex. résolution d'écart ayant réduit la ligne cloud) -> la valeur du poste prévaut.
+                sent, recv = max(sent, prev[0]), max(recv, prev[1])
+            merged[bp] = [sent, recv]
+        if rejected:
+            conflict, created = SyncConflictLog.objects.get_or_create(
+                node=node, model_label='sync.TransferMirror', object_id=str(tid)[:40],
+                conflict_type='MIRROR_OUT_OF_BOUNDS', resolved_at=None,
+                defaults={'detail': "Marqueur de miroir ignoré (hors borne des lignes du cloud) "
+                                    f"pour les catégories {', '.join(sorted(rejected))}."})
+            if not created:
+                SyncConflictLog.objects.filter(pk=conflict.pk).update(occurrences=conflict.occurrences + 1)
+        if merged != old:
+            TransferMirror.objects.update_or_create(node=node, transfer_id=tid, defaults={'applied': merged})
+
+
+def _effective_line_bounds(transfer):
+    """{bread_price_id: (envoyé_déduit_max, reçu_max)} d'un transfert (lignes préchargées).
+    BUG-1002 : tant que le transfert est en attente (PENDING) ou annulé, rien n'est déduit
+    chez l'émettrice : borne d'envoi = 0."""
+    deducted = transfer.transfer_status in ('RESPONDED', 'DISPUTED', 'CONFIRMED')
+    return {
+        str(l.bread_price_id): ((l.quantity_sent or 0) if deducted else 0, l.quantity_received or 0)
+        for l in transfer.lines.all()
+    }
+
+
+def _bump_peaks(node, transfers):
+    """BUG-1000 : retient pour (nœud, transfert) la plus haute borne [envoyé, reçu] vue par le cloud."""
+    for t in transfers:
+        cur = _effective_line_bounds(t)
+        if not cur:
+            continue
+        row = TransferMirror.objects.filter(node=node, transfer_id=t.pk).first()
+        peak = dict(row.peak) if row is not None and isinstance(row.peak, dict) else {}
+        new = dict(peak)
+        for bp, (s, r) in cur.items():
+            hp = peak.get(bp) or [0, 0]
+            new[bp] = [max(hp[0], s), max(hp[1], r)]
+        if new != peak or row is None:
+            TransferMirror.objects.update_or_create(node=node, transfer_id=t.pk, defaults={'peak': new})
+
+
+def _clamped_mirror(applied, transfer):
+    """BUG-1001 : marqueur descendu borné aux quantités actuelles des lignes cloud
+    (la somme du groupe reste nulle pour un poste réinstallé après une résolution)."""
+    lines = {str(l.bread_price_id): l for l in transfer.lines.all()}
+    out = {}
+    for bp, pair in applied.items():
+        l = lines.get(bp)
+        if l is None or not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        out[bp] = [min(pair[0], l.quantity_sent or 0), min(pair[1], l.quantity_received or 0)]
+    return out
 
 
 class PushView(APIView):
@@ -165,6 +300,7 @@ class PushView(APIView):
             return Response({'batch_id': str(batch_id), 'results': existing_batch.result, 'replayed': True})
 
         results = process_push_batch(node, records_by_model)
+        _store_mirrors(node, data.get('mirrors'))
 
         any_rejected = any(
             r.get('status') == 'REJECTED'
@@ -202,6 +338,19 @@ def _parse_cursor(request, param_name):
     if parsed > timezone.now():
         return None
     return parsed
+
+
+# BUG-998 : taille maximale de la liste de clients par réponse de pull (`has_more` au-delà).
+PULL_CLIENT_PAGE_SIZE = 5000
+
+
+def _parse_after_id(raw):
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw)[:64])
+    except (TypeError, ValueError):
+        raise ParseError("Paramètre « client_after_id » invalide : UUID attendu.")
 
 
 class PullView(APIView):
@@ -247,11 +396,32 @@ class PullView(APIView):
         # Clients pertinents pour ce nœud : les siens, ou tout client déjà
         # facturé par ce nœud ailleurs (SYNC.md §1.3) — leur `current_debt`
         # recalculé est ce qui doit redescendre, jamais une valeur figée.
-        client_qs = Client.objects.filter(
-            Q(node=node) | Q(invoices__node=node)
-        ).distinct()
+        # BUG-998 (CLAUDE.md 5.1) : un poste de boulangerie reçoit les clients ACTIFS de TOUTES
+        # les boulangeries (un facturier recherche et facture hors ligne les clients des autres) ;
+        # le nœud SIEGE garde le périmètre restreint (jamais le catalogue complet). Seules les
+        # colonnes d'identité/plafond/dette du client descendent : ni factures ni mouvements.
+        from sales.models import Invoice
+        scope = Q(node=node) | Q(pk__in=Invoice.objects.filter(node=node).values('client_id'))
+        if node.code != 'SIEGE':
+            scope |= Q(is_active=True)
+        # BUG-999 : au pull incrémentiel (pas au pull complet ni aux pages suivantes d'une marche
+        # initiale), un client d'un autre nœud devenu INACTIF depuis le curseur redescend pour être
+        # désactivé localement ; le curseur `updated_at` filtre ci-dessous. Jamais au pull initial.
+        if (node.code != 'SIEGE' and since_client_debt is not None
+                and not request.query_params.get('client_after_id')):
+            scope |= Q(is_active=False)
+        client_qs = Client.objects.filter(scope).select_related('node')
+        # Curseur composite (updated_at, id) : pagination stable même à égalité d'horodatage.
+        after_id = _parse_after_id(request.query_params.get('client_after_id'))
         if since_client_debt is not None:
-            client_qs = client_qs.filter(updated_at__gt=since_client_debt)
+            cond = Q(updated_at__gt=since_client_debt)
+            if after_id is not None:
+                cond |= Q(updated_at=since_client_debt, id__gt=after_id)
+            client_qs = client_qs.filter(cond)
+        client_qs = client_qs.order_by('updated_at', 'id')
+        client_rows = list(client_qs[:PULL_CLIENT_PAGE_SIZE + 1])
+        has_more = len(client_rows) > PULL_CLIENT_PAGE_SIZE
+        client_rows = client_rows[:PULL_CLIENT_PAGE_SIZE]
         payload['clients'] = [
             {
                 'id': str(c.id), 'code': c.code, 'current_debt': str(c.current_debt),
@@ -259,10 +429,25 @@ class PullView(APIView):
                 'first_name': c.first_name, 'last_name': c.last_name,
                 'phone': c.phone, 'address': c.address,
                 'updated_at': c.updated_at.isoformat(),
+                # BUG-994 : de quoi créer le client sur un poste neuf (additif, cloud ancien = absent).
+                'node': c.node.code, 'node_origin': c.node_origin,
+                'commission_rate': str(c.commission_rate),
+                'cotisation_sociale': str(c.cotisation_sociale) if c.cotisation_sociale is not None else None,
+                'client_type': c.client_type, 'notes': c.notes,
+                'total_breads_received': c.total_breads_received,
+                'is_active': c.is_active,  # BUG-999 (additif)
             }
-            for c in client_qs
+            for c in client_rows
         ]
-        payload['since_client_debt'] = now.isoformat()
+        if has_more:
+            # Page suivante : curseur = dernier client renvoyé (un poste ancien qui ignore
+            # `has_more` reprend simplement au cycle suivant, sans rien perdre d'important).
+            last = client_rows[-1]
+            payload['since_client_debt'] = last.updated_at.isoformat()
+            payload['client_after_id'] = str(last.id)
+        else:
+            payload['since_client_debt'] = now.isoformat()
+        payload['has_more'] = has_more
 
         # BUG-964 (SYNC.md §5.3) : les transferts dont ce poste est émettrice OU
         # réceptrice (+ lignes) redescendent, pour que la réceptrice voie et valide
@@ -306,6 +491,15 @@ class PullView(APIView):
         ]
         payload['transfers'] = transfers
         payload['transfer_lines'] = transfer_lines
+        # BUG-989/990 : marqueur « miroir déjà appliqué par CE poste » pour les transferts
+        # descendus ({} = cloud récent, aucun marqueur ; clé absente = cloud ancien).
+        _bump_peaks(node, list(transfers_qs))
+        by_id = {t.id: t for t in transfers_qs}
+        payload['mirrors'] = {
+            str(m.transfer_id): _clamped_mirror(m.applied, by_id[m.transfer_id])
+            for m in TransferMirror.objects.filter(node=node, transfer_id__in=list(by_id))
+            if m.applied
+        }
         # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
         # émettrice ou réceptrice (effets de stock miroir, alertes).
         payload['node_code'] = node.code
@@ -314,6 +508,9 @@ class PullView(APIView):
             state.transfer_ids = sorted(set(open_ids) - delivered_terminal)
             state.save(update_fields=['transfer_ids', 'updated_at'])
 
+        # BUG-1007 : pull abouti -> horodatage par transfert livré (critère « poste en retard »).
+        for tid in by_id:
+            TransferPull.objects.update_or_create(node=node, transfer_id=tid, defaults={'pulled_at': now})
         Node.objects.filter(pk=node.pk).update(last_sync=now)
         return Response(payload)
 

@@ -259,7 +259,10 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                         client_id=client_id, period__month=month, period__year=year,
                     ).exclude(pk=commission.pk).filter(
                         Q(created_at__lt=commission.created_at)
-                        | Q(created_at=commission.created_at, pk__lt=commission.pk)
+                        # BUG-1005 : à horodatage égal (horloge grossière, Windows), l'ordre des UUID
+                        # ne dit rien de l'ordre de création : une ligne qui retient déjà gagne.
+                        | (Q(created_at=commission.created_at)
+                           & (Q(pk__lt=commission.pk) | ~Q(deduction_debt=0) | ~Q(deduction_social=0)))
                     ).exists()
                     if earlier:
                         commission.deduction_debt = Decimal('0.00')

@@ -252,11 +252,11 @@ export const Nodes: React.FC = () => {
 
       {/* Main Content */}
       <div className="glass-card" style={{ padding: '16px 20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
           <h2 style={{ fontSize: '0.95rem', fontWeight: 800, color: 'hsl(var(--text-primary))' }}>
             Liste des Boulangeries (Réseau KIESE)
           </h2>
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <button onClick={fetchNodes} className="btn btn-secondary" style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem' }}>
               <FiRefreshCw className={isLoading ? 'animate-spin' : ''} />
               <span>Actualiser</span>

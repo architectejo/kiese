@@ -123,7 +123,7 @@ export const SavingsSection: React.FC<Props> = ({ today, nodeFilter, isHq, canWr
           <h3 style={{ margin: 0, fontWeight: 700, fontSize: '1rem', color: 'hsl(var(--text-primary))' }}>
             §5.1.5 — Épargne Journalière
           </h3>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button onClick={() => { const d = new Date(savingsYear, savingsMonth - 2); setSavingsMonth(d.getMonth() + 1); setSavingsYear(d.getFullYear()); setSavingsDayFilter(''); }} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid hsl(var(--border-color))', background: 'none', cursor: 'pointer', color: 'hsl(var(--text-primary))' }}>◀</button>
             <span style={{ fontWeight: 600, fontSize: '0.9rem', minWidth: 100, textAlign: 'center' }}>
               {new Date(savingsYear, savingsMonth - 1).toLocaleString('fr-FR', { month: 'long', year: 'numeric' })}

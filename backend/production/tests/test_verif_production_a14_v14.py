@@ -7,7 +7,6 @@ initial (100 par categorie chez K1) apres chaque scenario termine.
 """
 import json
 from datetime import timedelta
-from unittest import expectedFailure
 
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
@@ -214,7 +213,6 @@ class A14Delta(A14Base):
         self.assertEqual(self.notes('K2', 'Refus'), 1)
         self.assertEqual(self.total(self.b3), 100)
 
-    @expectedFailure  # BUG-991
     def test_reponse_emettrice_avec_quantite_ajustee_80_sur_100_somme_nulle(self):
         tid = self.request_from('K2', [self.L(self.b3, 100)], 'K1')
         self.cycles(2)
@@ -483,7 +481,6 @@ class A14Resilience(A14Base):
 
 # --------------------------------------------------------------------------- les deux points A CLARIFIER d39 + concurrence
 class A14Clarify(A14Base):
-    @expectedFailure  # BUG-989
     def test_clarifier_1_transfert_deja_confirme_au_cloud_inconnu_de_k2_somme_du_groupe(self):
         """Le siege confirme au cloud (100) pour K2 qui n'a jamais pull l'envoi : K2 cree la copie CONFIRMED sans credit
         (indiscernable d'un poste reinstalle). Somme du groupe : K1 -100, K2 +0 => 0 au lieu de 100."""
@@ -495,7 +492,6 @@ class A14Clarify(A14Base):
         self.assertEqual(self.view('K2', tid)[0], 'CONFIRMED')
         self.assertEqual(self.total(self.b3), 100)
 
-    @expectedFailure  # BUG-990
     def test_clarifier_2_reponse_positive_du_siege_a_une_demande_pending_somme_du_groupe(self):
         tid = self.request_from('K2', [self.L(self.b3, 100)], 'K1')
         self.cycles(2)
@@ -520,7 +516,6 @@ class A14Clarify(A14Base):
         self.assertEqual(self.total(self.b3), 100)
         self.assertFalse(self.gap('K2'))
 
-    @expectedFailure  # BUG-992
     def test_concurrence_k1_refuse_localement_pendant_que_le_siege_repond_au_cloud(self):
         tid = self.request_from('K2', [self.L(self.b3, 10)], 'K1')
         self.cycles(2)
@@ -561,6 +556,7 @@ class A14Migration0003(TransactionTestCase):
             self.assertEqual(NodeOpenTransfers.objects.count(), 0)       # aucune donnee inventee
             SyncBatchLog.objects.all().delete()
             NodeOpenTransfers.objects.create(node=node, transfer_ids=['a'])
+            MigrationExecutor(connection).migrate(latest)   # d43 : 0004 (sync_transfermirror) existe avant la cascade
             node.delete()                                                  # CASCADE
             self.assertEqual(NodeOpenTransfers.objects.count(), 0)
         finally:
