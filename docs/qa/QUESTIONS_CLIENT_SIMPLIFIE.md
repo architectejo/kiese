@@ -115,3 +115,48 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q4 (options A, B, C). Remp
 ### Q-027 (BUG-411, BUG-253) — Quels écrans le livreur doit-il avoir ?
 
 Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Conditionne les gardes de routes de BUG-411 et le droit du livreur sur `cleanup_expired` (BUG-253).
+
+### Q-044 (intrants, fichier STATISQUES NOVEMBRE 2026) — La ligne « D1 » est-elle bien le stock de la direction ?
+
+**Situation.** Dans votre tableau, chaque jour a une ligne par boulangerie (K1 à K6, B1) puis une ligne « D1 ». Nous la traitons comme le **stock de la direction** : ses sorties sont les envois faits aux boulangeries.
+
+*Question : D1 est-elle bien le stock de la direction (envois aux boulangeries en sortie) ? Aujourd'hui : oui.*
+
+### Q-045 (intrants) — Que signifie l'indice de consommation, y a-t-il un seuil d'alerte ?
+
+**Situation.** Pour la levure, l'huile et le sel, le tableau divise la consommation du jour par les **sacs de farine utilisés le même jour**. Nous faisons pareil (vide si aucun sac).
+
+*Question : cette définition est-elle la bonne ? Faut-il alerter quand une boulangerie dépasse la moyenne du groupe, et à partir de quel écart ?*
+
+### Q-046 (intrants) — Que veut dire la colonne « ok » du sel ?
+
+**Situation.** Dans la feuille du sel, une marque « ok » apparaît dans une colonne sans titre, selon l'écart. Aujourd'hui l'application ne la reprend pas.
+
+*Question : « ok » veut-il dire écart toléré ? Quel écart est toléré (en quelle unité) ?*
+
+### Q-047 (intrants) — Le sel : en grammes, en sacs ou en boîtes ?
+
+**Situation.** L'application compte le sel en **grammes**. Votre fichier compte des **sacs**, avec une conversion « Bte/U » (204, 205…) et deux restes (en sacs et en boîtes).
+
+- **A.** (**Aujourd'hui**) Grammes partout.
+- **B.** Sacs, avec conversion en boîtes/unités (préciser le nombre de boîtes par sac).
+
+*Question : quelle unité de saisie et d'affichage voulez-vous pour le sel ?*
+
+### Q-048 (intrants) — Huile : la formule du total avant production
+
+**Situation.** Pour l'huile, votre fichier calcule « stock initial + entrée **×** sortie », alors que farine et levure font « initial + entrée **−** sortie ». Nous pensons à une erreur du tableur.
+
+*Question : faut-il bien faire « initial + entrée − sortie » pour l'huile ? Aujourd'hui : oui.*
+
+### Q-049 (intrants) — Farine du mois : colonnes « vente », solde de départ et « accroissement »
+
+**Situation.** La feuille ENTREE FARINE a une colonne **vente**, un solde de départ écrit à la main (« 273,18 − total + 1 ») et une ligne **accroissement**.
+
+*Question : que représentent exactement la vente (farine revendue ?), ce solde de départ et l'accroissement ?*
+
+### Q-050 (intrants) — Écart : signe et cas « reste non déclaré » ; qui voit ces statistiques ?
+
+**Situation.** L'écart est calculé « reste déclaré − solde comptable ». Quand le reste n'est pas déclaré, votre tableau affiche l'opposé du solde (ex. −26,8) ; l'application laisse l'écart **vide**. Les statistiques sont visibles aujourd'hui par la direction, le comptable et l'administrateur (toutes les boulangeries) et par le gérant (la sienne seulement).
+
+*Questions : (1) le signe et l'écart vide sont-ils corrects ? (2) le gérant doit-il voir les statistiques de sa boulangerie ? (3) la direction seule voit-elle D1 ?*
