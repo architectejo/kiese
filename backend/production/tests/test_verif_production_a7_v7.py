@@ -4,7 +4,6 @@ Les tests `@expectedFailure` referencent leur ticket.
 """
 from datetime import date as ddate, timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from production.models import (BreadDisposal, BreadTransfer, ConsumableCount, ConsumableMovement,
                                ConsumableStock, ConsumableType, ProductionSession)
@@ -163,13 +162,11 @@ class V683(TBase):
         self.assertIn(cl(self.g2).patch(f'{C}{cid}/', {'physical_quantity': '1'}, format='json').status_code,
                       (403, 404))
 
-    @expectedFailure
     def test_BUG_688_negative_physical_quantity_refused_on_patch(self):
         cid = self._count('4.5')
         r = cl(self.g1).patch(f'{C}{cid}/', {'physical_quantity': '-1'}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_688_negative_physical_quantity_refused_on_create(self):
         ConsumableStock.objects.get_or_create(node=self.k1, consumable_type='FLOUR')
         r = cl(self.g1).post(C, {'consumable_type': 'FLOUR', 'count_date': str(ddate.today()),
@@ -201,7 +198,6 @@ class V686NonAsciiDigits(TBase):
     def _stock(self, node=None):
         return ConsumableStock.objects.get_or_create(node=node or self.k1, consumable_type='FLOUR')[0]
 
-    @expectedFailure
     def test_BUG_686_movement_quantity_and_price(self):
         s = self._stock()
         for k in ('quantity', 'unit_price'):
@@ -210,7 +206,6 @@ class V686NonAsciiDigits(TBase):
             r = cl(self.g1).post(M, body, format='json')
             self.assertEqual(r.status_code, 400, (k, r.content))
 
-    @expectedFailure
     def test_BUG_686_movement_patch_quantity(self):
         s = self._stock()
         mid = cl(self.g1).post(M, {'stock': s.pk, 'movement_type': 'ENTRY', 'quantity': '3', 'unit_price': '100'},
@@ -218,21 +213,18 @@ class V686NonAsciiDigits(TBase):
         r = cl(self.g1).patch(f'{M}{mid}/', {'quantity': ARAB}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_686_count_physical_quantity(self):
         self._stock()
         r = cl(self.g1).post(C, {'consumable_type': 'FLOUR', 'count_date': str(ddate.today()),
                                  'physical_quantity': ARAB}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_686_inventory_physical_quantity(self):
         self._stock()
         r = cl(self.g1).post('/api/production/inventories/',
                              {'lines': [{'consumable_type': 'FLOUR', 'physical_quantity': ARAB}]}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_686_dispatch_quantity(self):
         from production.consumables_direction import siege_node
         sg = self._stock(siege_node())
@@ -242,7 +234,6 @@ class V686NonAsciiDigits(TBase):
             'consumable_type': 'FLOUR', 'allocations': [{'node': self.k1.pk, 'quantity': ARAB}]}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_686_disposal_unit_price_sold(self):
         ses = ProductionSession.objects.create(node=self.k1, date=ddate.today() - timedelta(days=1), team='B',
                                                flour_sacks_used=Dc('1'))
@@ -258,14 +249,12 @@ class V686NonAsciiDigits(TBase):
 class V687FutureDates(TBase):
     """BUG-687 : dates futures acceptees sur d'autres endpoints (BUG-653/681 ne couvrent que les fournees)."""
 
-    @expectedFailure
     def test_BUG_687_count_date_future_refused_on_create(self):
         ConsumableStock.objects.get_or_create(node=self.k1, consumable_type='FLOUR')
         r = cl(self.g1).post(C, {'consumable_type': 'FLOUR', 'count_date': FUT(), 'physical_quantity': '2'},
                              format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_687_count_date_future_refused_on_patch(self):
         ConsumableStock.objects.get_or_create(node=self.k1, consumable_type='FLOUR')
         cid = cl(self.g1).post(C, {'consumable_type': 'FLOUR', 'count_date': str(ddate.today()),
@@ -273,7 +262,6 @@ class V687FutureDates(TBase):
         r = cl(self.g1).patch(f'{C}{cid}/', {'count_date': FUT()}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure
     def test_BUG_687_opening_confirmation_future_date_refused(self):
         r = cl(self.g1).post('/api/production/opening-confirmation/', {
             'date': FUT(), 'team': 'A', 'lines': [{'bread_price': self.b3.pk, 'qty': 5}]}, format='json')

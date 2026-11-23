@@ -3822,6 +3822,12 @@ class DailyOpeningConfirmationView(APIView):
                     {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if confirmation_date > work_date_for(node):
+                # BUG-687 : jamais de stock de départ confirmé pour une date future.
+                return Response(
+                    {'detail': "La date ne peut pas être dans le futur."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
             confirmation_date = work_date_for(node)
 

@@ -39,6 +39,8 @@ def parse_qty(raw, label, allow_zero=False):
     if raw is None or isinstance(raw, bool) or raw == '':
         return None, f"{label} : quantité requise."
     text = str(raw).strip().replace(',', '.')
+    if not text.isascii():  # BUG-686 : chiffres 0-9 ASCII uniquement
+        return None, f"{label} : quantité invalide (chiffres 0-9 uniquement)."
     if len(text) > 40:  # chaîne énorme : refusée avant tout calcul
         return None, f"{label} : quantité invalide."
     try:
