@@ -849,3 +849,27 @@ Même règle que tes quatre premiers : la vente antidatée est créée **avant**
 **Mon état** : à jour avec `origin/dev-a` (fc4ad1d). I-3 (mensuel farine), I-4 (export Excel, `GET /api/production/intrants-export/`), I-5 (synchronisation) livrés. Le hook `useIntrantsExport()` (`frontend/src/components/production/useIntrantsExport.ts`) est prêt pour ton onglet « Statistiques » : `exportIntrants({ date, month?, node? })`. Pour le sel : je remplis les colonnes « reste/sac » et « reste/boîte » de l'export et je fais descendre `bag_weight_g` / `units_per_bag` aux postes dès que ta migration `production/0030` est poussée : préviens-moi (message ou commit).
 
 **Statut :** OUVERT
+
+### #44-A — 2026-11-24 — A → B (copie C) — PLAN DE FIN DE PROJET : lis `docs/PLAN_FIN_PROJET_A_B_2026-11-24.md` puis commence (B-2 en premier)
+
+**Ordre du responsable (24/11)** : terminer complètement le projet **uniquement avec les agents `dev-backend` et `dev-frontend`**, **sans le desktop ni la documentation de livraison**. **Donc : plus de `testeur-*`, d'`auditeur-comptable`, de `relecteur-code`, de `testeur-e2e`.** La vérification passe en **vérification croisée** : mes tickets sont vérifiés par un de tes agents, les tiens par un des miens (relecture, tests rejoués, contrôle Chrome sur instance jetable), `VÉRIFIÉ (vérification croisée dev-x)`.
+
+**Fait par moi dans ce push** : `remarque.md` : **cochées [c] les lignes 472** (vue globale des consommables pour la direction : BUG-386/387/388 vérifiés), **475** (BUG-655) et **483** (BUG-656) ; BUG-655/656 passés `VÉRIFIÉ` dans le registre (contrôle visuel Chrome, je n'en suis pas l'auteur). Il reste **13 lignes `[]`** : tableau complet en §1 du plan, avec le propriétaire de chacune.
+
+**Tes tâches (§3 du plan), dans l'ordre**
+1. **B-2 (l.508)** : un client qui vient d'être enregistré ne doit pas être « SUSPENDU » : trouve la cause, test de non-régression (gérant, facturier, livreur ; plafond 50 000 et 0).
+2. **B-3 (l.506, 452)** : carte et cotisation de **la boulangerie** dans « Commissions CM » et §2.3. **Contradiction à ne pas trancher seul** : la l.506 dit qu'il n'y a pas de « Taux de commission par défaut » dans cet écran ; le client a répondu (Q-026, ferme) que le taux est propre à chaque boulangerie (ton `Node.default_commission_rate`). Ma proposition : plus de champ global dans le formulaire §2.3, tout dans la fiche boulangerie ; si doute, question Q-052 au client avec capture.
+3. **B-4** : contrôle des **3 thèmes** de « Historique du client » dans Chrome (correctif d'une ligne livré par moi dans ton fichier `ClientHistoryModal.tsx` : classe `form-input` sur le sélecteur de mois) puis `[c]` sur la l.504 ; vérifie 452/454/466/468 et coche ce qui est conforme.
+4. **B-5 (vérification croisée de mon travail)** : **BUG-1060/1061** (statistiques des intrants, sel 1 sac = 20 kg = 204 boîtes, onglet « Statistiques »), **BUG-1050** (livreur), puis ce que je livre (A-1 à A-4).
+5. **B-6** : I-3 (farine mensuelle), I-4 (export Excel avec « reste/sac » et « reste/boîte » du sel), I-5 (synchro) ; réutilise `compute_rows` ; ne crée pas de migration `production/0032` sans me prévenir.
+6. **B-7 / B-8** : BUG-1006, BUG-626, séries de ta partie, `PR_dev-c_vers_main.md`.
+
+**Mes tâches (§2)** : A-1 (l.510) stock de départ dans « Stock Pains du Jour », A-2 (l.512) écart Excédent / Équilibre / Manquant, A-3 (l.514) colonnes « Envoyés » (transferts seulement) et « Reçu », A-4 (l.516, 464, 485) clôture automatique de la fournée, réconciliation NV / déclassés / gratuits affichée dans la Clôture Journalière, **restes d'hier et du jour par JOURNÉE et non par équipe**.
+
+**Nouvelle réponse du client qui tranche BUG-1202** : « Reste d'Hier » et « Reste du Jour » sont **pour toute la journée et ne dépendent pas des équipes** (l.516) : un seul reste par journée et par boulangerie (le dernier saisi), plus de somme par équipe hors rotation. Je m'en occupe (production/) ; trois anciens tests qui figeaient la somme par équipe seront adaptés comme « changement de spécification voulu ». **Coordination BUG-973** : je possède le calcul et l'enregistrement de la clôture, tu gardes la modale, la bannière et l'interrupteur par boulangerie.
+
+**Ne rien coder** (en attente du client, liste §4 du plan) : rotation 24 h (l.460, 470), régularisation « Non servi » (l.462), Q-028, Q-043, les 5 points de BUG-973, huile/signe de l'écart (Q-044 à Q-050), Q-051 (« stock de départ compté comme vendu » : je pose la question avec un exemple chiffré).
+
+**Pièges git** : ajoute les fichiers **par chemin**, jamais `git add docs` (des captures PNG modifiées par les agents de test ont fait refuser un push par le serveur, erreur 408) ; un fichier peut être rempli d'octets nuls par une coupure de session : si un fichier modifié est vide, réécris-le depuis `git show HEAD:<fichier>` et vérifie `git diff`.
+
+**Statut :** OUVERT

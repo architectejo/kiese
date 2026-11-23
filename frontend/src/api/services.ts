@@ -1603,6 +1603,40 @@ export const salesApi = {
     }>('/api/sales/invoices/bread_summary/', { params }),
 };
 
+// BUG-1061 : statistiques journalières des intrants (GET /api/production/intrants-stats/).
+export type IntrantStatType = 'FLOUR' | 'YEAST' | 'OIL' | 'SALT';
+
+export interface IntrantStatRow {
+  node: string | number | null;
+  code: string;
+  name: string;
+  is_direction?: boolean;
+  initial: string;
+  entry: string;
+  exit: string;
+  total_before_production: string;
+  consumption: string;
+  balance: string;
+  production_reference: string;
+  consumption_index: string | null;
+  declared_remaining: string | null;
+  gap: string | null;
+  /** Variantes optionnelles (sel) : `<champ>_bags` (sacs) et `<champ>_units` (boîtes), absentes ou null tolérées. */
+  [extra: `${string}_bags` | `${string}_units`]: string | null | undefined;
+}
+
+export interface IntrantStats {
+  date: string;
+  type: IntrantStatType;
+  label: string;
+  unit: string;
+  hypotheses: string[];
+  /** Facteurs de conversion du sel (optionnel), ex. { bag_kg: 20, units_per_bag: 204 }. */
+  conversion?: Record<string, number | string | null> | null;
+  rows: IntrantStatRow[];
+  totals: IntrantStatRow;
+}
+
 // ── Production API ───────────────────────────────────────────────────────────
 
 export interface FlourMonthRow {
@@ -1728,6 +1762,8 @@ export const productionApi = {
     create: (data: Partial<ConsumableCount> & { node?: string }) =>
       apiClient.post<ConsumableCount>('/api/production/counts/', data),
   },
+  intrantsStats: (params: { type: IntrantStatType; date?: string; node?: string }) =>
+    apiClient.get<IntrantStats>('/api/production/intrants-stats/', { params }),
   // BUG-387 : vue globale consommables (direction) + inventaire physique (gérant).
   consumablesGlobal: {
     get: () => apiClient.get<GlobalConsumables>('/api/production/consumables/global/'),

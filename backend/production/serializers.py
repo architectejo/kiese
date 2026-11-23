@@ -319,8 +319,26 @@ class BreadStockSerializer(serializers.ModelSerializer):
 class ConsumableTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model  = ConsumableType
-        fields = ['id', 'code', 'label', 'unit', 'is_active', 'updated_at']
+        fields = ['id', 'code', 'label', 'unit', 'is_active', 'bag_weight_g', 'units_per_bag', 'updated_at']
         read_only_fields = ['id', 'updated_at']
+
+    def validate_bag_weight_g(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("Le poids d'un sac doit être strictement positif.")
+        return value
+
+    def validate_units_per_bag(self, value):
+        if value is not None and value < 1:
+            raise serializers.ValidationError("Le nombre de boîtes par sac doit être au moins 1.")
+        return value
+
+    def validate(self, attrs):
+        inst = self.instance
+        w = attrs.get('bag_weight_g', getattr(inst, 'bag_weight_g', None))
+        u = attrs.get('units_per_bag', getattr(inst, 'units_per_bag', None))
+        if (w is None) != (u is None):
+            raise serializers.ValidationError({'detail': "Renseignez à la fois le poids d'un sac et le nombre de boîtes par sac, ou aucun des deux."})
+        return attrs
 
 
 def _consumable_type_label(code):
