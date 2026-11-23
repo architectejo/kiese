@@ -1,8 +1,11 @@
 """Vérification indépendante (testeur-clients-commissions, 2026-11-15) de
 BUG-289, 291, 292, 293, 295 et de la migration clients/0010. Valeurs à la main."""
+import os
+import tempfile
+import unittest
 from decimal import Decimal as D
 
-from django.db import connection
+from django.db import connection, connections
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
@@ -174,39 +177,76 @@ class CaisseSociale(Base):
         self.assertIn(api(g2).post(f'{DIST}{d.pk}/refresh_indices/').status_code, (403, 404))
 
 
-class Migration0010(TransactionTestCase):
+class Migration0010(unittest.TestCase):
+    """Base SQLite jetable (routeur temporaire, comme Migration0011 dans test_clients_v10) : les
+    RunPython des migrations interrogent `Model.objects` sans `using`."""
+    ALIAS = 'clients_0010'
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix='.sqlite3')
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(self.db_path) and os.remove(self.db_path))
+        connections.databases[self.ALIAS] = {
+            'ENGINE': 'django.db.backends.sqlite3', 'NAME': self.db_path, 'ATOMIC_REQUESTS': False,
+            'TIME_ZONE': None, 'CONN_HEALTH_CHECKS': False, 'CONN_MAX_AGE': 0, 'AUTOCOMMIT': True, 'OPTIONS': {},
+        }
+        self.addCleanup(connections[self.ALIAS].close)
+        self.addCleanup(lambda: connections.databases.pop(self.ALIAS, None))
+        alias = self.ALIAS
+
+        class _Router:
+            def db_for_read(self, model, **hints):
+                return alias
+
+            db_for_write = db_for_read
+
+            def allow_migrate(self, db, app_label, **hints):
+                return db == alias
+
+        from django.db import router as _db_router
+        self._old_routers = list(_db_router.routers)
+        _db_router.routers = [_Router()]
+        self.addCleanup(lambda: setattr(_db_router, 'routers', self._old_routers))
+
+    def _migrate(self, targets):
+        ex = MigrationExecutor(connections[self.ALIAS])
+        ex.migrate(targets)
+        ex.loader.build_graph()
+        return ex
+
     def test_aller_retour_et_commissions_intactes(self):
-        ex = MigrationExecutor(connection)
+        U = self.ALIAS
         T9 = [('clients', '0009_social_syncable_step2'), ('commissions', '0005_bug292_remise_label')]
-        ex.migrate(T9)
+        ex = self._migrate(T9)
+        core_leaf = next(n for n in ex.loader.graph.leaf_nodes() if n[0] == 'core')
+        ex = self._migrate([core_leaf] + T9)
         old = ex.loader.project_state(T9).apps
         Node = old.get_model('core', 'Node')
         OClient = old.get_model('clients', 'Client')
-        n = Node.objects.create(code='MG1', name='Mig')
-        mk = lambda code, v: OClient.objects.create(
+        n = Node.objects.using(U).create(code='MG1', name='Mig')
+        mk = lambda code, v: OClient.objects.using(U).create(
             node=n, node_origin='MG1', first_name=code, last_name='X', code=code, cotisation_sociale=D(v))
         a, b, z = mk('MGA', '3000.00'), mk('MGB', '1500.00'), mk('MGZ', '0.00')
         OCom = old.get_model('commissions', 'ClientCommission')
         OPer = old.get_model('commissions', 'CommissionPeriod')
-        per = OPer.objects.create(node=n, month=1, year=2026)
-        com = OCom.objects.create(period=per, client=a, deduction_social=D('3000.00'),
-                                  net_payable=D('777.00'), annual_bonus=D('611.00'),
-                                  deduction_carte=D('37.00'))
-        ex = MigrationExecutor(connection)
+        per = OPer.objects.using(U).create(node=n, month=1, year=2026)
+        com = OCom.objects.using(U).create(period=per, client=a, deduction_social=D('3000.00'),
+                                           net_payable=D('777.00'), annual_bonus=D('611.00'),
+                                           deduction_carte=D('37.00'))
         T10 = [('clients', '0010_bug289'), ('commissions', '0005_bug292_remise_label')]
-        ex.migrate(T10)
+        ex = self._migrate(T10)
         new = ex.loader.project_state(T10).apps
         NC = new.get_model('clients', 'Client')
-        self.assertIsNone(NC.objects.get(code='MGA').cotisation_sociale)
-        self.assertEqual(NC.objects.get(code='MGB').cotisation_sociale, D('1500.00'))
-        self.assertEqual(NC.objects.get(code='MGZ').cotisation_sociale, D('0.00'))
-        c = new.get_model('commissions', 'ClientCommission').objects.get(pk=com.pk)
+        self.assertIsNone(NC.objects.using(U).get(code='MGA').cotisation_sociale)
+        self.assertEqual(NC.objects.using(U).get(code='MGB').cotisation_sociale, D('1500.00'))
+        self.assertEqual(NC.objects.using(U).get(code='MGZ').cotisation_sociale, D('0.00'))
+        c = new.get_model('commissions', 'ClientCommission').objects.using(U).get(pk=com.pk)
         self.assertEqual((c.deduction_social, c.net_payable, c.annual_bonus, c.deduction_carte),
                          (D('3000.00'), D('777.00'), D('611.00'), D('37.00')))
-        ex = MigrationExecutor(connection)
-        ex.migrate(T9)
+        ex = self._migrate(T9)
         back = ex.loader.project_state(T9).apps
-        self.assertEqual(back.get_model('clients', 'Client').objects.get(code='MGA').cotisation_sociale, D('3000.00'))
-        self.assertEqual(back.get_model('commissions', 'ClientCommission').objects.get(pk=com.pk).net_payable, D('777.00'))
-        ex = MigrationExecutor(connection)
-        ex.migrate(ex.loader.graph.leaf_nodes())
+        self.assertEqual(back.get_model('clients', 'Client').objects.using(U).get(code='MGA').cotisation_sociale,
+                         D('3000.00'))
+        self.assertEqual(back.get_model('commissions', 'ClientCommission').objects.using(U).get(pk=com.pk).net_payable,
+                         D('777.00'))
+        self._migrate(ex.loader.graph.leaf_nodes())

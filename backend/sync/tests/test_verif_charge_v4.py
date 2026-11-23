@@ -206,14 +206,16 @@ class PullApplyVerif(TestCase):
             r = api.get('/api/sync/pull/', {'since_client_debt': bad})
             self.assertLess(r.status_code, 500, bad[:30])
 
-    def test_pull_ne_fuit_pas_les_clients_d_une_autre_boulangerie(self):
+    def test_pull_descend_les_clients_actifs_d_une_autre_boulangerie_BUG_998(self):
+        # INVERSION (BUG-998, d47) : figeait « ne fuit pas les clients d'une autre boulangerie ». Raison :
+        # CLAUDE.md 5.1 / remarque.md - le facturier recherche et facture les clients des autres boulangeries.
         k2 = make_node(code='K2')
         other = make_client(k2)
         mine = make_client(self.k1)
         api, _ = _api(self.k1)
         ids = {c['id'] for c in api.get('/api/sync/pull/').json()['clients']}
         self.assertIn(str(mine.pk), ids)
-        self.assertNotIn(str(other.pk), ids)
+        self.assertIn(str(other.pk), ids)
 
     def test_cloud_recalcul_de_dette_fait_avancer_updated_at(self):
         """Apres push d'un mouvement, le Cloud change `current_debt` : le curseur incremental doit le voir."""

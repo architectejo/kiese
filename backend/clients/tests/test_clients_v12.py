@@ -8,7 +8,6 @@ import time
 import uuid
 from datetime import timedelta
 from decimal import Decimal as D
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -189,9 +188,10 @@ class PerimetrePull(Base):
     def pulled_ids(self):
         return {x['id'] for x in node_api(self.k1).get('/api/sync/pull/').json()['clients']}
 
-    def test_etat_actuel_pull_sans_client_des_autres_noeuds(self):
+    def test_pull_avec_clients_actifs_des_autres_noeuds_apres_BUG_998(self):
+        # INVERSION (BUG-998) : figeait l'etat « sans client des autres noeuds ».
         other = self.mk(self.k3, 'Autre', 'Noeud')
-        self.assertNotIn(str(other.id), self.pulled_ids())
+        self.assertIn(str(other.id), self.pulled_ids())
 
     def test_client_d_un_autre_noeud_deja_facture_par_ce_poste_descend(self):
         other = self.mk(self.k3, 'Autre', 'Noeud')
@@ -199,10 +199,96 @@ class PerimetrePull(Base):
                                payment_amount=D('0.00'), node_origin='K1', team='A')
         self.assertIn(str(other.id), self.pulled_ids())
 
-    @expectedFailure  # BUG-998
     def test_BUG_998_facturier_hors_ligne_peut_facturer_un_client_d_une_autre_boulangerie_jamais_facture(self):
         # CLAUDE.md 5.1 / remarque.md : un facturier peut rechercher et facturer les clients des autres
         # boulangeries. Hors ligne, le poste K1 n'a que ses clients et ceux deja factures : un client K3
         # jamais facture par K1 n'est pas dans le pull, donc absent de la recherche locale.
         other = self.mk(self.k3, 'Autre', 'Noeud')
         self.assertIn(str(other.id), self.pulled_ids())
+
+
+class Pull998(Base):
+    """BUG-998 (dev-backend d47) : perimetre elargi, pagination `has_more`, conflit de code."""
+
+    def get(self, node, **params):
+        return node_api(node).get('/api/sync/pull/', params).json()
+
+    def test_clients_inactifs_des_autres_noeuds_ne_descendent_pas_mais_les_siens_oui(self):
+        other = self.mk(self.k3, 'Inactif', 'Autre')
+        Client.objects.filter(pk=other.pk).update(is_active=False)
+        mine = self.mk(self.k1, 'Inactif', 'Mien')
+        Client.objects.filter(pk=mine.pk).update(is_active=False)
+        ids = {x['id'] for x in self.get(self.k1)['clients']}
+        self.assertNotIn(str(other.id), ids)
+        self.assertIn(str(mine.id), ids)
+
+    def test_noeud_siege_ne_recoit_pas_le_catalogue_complet(self):
+        from core.models import Node
+        siege = Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege'})[0]
+        other = self.mk(self.k3, 'Autre', 'Noeud')
+        ids = {x['id'] for x in self.get(siege)['clients']}
+        self.assertNotIn(str(other.id), ids)
+
+    def test_pas_d_autre_information_que_les_colonnes_client(self):
+        self.mk(self.k3, 'Autre', 'Noeud')
+        payload = self.get(self.k1)
+        self.assertEqual(payload['transfers'], [])
+        self.assertEqual(payload['closures'], [])
+        for row in payload['clients']:
+            self.assertNotIn('invoices', row)
+
+    def test_pagination_has_more_et_curseur_sans_perte_ni_doublon(self):
+        import sync.views as v
+        old = v.PULL_CLIENT_PAGE_SIZE
+        v.PULL_CLIENT_PAGE_SIZE = 3
+        self.addCleanup(lambda: setattr(v, 'PULL_CLIENT_PAGE_SIZE', old))
+        total = set()
+        for i in range(8):
+            total.add(str(self.mk(self.k3 if i % 2 else self.k1, f'P{i}', 'Page').id))
+        Client.objects.update(updated_at=timezone.now() - timedelta(minutes=5))  # ex-aequo volontaires
+        seen, params, pages = [], {}, 0
+        while True:
+            data = self.get(self.k1, **params)
+            pages += 1
+            seen += [x['id'] for x in data['clients']]
+            if not data['has_more']:
+                break
+            self.assertLessEqual(len(data['clients']), 3)
+            params = {'since_client_debt': data['since_client_debt'], 'client_after_id': data['client_after_id']}
+            self.assertLess(pages, 20)
+        self.assertTrue(total <= set(seen))
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertNotIn('client_after_id', data)
+        # curseur final : plus rien
+        again = self.get(self.k1, since_client_debt=data['since_client_debt'])
+        self.assertEqual(again['clients'], [])
+        self.assertFalse(again['has_more'])
+
+    def test_client_after_id_invalide_400(self):
+        r = node_api(self.k1).get('/api/sync/pull/', {'client_after_id': 'x'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_code_deja_pris_localement_un_seul_conflit_une_seule_notification(self):
+        from sync.models import SyncConflictLog
+        local = self.mk(self.k1, 'Local', 'Doublon')
+        row = cloud_rows('K3', 1)[0]
+        row['code'] = local.code
+        n0 = SystemNotification.objects.count()
+        for _ in range(3):
+            apply_pull_response({'clients': [row], 'node_code': 'K1'})
+        self.assertEqual(Client.objects.filter(code=local.code).count(), 1)
+        self.assertFalse(Client.objects.filter(pk=row['id']).exists())
+        logs = SyncConflictLog.objects.filter(conflict_type='CODE_CLIENT_EN_CONFLIT', object_id=row['id'])
+        self.assertEqual(logs.count(), 1)
+        self.assertEqual(SystemNotification.objects.count() - n0, 1)
+
+    def test_edition_locale_non_poussee_jamais_ecrasee_par_le_pull_en_bloc(self):
+        c = self.mk(self.k1, 'Edit', 'Locale')
+        Client.objects.filter(pk=c.pk).update(is_synced=False, identity_updated_at=timezone.now(),
+                                              credit_limit=D('99000.00'), first_name='Local')
+        row = cloud_rows('K1', 1)[0]
+        row.update(id=str(c.id), code=c.code, current_debt='4200.00', credit_limit='10000.00', first_name='Cloud')
+        apply_pull_response({'clients': [row]})
+        c.refresh_from_db()
+        self.assertEqual((c.first_name, c.credit_limit, c.current_debt), ('Local', D('99000.00'), D('4200.00')))
+        self.assertFalse(c.is_synced)

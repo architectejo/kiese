@@ -285,6 +285,19 @@ def _parse_cursor(request, param_name):
     return parsed
 
 
+# BUG-998 : taille maximale de la liste de clients par réponse de pull (`has_more` au-delà).
+PULL_CLIENT_PAGE_SIZE = 5000
+
+
+def _parse_after_id(raw):
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw)[:64])
+    except (TypeError, ValueError):
+        raise ParseError("Paramètre « client_after_id » invalide : UUID attendu.")
+
+
 class PullView(APIView):
     """GET /api/sync/pull/ — descente Cloud → Local (SYNC.md §4)."""
     authentication_classes = [NodeTokenAuthentication]
@@ -328,11 +341,26 @@ class PullView(APIView):
         # Clients pertinents pour ce nœud : les siens, ou tout client déjà
         # facturé par ce nœud ailleurs (SYNC.md §1.3) — leur `current_debt`
         # recalculé est ce qui doit redescendre, jamais une valeur figée.
-        client_qs = Client.objects.filter(
-            Q(node=node) | Q(invoices__node=node)
-        ).distinct().select_related('node')
+        # BUG-998 (CLAUDE.md 5.1) : un poste de boulangerie reçoit les clients ACTIFS de TOUTES
+        # les boulangeries (un facturier recherche et facture hors ligne les clients des autres) ;
+        # le nœud SIEGE garde le périmètre restreint (jamais le catalogue complet). Seules les
+        # colonnes d'identité/plafond/dette du client descendent : ni factures ni mouvements.
+        from sales.models import Invoice
+        scope = Q(node=node) | Q(pk__in=Invoice.objects.filter(node=node).values('client_id'))
+        if node.code != 'SIEGE':
+            scope |= Q(is_active=True)
+        client_qs = Client.objects.filter(scope).select_related('node')
+        # Curseur composite (updated_at, id) : pagination stable même à égalité d'horodatage.
+        after_id = _parse_after_id(request.query_params.get('client_after_id'))
         if since_client_debt is not None:
-            client_qs = client_qs.filter(updated_at__gt=since_client_debt)
+            cond = Q(updated_at__gt=since_client_debt)
+            if after_id is not None:
+                cond |= Q(updated_at=since_client_debt, id__gt=after_id)
+            client_qs = client_qs.filter(cond)
+        client_qs = client_qs.order_by('updated_at', 'id')
+        client_rows = list(client_qs[:PULL_CLIENT_PAGE_SIZE + 1])
+        has_more = len(client_rows) > PULL_CLIENT_PAGE_SIZE
+        client_rows = client_rows[:PULL_CLIENT_PAGE_SIZE]
         payload['clients'] = [
             {
                 'id': str(c.id), 'code': c.code, 'current_debt': str(c.current_debt),
@@ -347,9 +375,17 @@ class PullView(APIView):
                 'client_type': c.client_type, 'notes': c.notes,
                 'total_breads_received': c.total_breads_received,
             }
-            for c in client_qs
+            for c in client_rows
         ]
-        payload['since_client_debt'] = now.isoformat()
+        if has_more:
+            # Page suivante : curseur = dernier client renvoyé (un poste ancien qui ignore
+            # `has_more` reprend simplement au cycle suivant, sans rien perdre d'important).
+            last = client_rows[-1]
+            payload['since_client_debt'] = last.updated_at.isoformat()
+            payload['client_after_id'] = str(last.id)
+        else:
+            payload['since_client_debt'] = now.isoformat()
+        payload['has_more'] = has_more
 
         # BUG-964 (SYNC.md §5.3) : les transferts dont ce poste est émettrice OU
         # réceptrice (+ lignes) redescendent, pour que la réceptrice voie et valide

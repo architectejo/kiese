@@ -348,11 +348,21 @@ class PullPosteNeuf(Base):
             n1.get('/api/sync/pull/')
         self.assertEqual(len(big), len(small))
 
-    def test_pull_ne_descend_pas_les_clients_des_autres_noeuds_sans_facture(self):
+    def test_pull_descend_les_clients_actifs_des_autres_noeuds_meme_sans_facture(self):
+        # INVERSION (BUG-998, 2026-11-23) : ce test figeait l'inverse (« ne descend pas »). Raison :
+        # CLAUDE.md 5.1 / remarque.md - un facturier recherche et facture les clients des autres
+        # boulangeries, y compris hors ligne ; le pull doit donc les descendre.
         self.seed()
         other = self.mk(self.k3, 'Autre', 'Noeud')
-        rows = node_api(self.k1).get('/api/sync/pull/').json()['clients']
-        self.assertNotIn(str(other.id), {x['id'] for x in rows})
+        # N + 1 clients > 5 000 par page : suivre `has_more` jusqu'a epuisement.
+        ids, params = set(), {}
+        for _ in range(5):
+            data = node_api(self.k1).get('/api/sync/pull/', params).json()
+            ids |= {x['id'] for x in data['clients']}
+            if not data['has_more']:
+                break
+            params = {'since_client_debt': data['since_client_debt'], 'client_after_id': data['client_after_id']}
+        self.assertIn(str(other.id), ids)
 
     def test_BUG_994_poste_neuf_recoit_ses_clients_identite_et_plafond(self):
         # poste neuf = base locale sans aucun client : apres le pull, il doit les avoir (SYNC.md §1 :

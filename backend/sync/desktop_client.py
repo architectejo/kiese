@@ -47,6 +47,7 @@ import json
 import logging
 import random
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -173,7 +174,7 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
     _pull_only(logger, cloud_url, headers, data_dir, node_code)
 
 
-_PULL_CURSOR_KEYS = ('since_config', 'since_client_debt')
+_PULL_CURSOR_KEYS = ('since_config', 'since_client_debt', 'client_after_id')  # BUG-998 : after_id = pagination
 # Curseur de pull en mémoire (repli quand aucun répertoire de données n'est
 # fourni) ; indexé par URL du Cloud.
 _PULL_CURSORS: dict = {}
@@ -223,7 +224,19 @@ def load_pull_cursor(data_dir, cloud_url: str, node_code=None) -> dict:
                                 if isinstance(data.get(k), str) and data[k]}}
     if not entry or entry['node_code'] != node_code:
         return {}
-    return {k: v for k, v in entry['cursor'].items() if _valid_cursor_value(v)}
+    out = {}
+    for k, v in entry['cursor'].items():
+        if k == 'client_after_id':  # BUG-998 : UUID de pagination, valable seulement avec since_client_debt
+            try:
+                uuid.UUID(v)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            out[k] = v
+        elif _valid_cursor_value(v):
+            out[k] = v
+    if 'client_after_id' in out and 'since_client_debt' not in out:
+        out.pop('client_after_id')
+    return out
 
 
 def save_pull_cursor(data_dir, cloud_url: str, response_data, node_code=None) -> None:
@@ -244,6 +257,17 @@ def save_pull_cursor(data_dir, cloud_url: str, response_data, node_code=None) ->
 
 
 def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=None, node_code=None) -> None:
+    """BUG-998 : boucle de pull tant que le cloud annonce `has_more` (bornée)."""
+    for _ in range(_PULL_MAX_PAGES):
+        data = _pull_page(logger, cloud_url, headers, data_dir, node_code)
+        if not (isinstance(data, dict) and data.get('has_more') is True):
+            return None
+
+
+_PULL_MAX_PAGES = 200
+
+
+def _pull_page(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=None, node_code=None):
     from sync.management.commands.sync_now import TRANSIENT_STATUS_CODES, apply_pull_response
 
     try:
@@ -255,13 +279,13 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=N
         logger.warning('Synchronisation : coupure réseau au pull (%s).', exc)
         _STATE['connection'] = 'OFFLINE'
         _STATE['last_error'] = str(exc)
-        return
+        return None
 
     if response.status_code in TRANSIENT_STATUS_CODES:
         logger.warning('Synchronisation : 503 transitoire au pull — nouvel essai au prochain cycle.')
         _STATE['connection'] = 'SYNC_ERROR'
         _STATE['last_error'] = 'Service cloud temporairement indisponible (503) au pull.'
-        return
+        return None
 
     if response.status_code == 400 and 'Paramètre' in (getattr(response, 'text', '') or ''):
         # BUG-785 : le Cloud refuse le curseur lui-même : on l'oublie, le
@@ -277,7 +301,7 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=N
         logger.error('Synchronisation : pull refusé (%s).', response.status_code)
         _STATE['connection'] = 'SYNC_ERROR'
         _STATE['last_error'] = f'Pull refusé ({response.status_code}).'
-        return
+        return None
 
     data = response.json()
     apply_pull_response(data)
@@ -286,6 +310,7 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=N
     _STATE['connection'] = 'ONLINE'
     _STATE['last_pull_at'] = time.time()
     _STATE['last_error'] = None
+    return data
 
 
 def run_sync_forever(logger: logging.Logger) -> None:
