@@ -196,7 +196,9 @@ class OpeningConfirmationPermissionBoundaryTests(TestCase):
         other_stock = BreadStock.objects.get(node=self.other_node, bread_price=self.bp500)
         self.assertEqual(other_stock.qty_available, 300)  # intact
 
-    def test_livreur_post_refused_entirely(self):
+    def test_livreur_post_same_as_facturier(self):
+        # BUG-1050 (decision client Q-027) : le livreur confirme le stock de depart comme le facturier
+        # (ancien test : 403). L'isolation par boulangerie reste verifiee par les autres tests de la classe.
         livreur = make_user(role='LIVREUR', node=self.node, team='A')
         api = APIClient()
         api.force_authenticate(livreur)
@@ -204,8 +206,8 @@ class OpeningConfirmationPermissionBoundaryTests(TestCase):
             'team': 'A', 'date': TODAY,
             'lines': [{'bread_price': self.bp500.pk, 'qty': 50}],
         }, format='json')
-        self.assertEqual(resp.status_code, 403)
-        self.assertFalse(DailyOpeningConfirmation.objects.filter(node=self.node, date=TODAY).exists())
+        self.assertIn(resp.status_code, (200, 201), getattr(resp, 'data', None))
+        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=TODAY).exists())
 
     def test_hq_role_comptable_is_treated_as_headquarters_not_refused_but_cannot_act_implicitly(self):
         """IMPORTANT (constat de vérification, pas une anomalie) :

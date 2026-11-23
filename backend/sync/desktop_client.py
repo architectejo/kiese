@@ -174,7 +174,7 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
     _pull_only(logger, cloud_url, headers, data_dir, node_code)
 
 
-_PULL_CURSOR_KEYS = ('since_config', 'since_client_debt', 'client_after_id')  # BUG-998 : after_id = pagination
+_PULL_CURSOR_KEYS = ('since_config', 'since_client_debt', 'client_after_id', 'since_consumables')  # BUG-998 : after_id = pagination
 # Curseur de pull en mémoire (repli quand aucun répertoire de données n'est
 # fourni) ; indexé par URL du Cloud.
 _PULL_CURSORS: dict = {}

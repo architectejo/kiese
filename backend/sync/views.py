@@ -7,6 +7,7 @@ classique (JWT + IsHeadquarters).
 """
 
 import hashlib
+from datetime import timedelta
 import json
 import random
 import time
@@ -383,6 +384,39 @@ def _node_settings_block(node):
     }
 
 
+# BUG-1111 : mouvements de consommables CRÉÉS AU CLOUD pour la boulangerie du poste (envois de la
+# direction `consumables/dispatch/` = ENTRY node_origin SIEGE, corrections du siège). Sans eux, le stock
+# et le « solde comptable » d'un poste ignoreraient ce que la direction lui a envoyé. Seuls les
+# mouvements DE CE NŒUD descendent (jamais ceux d'une autre boulangerie ni le stock SIEGE).
+# Bloc émis seulement s'il y a des lignes (réponse inchangée pour un nœud sans envoi).
+PULL_CONSUMABLE_PAGE_SIZE = 1000
+PULL_CONSUMABLE_OVERLAP = timedelta(minutes=10)
+
+
+def _add_consumable_movements(payload, node, request):
+    from production.models import ConsumableMovement
+
+    since = _parse_cursor(request, 'since_consumables')
+    qs = ConsumableMovement.objects.filter(node=node).exclude(node_origin=node.code).select_related('stock')
+    if since is not None:
+        qs = qs.filter(created_at__gte=since)
+    rows = list(qs.order_by('created_at', 'id')[:PULL_CONSUMABLE_PAGE_SIZE])
+    if not rows:
+        return
+    payload['consumable_movements'] = [
+        {
+            'id': str(m.id), 'node': node.code, 'consumable_type': m.stock.consumable_type,
+            'unit': m.stock.unit, 'movement_type': m.movement_type, 'quantity': str(m.quantity),
+            'unit_price': str(m.unit_price), 'description': m.description,
+            'node_origin': m.node_origin, 'created_at': m.created_at.isoformat(),
+        }
+        for m in rows
+    ]
+    # Curseur recouvrant (inclusif, -10 min) : une ligne dont la transaction n'était pas encore validée
+    # au pull précédent n'est jamais perdue ; le poste ignore les UUID déjà connus (idempotent).
+    payload['since_consumables'] = (rows[-1].created_at - PULL_CONSUMABLE_OVERLAP).isoformat()
+
+
 class PullView(APIView):
     """GET /api/sync/pull/ — descente Cloud → Local (SYNC.md §4)."""
     authentication_classes = [NodeTokenAuthentication]
@@ -528,6 +562,7 @@ class PullView(APIView):
         ]
         payload['transfers'] = transfers
         payload['transfer_lines'] = transfer_lines
+        _add_consumable_movements(payload, node, request)
         # BUG-989/990 : marqueur « miroir déjà appliqué par CE poste » pour les transferts
         # descendus ({} = cloud récent, aucun marqueur ; clé absente = cloud ancien).
         _bump_peaks(node, list(transfers_qs))

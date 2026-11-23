@@ -198,11 +198,13 @@ class MethodsRolesIsolationTests(_Base):
         self.assertIn(resp.status_code, (401, 403))
         self.assertNothingWritten()
 
-    def test_livreur_refused_even_with_valid_value(self):
+    def test_livreur_same_rules_as_facturier(self):
+        # BUG-1050 (decision client Q-027) : le livreur a les memes droits que le facturier (ancien test : 403).
         c = APIClient()
         c.force_authenticate(make_user(role='LIVREUR', node=self.node))
-        self.assertEqual(self.post(self.q(5), client=c).status_code, 403)
+        self.assertEqual(self.post(self.q(-5), client=c).status_code, 400)
         self.assertNothingWritten()
+        self.assertEqual(self.post(self.q(5), client=c).status_code, 200)
 
     def test_facturier_same_rules(self):
         c = APIClient()
