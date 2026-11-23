@@ -147,7 +147,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   // qui reste `IsGerant` — un facturier seul après l'heure de fin doit
   // pouvoir faire remonter l'alerte, remarque.md, même s'il ne peut pas
   // soumettre lui-même la clôture).
-  const canSeeShiftEnd = !!user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes;
+  const canSeeShiftEnd = !!user && (user.role === 'GERANT' || user.role === 'FACTURIER' || user.role === 'LIVREUR') && !user.can_access_all_nodes;
   // BUG-157 : identifiant de la boulangerie de l'utilisateur, utilisé dans la
   // clé `localStorage` des annonces de clôture automatique en attente (une
   // clé par boulangerie : un poste partagé ne mélange pas deux nœuds).
@@ -461,8 +461,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
 
   const navItems = [
     { to: '/dashboard', icon: <FiHome />, label: 'Tableau de Bord', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'] },
-    { to: '/clients', icon: <FiUsers />, label: 'Gestion Clientèle', roles: ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER'] },
-    { to: '/sales/create', icon: <FiShoppingBag />, label: 'Facturation (Facturier)', roles: ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER'] },
+    { to: '/clients', icon: <FiUsers />, label: 'Gestion Clientèle', roles: ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER', 'LIVREUR'] },
+    { to: '/sales/create', icon: <FiShoppingBag />, label: 'Facturation (Facturier)', roles: ['ADMIN', 'DIRECTION', 'GERANT', 'FACTURIER', 'LIVREUR'] },
 { to: '/production', icon: <FiLayers />, label: 'Production & Stocks', roles: ['ADMIN', 'DIRECTION', 'GERANT'] },
     { to: '/commissions', icon: <FiTrendingUp />, label: 'Commissions CM', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE'] },
     { to: '/treasury', icon: <FiDollarSign />, label: 'Caisse', roles: ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT'] },
@@ -1165,7 +1165,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
           peut aussi faire ça », BUG-138 côté API). Montée une seule fois ici
           (pas page par page) ; le composant réinterroge le GET à chaque
           changement de route via `routeKey`. */}
-      {user && (user.role === 'GERANT' || user.role === 'FACTURIER') && !user.can_access_all_nodes && (
+      {user && (user.role === 'GERANT' || user.role === 'FACTURIER' || user.role === 'LIVREUR') && !user.can_access_all_nodes && (
         <OpeningStockConfirmationModal
           // BUG-161 : ordre à la relève = reste du jour de la journée qui se termine (boîte forcée
           // BUG-156) -> désignation d'équipe -> stock de départ. En rotation, la boîte reste montée

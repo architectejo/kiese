@@ -49,6 +49,10 @@ const AccessDenied: React.FC = () => (
   </div>
 );
 
+// BUG-1105 (BUG-411) : les routes ouvertes aux six rôles métier déclarent
+// explicitement leur garde. LIVREUR a les mêmes écrans que FACTURIER (Q-027).
+const FIELD_ROLES: UserProfile['role'][] = ['ADMIN', 'DIRECTION', 'COMPTABLE', 'GERANT', 'FACTURIER', 'LIVREUR'];
+
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
   isAllowed?: (user: UserProfile) => boolean;
@@ -143,7 +147,7 @@ export const App: React.FC = () => {
         <Route 
           path="/dashboard" 
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
               <Dashboard />
             </ProtectedRoute>
           } 
@@ -153,7 +157,7 @@ export const App: React.FC = () => {
         <Route 
           path="/clients" 
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
               <Clients />
             </ProtectedRoute>
           } 
@@ -162,7 +166,7 @@ export const App: React.FC = () => {
         <Route 
           path="/sales/*" 
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
               <Sales />
             </ProtectedRoute>
           } 
@@ -171,7 +175,7 @@ export const App: React.FC = () => {
         <Route 
           path="/production" 
           element={
-            <ProtectedRoute>
+            <ProtectedRoute isAllowed={(u) => FIELD_ROLES.includes(u.role)}>
               <Production />
             </ProtectedRoute>
           } 
