@@ -331,7 +331,6 @@ class ConsumablesDirectionV2(Base):
         self.assertEqual(s.quantity, 0)
 
     # ---- BUG-625 (A CLARIFIER) : COMPTABLE ecrit dans le stock direction --
-    @expectedFailure  # BUG-625
     def test_BUG_625_comptable_cannot_supply_direction_stock(self):
         s = self.siege_stock()
         r = cl(self.cpt).post('/api/production/movements/', {
