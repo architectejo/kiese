@@ -689,3 +689,9 @@ Salut dev-a, tu reprends du service. Trois choses avant de commencer :
 Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cycles sans nouveau ticket, puis écris « partie A terminée » ici. Les points À CLARIFIER ne sont pas codés, tu les listes dans ton message de fin pour le client.
 
 **Statut :** INFO
+
+### #35-B — 2026-11-23 — B → A — Périmètre : ni le desktop, ni la documentation
+
+**Ordre du responsable (2026-11-23) : on ne travaille ni sur l'application desktop (Electron, `desktop/`, packaging, installeur, tests d'installation) ni sur la documentation de livraison** (manuels, guide d'installation, guide d'exploitation, procès-verbal de recette). Cela vaut pour dev-a et dev-b. `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` est mis à jour en conséquence (§1, §4.3, §4.4). Ne pas lancer `packaging-desktop`, `testeur-installation`, `testeur-materiel` ni `redacteur-documentation`.
+
+**Statut :** INFO

@@ -22,7 +22,7 @@ dev-c a terminé : sa partie (trésorerie, blockchain, finance, e2e) est répart
 |---|---|---|
 | Backend | `production/`, `sales/`, `treasury/`, `blockchain/`, `finance/` | `core/`, `clients/`, `commissions/`, `sync/`, `chat/`, `kiese/` |
 | Frontend | Production & Stocks, Facturation, Clôture & Caisse, Livre de caisse, Blockchain, Finance, reçu thermique | Clients, Commissions, Paramètres, Boulangeries, Chat, Connexion, vitrine, layout |
-| Transversal | e2e Playwright (`e2e/`), rendu 360 / 768 / 1440 px | Desktop Electron, documentation de livraison, intégration, PR |
+| Transversal | e2e Playwright (`e2e/`), rendu 360 / 768 / 1440 px | Intégration, PR (le desktop et la documentation sont hors périmètre) |
 
 Frontière sur le sync : dev-b possède le **moteur** de synchronisation. dev-a ouvre les tickets pour tout modèle de production, ventes ou trésorerie qui se synchronise mal, et dev-b les corrige.
 
@@ -55,7 +55,7 @@ Frontière sur le sync : dev-b possède le **moteur** de synchronisation. dev-a 
 3. `testeur-charge` : pics du matin, 8 boulangeries.
 4. Série complète `production`, puis `sales treasury finance blockchain`, en arrière-plan.
 
-## 4. dev-b : clients, commissions, core, sync, desktop, livraison
+## 4. dev-b : clients, commissions, core, sync, intégration
 
 ### 4.1 Tickets à corriger ou vérifier
 - **Cycle 15** (voir §2) puis cycles suivants jusqu'à deux cycles sans ticket sur : clients et commissions, permissions, synchronisation et charge.
@@ -67,7 +67,7 @@ Frontière sur le sync : dev-b possède le **moteur** de synchronisation. dev-a 
 - Demande 3 : faite (bannière `ClosureBlockBanner`, modale `ClosureModal`, réglages dans `Nodes.tsx`). Reste : vérifier que la page des boulangeries est réservée à la direction et à l'admin (le formulaire ne contrôle pas le rôle), et le parcours réel (activer l'interrupteur, passer l'heure, valider côté direction).
 - Vérifier le rendu des pages Clients, Commissions, Paramètres à 360, 768 et 1440 px.
 
-### 4.3 Desktop
+### 4.3 Desktop : HORS PÉRIMÈTRE (ordre du responsable, 2026-11-23)
 - Application Electron (CLAUDE.md §8) : Waitress, SQLite WAL, sauvegarde quotidienne, assistant de première configuration, mises à jour. Tickets BUG-073, 074, 075, 077, 081 à relire. Test d'installation sur machine vierge : poste avec navigateur et Windows propre.
 - **Avant de déployer la migration `clients/0011`** : pousser d'abord les clients en attente de synchronisation, sinon une édition locale non envoyée peut être écrasée.
 
@@ -75,7 +75,7 @@ Frontière sur le sync : dev-b possède le **moteur** de synchronisation. dev-a 
 1. Fusionner `dev-a` dans `dev-b` à chaque fin de partie, trancher les conflits sans perdre les règles strictes de `node_guard`.
 2. Série complète des trois groupes : `core clients commissions sync chat` ; `production` ; `sales treasury finance blockchain`. Puis `npx tsc --noEmit`, `npm run build`, `makemigrations --check`.
 3. Mettre à jour `docs/PR_dev-c_vers_main.md`. **La pull request vers `main` seulement sur l'ordre du responsable.**
-4. **Documentation de livraison** (manuels par rôle, installation, exploitation, procès-verbal de recette) : tout à la fin, par `redacteur-documentation`.
+4. **Documentation de livraison : HORS PÉRIMÈTRE** (ordre du responsable, 2026-11-23). Ne pas la rédiger ni lancer `redacteur-documentation`.
 5. Marquer `[c]` dans `remarque.md` seulement après vérification indépendante.
 
 ## 5. Ce qui ne peut pas être fait sur ce poste
@@ -86,4 +86,4 @@ Frontière sur le sync : dev-b possède le **moteur** de synchronisation. dev-a 
 ## 6. Messages à écrire dans `docs/COMMUNICATION_A_B.md`
 - **dev-b** écrit le message de reprise (n° suivant) pointant vers ce plan, et la liste des décisions « À CLARIFIER » à poser au client.
 - **dev-a** écrit « partie A terminée » (production, ventes, trésorerie, finance) quand les critères du §0 sont remplis.
-- **dev-b** écrit « partie B terminée » (clients, commissions, core, sync, desktop) de même.
+- **dev-b** écrit « partie B terminée » (clients, commissions, core, sync) de même.

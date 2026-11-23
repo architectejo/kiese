@@ -116,6 +116,9 @@ class CashClosure(SyncableModel):
     is_rejected      = models.BooleanField(default=False, verbose_name=_("Infirmé"))
     rejection_reason = models.TextField(blank=True, default='', verbose_name=_("Motif de rejet"))
     notes            = models.TextField(blank=True, default='', verbose_name=_("Observations"))
+    # BUG-985 : compteur de resoumissions (posé par REST perform_update, exporté par la sync) ;
+    # une resoumission au contenu identique se distingue ainsi d'un rejeu.
+    resubmit_count   = models.PositiveIntegerField(default=0, verbose_name=_("Nombre de resoumissions"))
 
     class Meta:
         verbose_name = _("Clôture de Caisse")

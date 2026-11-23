@@ -778,11 +778,14 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         try:
             with transaction.atomic():
                 closure = serializer.save(is_rejected=False, rejection_reason='')
+                # BUG-985 : marqueur explicite de resoumission (même à contenu identique).
+                closure.resubmit_count = (closure.resubmit_count or 0) + 1
                 closure.total_entries  = total_entries
                 closure.total_expenses = total_expenses
                 closure.compute_physical_cash()
                 _check_closure_gap(closure)  # BUG-834
-                closure.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap'])
+                closure.save(update_fields=['total_entries', 'total_expenses', 'net_cash', 'physical_cash_total', 'cash_gap',
+                                                  'resubmit_count'])
         except IntegrityError:
             raise ValidationError({'detail': f"Une clôture existe déjà pour {node.code} à la date {target_date}."})
 
