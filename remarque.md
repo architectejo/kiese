@@ -469,10 +469,10 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
 
-[] Dans "Production & Stocks" section "Intrants — Stocks Consommables (§3.2)" La direction doit avoir une vu globale pour les stocks de toute les boulangerie, quantité des Farine, Huile (Litre), Sel (g), Levure (Paquet 450 g) et les stocks disponible à la direction, il peut orienter(envoyer) une certaine quantité à des boulangéries, "Inventaire Physique" c'est le gérant qui le saisit, une fois saisi il ne peut pas modifier le même jours, il doit attandre le jour d'après mais il peut ajouter un commentaire, et la direction peut voir "Inventaire Physique" en cliquant sur une boulangerie une boite modale doit s'ouvrir avec les détails
+[c] Dans "Production & Stocks" section "Intrants — Stocks Consommables (§3.2)" La direction doit avoir une vu globale pour les stocks de toute les boulangerie, quantité des Farine, Huile (Litre), Sel (g), Levure (Paquet 450 g) et les stocks disponible à la direction, il peut orienter(envoyer) une certaine quantité à des boulangéries, "Inventaire Physique" c'est le gérant qui le saisit, une fois saisi il ne peut pas modifier le même jours, il doit attandre le jour d'après mais il peut ajouter un commentaire, et la direction peut voir "Inventaire Physique" en cliquant sur une boulangerie une boite modale doit s'ouvrir avec les détails — traité sous BUG-386/387/388 (développeur A/B, 2026-11-21 à 22) : vue globale de toutes les boulangeries et du stock direction, envoi vers les boulangeries, approvisionnement du stock direction, inventaire physique consultable par boulangerie ; VÉRIFIÉS par testeur-production et relecteur-code (le contrôle visuel de la vue direction a été fait dans Chrome par dev-a le 2026-11-23).
 
 
-[] Dans "Clôture Journalière" section "Décomposition par Catégorie de Pain" pas besoin d'afficher ce genre de texte:
+[c] Dans "Clôture Journalière" section "Décomposition par Catégorie de Pain" pas besoin d'afficher ce genre de texte: — traité sous BUG-655 : les trois textes explicatifs ne s'affichent plus ; constaté dans Chrome par dev-a (2026-11-23, compte de test direction).
 "
     Régularisation : pains ajoutés ou retirés par les factures de régularisation (code RG) et par les corrections de commande (ajustements), à leur prix plein.
     Non Servi : montant des commandes non servies du jour (code NS), cumulé avec les factures déclarées Non servi (commandé initial) ; elles ne comptent pas dans les ventes. Le code NS est retranché du total du jour, aucun pain n'a été remis.
@@ -480,7 +480,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
     Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md.
 "
 
-[] Dans "Production & Stocks" onglet des "Intrants" les utilisateurs de la direction ne voient que les sections "Vue globale des consommables — toutes boulangeries", "Orienter / envoyer du stock direction vers les boulangeries", "Approvisionner le stock direction" et "Inventaire Physique" de chaque boulangerie et pas la section "Intrants — Stocks Consommables (§3.2)"
+[c] Dans "Production & Stocks" onglet des "Intrants" les utilisateurs de la direction ne voient que les sections "Vue globale des consommables — toutes boulangeries", "Orienter / envoyer du stock direction vers les boulangeries", "Approvisionner le stock direction" et "Inventaire Physique" de chaque boulangerie et pas la section "Intrants — Stocks Consommables (§3.2)" — traité sous BUG-656 : la direction voit les 4 sections demandées et pas « Intrants — Stocks Consommables (§3.2) » ; constaté dans Chrome par dev-a (2026-11-23). Réserve : le bloc « Historique Achats Farine » reste affiché (BUG-1101, à clarifier).
 
 [] "Heure de relève des équipes" est en réalité l'heure de cloture, le gérant a le choix de changer d'équipe ou non (poursuivre avec la même équipe), une fois cette heure arrivé une boite nodal doit s'ouvrir pour que le gerant complete les informations suivante par catégorie des pains: "Non Vendu (NV)", "Déclassés", "Sorties Gratuites"... Etc Pour une bonne Cloture Journalière, une fois ces informations remplit, bloque les ventes (Facturation, Enregistrer commande) dans cette boulangerie, jusqu'à la validation de la "Clôtures du Jour" par la direction
 
@@ -502,3 +502,15 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 "
 
 [] Au niveau de "Historique du client" le mois courant est visible que sur le theme light
+
+[] Au niveau de "Commissions CM" la valeur de "Carte / Frais d'imprimé (FC)" est celle de la boulanérie "Carte / frais d'imprimé (FC)", il n'y a pas des taux de cotisation "Taux de commission par défaut" il y a que la "Cotisation sociale mensuelle par client (FC)" qui est par défaut de 2000Fc
+
+[] Un client qui vient d'être enregistrer ne doit pas avoir le statut "SUSPENDU"
+
+[] Les "Stock de Depart" ne s'inscrivent pas dans le "Stock Pains du Jour", ils doivent s'inscrir et doivent être compter comme des pains vendu aujourd'hui
+
+[] La fournée doit afficher clairement le terme des écarts (Excedent, Equilibre et Manquant)
+
+[] Dans "Production & Stocks" la section "Stock Pains du Jour..."  la colone "Envoyés" ne doit afficher que le nombre des pains envoyés lors du transfert (par catégorie) Ajoute aussi la colone des "Reçu"
+
+[] Lors de la "Clôture Journalière" automatique la "Clôturer la Fournée" doit aussi se fait automatiquement et la réconsciliation des pains doivent être renseignez (Non Vendu (NV), Déclassés, Sorties Gratuites) et être afficher dans la "Clôture Journalière", les "Reste d'Hier" comme les "Reste du Jour" sont pour toute la journé et de dependent pas des équipes (peu importe l'équipe en place)
