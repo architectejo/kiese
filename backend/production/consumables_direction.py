@@ -23,6 +23,7 @@ from core.permissions import IsDirection, IsGerant, IsHeadquarters
 from core.utils import create_notification, log_activity
 from kiese.node_guard import resolve_node_param
 
+from core.numeric import NumericError, parse_ascii_decimal
 from .models import ConsumableCount, ConsumableInventory, ConsumableMovement, ConsumableStock, ConsumableType
 
 Q3 = Decimal('0.001')
@@ -38,28 +39,20 @@ def parse_qty(raw, label, allow_zero=False):
     """Décimal borné (3 décimales). Retourne (Decimal, None) ou (None, message FR)."""
     if raw is None or isinstance(raw, bool) or raw == '':
         return None, f"{label} : quantité requise."
-    text = str(raw).strip().replace(',', '.')
-    if not text.isascii():  # BUG-686 : chiffres 0-9 ASCII uniquement
-        return None, f"{label} : quantité invalide (chiffres 0-9 uniquement)."
-    if len(text) > 40:  # chaîne énorme : refusée avant tout calcul
-        return None, f"{label} : quantité invalide."
+    # BUG-1015..1018 : regle canonique partagee (core.numeric) ; la virgule decimale
+    # saisie au clavier reste toleree (remplacee par un point avant l'analyse).
+    value_in = raw.replace(',', '.') if isinstance(raw, str) else raw
     try:
-        value = Decimal(text)
-    except (InvalidOperation, ValueError):
-        return None, f"{label} : quantité invalide."
-    if not value.is_finite():
-        return None, f"{label} : quantité invalide."
-    # BUG-562 : la borne haute est testée AVANT quantize() (« 1e400 » levait InvalidOperation -> 500).
+        value = parse_ascii_decimal(value_in, places=3, label=label)
+    except NumericError as exc:
+        if exc.reason == 'places':
+            return None, f"{label} : au plus 3 décimales."
+        return None, f"{label} : quantité invalide (chiffres 0-9 uniquement)."
+    # BUG-562 : borne haute testee sur le Decimal.
     if value > MAX_QTY:
         return None, f"{label} : quantité trop grande."
     if value < 0 or (value == 0 and not allow_zero):
-        return None, f"{label} : la quantité doit être strictement positive." if not allow_zero \
-            else f"{label} : la quantité ne peut pas être négative."
-    try:
-        if value != value.quantize(Q3):
-            return None, f"{label} : au plus 3 décimales."
-    except InvalidOperation:
-        return None, f"{label} : quantité invalide."
+        return None, f"{label} : la quantité doit être strictement positive." if not allow_zero             else f"{label} : la quantité ne peut pas être négative."
     return value, None
 
 

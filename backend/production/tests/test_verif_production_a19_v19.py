@@ -5,7 +5,6 @@ lignes de fournee, dispositions, comptages, mouvements, transferts, opening-conf
 Les `@expectedFailure` referencent leur ticket.
 """
 from datetime import date as ddate
-from unittest import expectedFailure
 
 from production.models import (BreadDisposal, BreadStock, BreadTransferLine, ConsumableCount, ConsumableMovement,
                                ConsumableStock, ProductionSession, ProductionSessionLine)
@@ -150,7 +149,6 @@ class A19Parity(A19Base):
 
 # --------------------------------------------------------------------------- nouveaux defauts
 class A19Defects(A19Base):
-    @expectedFailure   # BUG-1015
     def test_1015_transferts_rest_et_push_meme_verdict_plus_decimal_zeros(self):
         bad = []
         for f in ('+7', '7.0', '00007', '-0', '+0'):
@@ -160,7 +158,6 @@ class A19Defects(A19Base):
                 bad.append((f, rs, ps))
         self.assertEqual(bad, [])
 
-    @expectedFailure   # BUG-1016
     def test_1016_espaces_non_ascii_meme_verdict_partout(self):
         bad = []
         for f in (NBSP + '7', '7' + IDEO, chr(0x2007) + '7'):
@@ -172,14 +169,12 @@ class A19Defects(A19Base):
                 bad.append((ascii(f), verdicts))
         self.assertEqual(bad, [])
 
-    @expectedFailure   # BUG-1017
     def test_1017_push_refuse_null_comme_rest(self):
         self.assertEqual(self.rest_disposal(None), 400)
         self.assertEqual(self.push_disposal(None), 'REJECTED')
         self.assertEqual(self.push_tline(None)[0], 'REJECTED')
         self.assertEqual(BreadTransferLine.objects.filter(quantity_sent=0).count(), 0)
 
-    @expectedFailure   # BUG-1017 (sacs de farine)
     def test_1017_push_session_sans_sacs_refusee_comme_rest(self):
         r = cl(self.g1).post(S, {'team': 'A', 'flour_sacks_used': None, 'date': self.day(), 'lines': []},
                              format='json')
@@ -187,7 +182,6 @@ class A19Defects(A19Base):
         s = self.sess(flour_sacks_used=None)
         self.assertEqual(push(self.a1, 'production.ProductionSession', s)[0], 'REJECTED')
 
-    @expectedFailure   # BUG-1018
     def test_1018_souligne_python_refuse_partout_comme_opening(self):
         self.assertEqual(self.rest_open('1_0'), 400)
         bad = []
@@ -200,7 +194,6 @@ class A19Defects(A19Base):
                 bad.append(name)
         self.assertEqual(bad, [])
 
-    @expectedFailure   # BUG-1019
     def test_1019_mouvement_negatif_accepte_en_rest_donc_aussi_au_push(self):
         st, _ = ConsumableStock.objects.get_or_create(node=self.k1, consumable_type='SALT', defaults={'unit': 'g'})
         r = cl(self.g1).post(M, {'stock': st.pk, 'movement_type': 'EXIT', 'quantity': '-1', 'unit_price': '1'},

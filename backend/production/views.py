@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 
 from core.models import Config, Node, BreadPrice
+from core.numeric import ASCII_SPACES, NumericError, parse_ascii_decimal, parse_ascii_int
 from core.permissions import IsGerant, IsGerantWriteNoAccountant, IsHeadquarters, IsFacturier
 from core.utils import log_activity, create_notification
 from core.workday import (
@@ -65,19 +66,10 @@ def _bounded_integral_decimal(raw):
     entier / non fini / booléen ; `(None, 'too_big')` si |valeur| > 2e9
     (les négatifs dans les bornes sont renvoyés : l'appelant les refuse).
     """
-    if isinstance(raw, bool):
-        return None, 'invalid'
     try:
-        d = Decimal(str(raw).strip())
-        if not d.is_finite():
-            return None, 'invalid'
-        if abs(d) > _QTY_INT_MAX_DEC:
-            return None, 'too_big'
-        if d != d.to_integral_value():
-            return None, 'invalid'
-        return int(d), None
-    except (TypeError, ValueError, ArithmeticError):
-        return None, 'invalid'
+        return parse_ascii_int(raw, minimum=-_QTY_INT_MAX, maximum=_QTY_INT_MAX), None
+    except NumericError as exc:
+        return None, ('too_big' if exc.reason in ('too_big', 'too_small') else 'invalid')
 
 
 def _strict_int(value, label, minimum=0):
@@ -86,23 +78,10 @@ def _strict_int(value, label, minimum=0):
     fractionnaire) ≥ `minimum` et plafonné à la capacité de la colonne ; sinon
     400 en français (`{"detail": ...}`) au lieu d'un 500.
     """
-    n = None
-    if isinstance(value, bool) or value is None:
-        n = None
-    elif isinstance(value, int):
-        n = value
-    elif isinstance(value, float) and value.is_integer():
-        n = int(value)
-    elif isinstance(value, str):
-        s = value.strip()
-        # BUG-654 : chiffres ASCII uniquement (« ٣ » arabe-indien refusé, comme _strict_pk).
-        if s.isascii() and s.lstrip('-').isdigit():
-            # BUG-322 : chiffres Unicode / chaînes > 4300 chiffres -> ValueError.
-            try:
-                n = int(s)
-            except ValueError:
-                n = None
-    if n is None:
+    # BUG-1015/1016/1018 : parseur partage (core.numeric), meme regle que le push.
+    try:
+        n = parse_ascii_int(value, minimum=-(2 ** 62), maximum=2 ** 62)
+    except NumericError:
         raise ValidationError({'detail': f"Valeur invalide pour {label} : un nombre entier est attendu."})
     if n < minimum:
         raise ValidationError({'detail': (
@@ -121,9 +100,9 @@ def _strict_pk(value, label='identifiant'):
     """
     if isinstance(value, int) and not isinstance(value, bool):
         n = value
-    elif isinstance(value, str) and len(value.strip()) <= 12 and value.strip().isascii() \
-            and value.strip().isdigit():
-        n = int(value.strip())
+    elif isinstance(value, str) and len(value.strip(ASCII_SPACES)) <= 12 and value.strip(ASCII_SPACES).isascii() \
+            and value.strip(ASCII_SPACES).isdigit():
+        n = int(value.strip(ASCII_SPACES))
     else:
         n = None
     if n is None or n < 1 or n > 2_147_483_647:
@@ -204,16 +183,12 @@ def _parse_consumables_used(raw, node):
         if code not in known:
             raise ValidationError({'detail': f"« consumables_used » invalide : consommable inconnu « {code} »."})
         raw_qty = item.get('quantity', 0)
-        if isinstance(raw_qty, bool) or raw_qty is None or isinstance(raw_qty, (list, dict)):
-            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
-        if isinstance(raw_qty, str) and not raw_qty.isascii():  # BUG-682
-            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
+        # BUG-1015..1018 : regle canonique partagee (core.numeric) ; l'arrondi
+        # a 3 decimales reste applique plus bas (comportement historique).
         try:
-            qty = Decimal(str(raw_qty).strip() or '0')
-        except InvalidOperation:
+            qty = parse_ascii_decimal(raw_qty, places=12, label=f"quantité ({code})")
+        except NumericError:
             raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
-        if not qty.is_finite():
-            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non finie pour {code}."})
         if qty > _CONSUMABLE_QTY_MAX:
             raise ValidationError({'detail': f"« consumables_used » invalide : quantité trop grande pour {code}."})
         out.append({
@@ -3882,9 +3857,7 @@ class DailyOpeningConfirmationView(APIView):
             try:
                 if isinstance(raw_bp, bool) or isinstance(raw_qty, bool):
                     raise ValueError
-                # BUG-896 : ni chiffres non ASCII, ni notation exponentielle.
-                if isinstance(raw_qty, str) and not re.fullmatch(r'\s*[-+]?[0-9]+(\.0+)?\s*', raw_qty):
-                    raise ValueError
+                # BUG-896/1016 : regle canonique (core.numeric) via _bounded_integral_decimal.
                 # BUG-6NN : id entier strict (pas 1.5 -> 1, pas de chaîne géante / 1_0).
                 try:
                     bread_price_id = _strict_int(raw_bp, 'bread_price', minimum=1)

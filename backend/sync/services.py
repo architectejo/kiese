@@ -15,6 +15,7 @@ from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import Sum
 
 from core.models import Node
+from core.numeric import parse_ascii_decimal, parse_ascii_int
 from .models import DebtMovement, SyncConflictLog
 
 # Même logique que `treasury.views._APPEND_MAX_RETRIES` : sous SQLite (dev/
@@ -1087,12 +1088,12 @@ def _push_production_session(node, record):
             upd = {}
             raw_flour = record.get('flour_sacks_used')
             if raw_flour not in (None, ''):
-                new_flour = _to_decimal(raw_flour)
+                new_flour = _prod_decimal(raw_flour, 'flour_sacks_used', 2)
                 if new_flour != existing.flour_sacks_used:
                     upd['flour_sacks_used'] = new_flour
             raw_sac = record.get('sac_value_fc_used')
             if raw_sac not in (None, ''):
-                new_sac = _sync_int(raw_sac, 'sac_value_fc_used', 0, 100_000_000)
+                new_sac = _prod_int(raw_sac, 'sac_value_fc_used', 0, 100_000_000)
                 if new_sac != existing.sac_value_fc_used:
                     upd['sac_value_fc_used'] = new_sac
             if isinstance(record.get('notes'), str) and record['notes'] != existing.notes:
@@ -1131,13 +1132,14 @@ def _push_production_session(node, record):
         node=bakery,
         team=record.get('team', ''),
         date=_date.fromisoformat(record['date']),
-        flour_sacks_used=_to_decimal(record.get('flour_sacks_used')),
+        flour_sacks_used=(_to_decimal(None) if 'flour_sacks_used' not in record
+                          else _prod_decimal(record['flour_sacks_used'], 'flour_sacks_used', 2)),
         # BUG-924 : les totaux (pains, FC, rendement, écart) ne sont JAMAIS copiés
         # du poste : ils sont recalculés depuis les lignes (compute_totals, comme
         # la voie REST) après la sauvegarde, puis à chaque ligne poussée.
         # BUG-956/957 : décimal entier ('150000.0') normalisé ; 0 conservé (comme la mise à jour).
         sac_value_fc_used=(200000 if record.get('sac_value_fc_used') in (None, '')
-                           else _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)),
+                           else _prod_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)),
         is_closed=bool(record.get('is_closed', False)),
         closed_at=record.get('closed_at'),
         closure_summary=record.get('closure_summary'),
@@ -1185,7 +1187,7 @@ def _push_production_session_line(node, record):
     # BUG-904 : une quantité absente/nulle n'est jamais « acceptée » sans ligne.
     if record.get('quantity', 0) is None:
         return _record_result(record_id, False, "« quantity » manquante")
-    quantity = _sync_int(record.get('quantity', 0), 'quantity')
+    quantity = _prod_int(record.get('quantity', 0), 'quantity')
     # BUG-142 : `source` (DECLARED/CARRYOVER), défaut DECLARED si absent.
     source = record.get('source') or ProductionSessionLine.Source.DECLARED
     if source not in ProductionSessionLine.Source.values:
@@ -1221,9 +1223,11 @@ def _push_production_session_line(node, record):
 
 def _bread_price_or_none(raw):
     from core.models import BreadPrice
-    if isinstance(raw, bool) or not str(raw).strip().isdigit() or not str(raw).strip().isascii():
+    from core.numeric import ASCII_SPACES
+    text = str(raw).strip(ASCII_SPACES)
+    if isinstance(raw, bool) or not text.isdigit() or not text.isascii():
         return None
-    return BreadPrice.objects.filter(pk=int(str(raw).strip())).first()
+    return BreadPrice.objects.filter(pk=int(text)).first()
 
 
 def _push_bread_disposal(node, record):
@@ -1254,8 +1258,9 @@ def _push_bread_disposal(node, record):
     # BUG-968 : '3.0' / '1e1' / 3.0 (entiers valides) normalisés en int, jamais de
     # chaîne brute dans quantity * unit_price_sold ; rejet motivé sinon.
     try:
-        qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
-        unit_price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+        # BUG-1017 : une quantité nulle/vide n'est plus convertie en 0 (REST répond 400).
+        qty = _prod_int(record.get('quantity', 0), 'quantity', minimum=-MAX_SYNC_INT)
+        unit_price = _prod_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
     disposal = BreadDisposal(
@@ -1322,7 +1327,7 @@ def _push_consumable_movement(node, record):
     movement = ConsumableMovement(
         id=record_id, node=bakery, stock=stock, session=session,
         movement_type=record['movement_type'],
-        quantity=_to_decimal(record.get('quantity')),
+        quantity=_prod_decimal(record['quantity'], 'quantity', 3, max_digits=10),
         unit_price=_to_decimal(record.get('unit_price')),
         supplier=record.get('supplier', ''),
         description=record.get('description', ''),
@@ -1375,29 +1380,13 @@ def _strict_uuid(value):
 
 def _strict_decimal(value, max_digits=10, decimal_places=3):
     """
-    Decimal strict pour un champ DecimalField(max_digits, decimal_places).
-    Refuse booléens, NaN/infinis, valeurs illisibles, trop de décimales ou
-    trop de chiffres. Lève ValueError (message français) sinon.
+    Decimal strict (regle canonique core.numeric) pour un DecimalField(max_digits,
+    decimal_places). Lève ValueError (message français) sinon.
     """
-    if isinstance(value, bool) or value is None or value == '':
-        raise ValueError("quantité invalide")
     try:
-        dec = Decimal(str(value))
-    except InvalidOperation:
-        raise ValueError(f"quantité invalide : {value!r}")
-    if not dec.is_finite():
-        raise ValueError(f"quantité invalide : {value!r}")
-    step = Decimal(1).scaleb(-decimal_places)
-    try:
-        quantized = dec.quantize(step)
-    except InvalidOperation:
-        raise ValueError(f"quantité hors plage : {value!r}")
-    if quantized != dec:
-        raise ValueError(f"trop de décimales : {value!r}")
-    dec = quantized
-    if len(dec.as_tuple().digits) > max_digits:
-        raise ValueError(f"quantité hors plage : {value!r}")
-    return dec
+        return parse_ascii_decimal(value, places=decimal_places, max_digits=max_digits, label='quantité')
+    except ValueError as exc:
+        raise ValueError(f"quantité invalide : {exc}")
 
 
 def _strict_date(value):
@@ -1657,18 +1646,11 @@ def _restamp_orphan_exits(stock_id):
 
 
 def _sync_bounded_qty(raw):
-    """BUG-894 : entier 0..2e9 (comme production.views._strict_int), sinon None."""
-    if isinstance(raw, bool):
-        return None
+    """BUG-894/1015 : entier 0..2e9 (regle canonique core.numeric), sinon None."""
     try:
-        d = Decimal(str(raw).strip())
-    except (ArithmeticError, ValueError):
+        return parse_ascii_int(raw, minimum=0, maximum=2_000_000_000)
+    except ValueError:
         return None
-    if not str(raw).strip().isascii() or not d.is_finite() or d != d.to_integral_value():
-        return None
-    if d < 0 or d > 2_000_000_000:
-        return None
-    return int(d)
 
 
 _TRANSFER_LOCKED = ('CONFIRMED', 'CANCELLED')  # BUG-921 : transfert immuable une fois terminé
@@ -1830,7 +1812,7 @@ def _push_bread_transfer(node, record):
     # BUG-967 : quantités normalisées en entiers ('5.0', '1e1', 5.0 -> 5), jamais brutes.
     try:
         qty_sent = (None if record.get('quantity_sent') in (None, '')
-                    else _sync_int(record['quantity_sent'], 'quantity_sent'))
+                    else _prod_int(record['quantity_sent'], 'quantity_sent'))
     except ValueError as exc:
         return _record_result(record_id, False, str(exc))
     qty_received = (None if record.get('quantity_received') is None
@@ -1882,11 +1864,11 @@ def _push_bread_transfer_line(node, record):
         in_dispute = transfer.transfer_status == 'DISPUTED'
         update_fields = []
         if (sent not in (None, '') and node.pk == transfer.from_node_id
-                and _sync_int(sent, 'quantity_sent') != existing.quantity_sent):
+                and _prod_int(sent, 'quantity_sent') != existing.quantity_sent):
             # BUG-974 : résolution de l'émettrice « le reçu fait foi » (REST resolve_dispute
             # ALIGN_ON_RECEIVED) : seule exception, dans un litige et uniquement pour aligner
             # l'envoyé sur la quantité reçue déclarée par la réceptrice.
-            new_sent = _sync_int(sent, 'quantity_sent')
+            new_sent = _prod_int(sent, 'quantity_sent')
             if in_dispute and existing.quantity_received is not None and new_sent == existing.quantity_received:
                 existing.quantity_sent = new_sent
                 update_fields.append('quantity_sent')
@@ -1904,14 +1886,14 @@ def _push_bread_transfer_line(node, record):
                 and existing.quantity_received != recv):
             # BUG-974 : résolution de l'émettrice « l'envoyé fait foi » (ALIGN_ON_SENT) : la
             # reçue est alignée sur l'envoyé, rien d'autre.
-            recv_i = _sync_int(recv, 'quantity_received')
+            recv_i = _prod_int(recv, 'quantity_received')
             if recv_i == existing.quantity_sent:
                 existing.quantity_received = recv_i
                 update_fields.append('quantity_received')
         if update_fields:
             existing.save(update_fields=update_fields)
         if recv is not None and node.pk == transfer.to_node_id and existing.quantity_received != recv:
-            recv = _sync_int(recv, 'quantity_received')
+            recv = _prod_int(recv, 'quantity_received')
             if recv != existing.quantity_received:
                 if locked and existing.quantity_received is not None:
                     return _record_result(record_id, False, "transfert terminé : quantité reçue non modifiable")
@@ -1927,12 +1909,18 @@ def _push_bread_transfer_line(node, record):
             record_id, False,
             "seule la boulangerie réceptrice peut renseigner la quantité reçue")
     recv = record.get('quantity_received')
+    # BUG-1015 : comme REST (envoi direct / demande : quantité envoyée >= 1), une NOUVELLE
+    # ligne d'un transfert encore ouvert ne peut pas porter 0 pain (seule la réponse du
+    # fournisseur, qui met à jour une ligne existante, peut ramener la quantité à 0).
+    if (recv is None and transfer.transfer_status in ('PENDING', 'RESPONDED')
+            and _prod_int(record.get('quantity_sent', 0), 'quantity_sent') == 0):
+        return _record_result(record_id, False, "« quantity_sent » doit être au moins 1")
     try:
         with transaction.atomic():
             BreadTransferLine.objects.create(
                 transfer=transfer, bread_price=bread_price,
-                quantity_sent=_sync_int(record.get('quantity_sent', 0) or 0, 'quantity_sent'),
-                quantity_received=None if recv is None else _sync_int(recv, 'quantity_received'),
+                quantity_sent=_prod_int(record.get('quantity_sent', 0), 'quantity_sent'),  # BUG-1017 : null refusé
+                quantity_received=None if recv is None else _prod_int(recv, 'quantity_received'),
             )
     except IntegrityError:
         return _record_result(record_id, False, "ligne en double (écriture concurrente) : à rejouer")
@@ -2524,6 +2512,17 @@ def _sync_int(raw, name, minimum=0, maximum=MAX_SYNC_INT):
     return int(dec)
 
 
+def _prod_int(raw, name, minimum=0, maximum=MAX_SYNC_INT):
+    """BUG-1015..1018 : entier de production via le parseur partage (core.numeric). ValueError français."""
+    return parse_ascii_int(raw, minimum=minimum, maximum=maximum, label=name)
+
+
+def _prod_decimal(raw, name, places, minimum=None, maximum=None, max_digits=None):
+    """BUG-1015..1018 : décimal de production via le parseur partage (core.numeric). ValueError français."""
+    return parse_ascii_decimal(raw, places=places, minimum=minimum, maximum=maximum,
+                               max_digits=max_digits, label=name)
+
+
 def _sync_not_future_date(node, value, name):
     """Date (objet date) non postérieure à la date de travail du serveur."""
     from core.workday import work_date_for
@@ -2541,15 +2540,17 @@ def _check_production_session(node, record):
         except ValueError as exc:
             return str(exc)
     raw = record.get('flour_sacks_used')
+    if 'flour_sacks_used' in record and raw in (None, ''):
+        return "« flour_sacks_used » manquant (nombre de sacs attendu)"  # BUG-1017
     if raw not in (None, ''):
         try:
-            _sync_decimal(raw, 'flour_sacks_used', 2, Decimal('0'), MAX_FLOUR_SACKS_SYNC)
+            _prod_decimal(raw, 'flour_sacks_used', 2, Decimal('0'), MAX_FLOUR_SACKS_SYNC)
         except ValueError as exc:
             return str(exc)
     # BUG-924 : valeur du sac bornée (les totaux, eux, sont recalculés depuis les lignes).
     if record.get('sac_value_fc_used') not in (None, ''):
         try:
-            _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)
+            _prod_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)
         except ValueError as exc:
             return str(exc)
     # BUG-923 : l'horodatage de clôture ne peut pas être dans le futur.
@@ -2568,7 +2569,7 @@ def _check_production_session_line(node, record):
         if record['quantity'] is None:
             return "« quantity » manquante"
         try:
-            _sync_int(record['quantity'], 'quantity')
+            _prod_int(record['quantity'], 'quantity')
         except ValueError as exc:
             return str(exc)
     return None
@@ -2586,13 +2587,20 @@ def _check_transfer_quantities(record):
     for name in ('quantity_sent', 'quantity_received'):
         if record.get(name) not in (None, ''):
             try:
-                _sync_int(record[name], name)
+                _prod_int(record[name], name)
             except ValueError as exc:
                 return str(exc)
     return None
 
 
 def _check_bread_transfer_line(node, record):
+    # BUG-1017 : une ligne ne peut pas porter une quantité envoyée nulle/vide
+    # (REST : 400) ; la quantité reçue, elle, peut être absente (pas encore reçue)
+    # mais jamais une chaîne vide.
+    if 'quantity_sent' in record and record['quantity_sent'] in (None, ''):
+        return "« quantity_sent » manquante"
+    if record.get('quantity_received') == '':
+        return "« quantity_received » invalide"
     return _check_transfer_quantities(record)
 
 
@@ -2603,21 +2611,22 @@ def _check_bread_disposal(node, record):
         return None  # rejeu minimal d'une disposition connue : le handler reste idempotent
     if dtype not in BreadDisposal.DisposalType.values:
         return "« disposal_type » manquant ou invalide"
-    if 'quantity' in record and record['quantity'] not in (None, ''):
+    if 'quantity' in record:
+        # BUG-1017 : null / vide refusés (REST : 400), jamais convertis en 0.
         low = -MAX_SYNC_INT if dtype == 'REMAINING' else 0
         try:
-            _sync_int(record['quantity'], 'quantity', minimum=low)
+            _prod_int(record['quantity'], 'quantity', minimum=low)
         except ValueError as exc:
             return str(exc)
     if record.get('unit_price_sold') not in (None, ''):
         try:
-            _sync_int(record['unit_price_sold'], 'unit_price_sold')
+            _prod_int(record['unit_price_sold'], 'unit_price_sold')
         except ValueError as exc:
             return str(exc)
     # BUG-925 : mêmes bornes que la voie REST (quantité <= 1 000 000, valeur
     # totale <= 9 999 999 999 : colonne Decimal(12, 2)).
-    qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
-    price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+    qty = _prod_int(record.get('quantity', 0), 'quantity', minimum=-MAX_SYNC_INT)
+    price = _prod_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
     if abs(qty) > MAX_SYNC_DISPOSAL_QTY:
         return f"« quantity » ne peut pas dépasser {MAX_SYNC_DISPOSAL_QTY}"
     if abs(qty) * price > MAX_SYNC_DISPOSAL_VALUE:
@@ -2639,7 +2648,11 @@ def _check_consumable_movement(node, record):
         return "« unit » invalide"
     if record.get('quantity') not in (None, ''):
         try:
-            _sync_decimal(record['quantity'], 'quantity', 3, Decimal('0'), max_digits=10)
+            # BUG-1019 : une SORTIE négative (restitution de farine...) ou nulle est acceptée comme
+            # en REST (décision client BUG-216). Une ENTRÉE négative reste refusée (test BUG-907 :
+            # `ENTRY -5` rejetée ; écart résiduel documenté avec REST qui l'accepte).
+            low = None if record.get('movement_type') == 'EXIT' else Decimal('0')
+            _prod_decimal(record['quantity'], 'quantity', 3, minimum=low, max_digits=10)
         except ValueError as exc:
             return str(exc)
     if record.get('unit_price') not in (None, ''):

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from core.models import Node
+from core.numeric import NumericError, parse_ascii_decimal, parse_ascii_int
 from .models import ProductionSession, ProductionSessionLine, BreadStock, ConsumableType, ConsumableStock, ConsumableMovement, ConsumableCount, BreadTransfer, BreadTransferLine, BreadDisposal
 
 
@@ -10,20 +11,35 @@ MAX_DISPOSAL_VALUE = 9_999_999_999  # DecimalField(max_digits=12, decimal_places
 
 
 def _refuse_non_ascii_quantity(data):
-    """BUG-654/682 : la quantité brute doit être en chiffres ASCII (« ٣ » refusé)."""
-    if hasattr(data, 'get'):
-        raw = data.get('quantity')
-        if isinstance(raw, str) and not raw.isascii():
-            raise serializers.ValidationError({'detail': "Quantité invalide (chiffres 0-9 uniquement)."})
+    """
+    BUG-654/682/1015-1018 : la quantite brute doit respecter la regle canonique
+    partagee (core.numeric) : entier ASCII, sans exposant, souligne, espace non
+    ASCII, bool ni null. Les bornes metier restent controlees plus loin.
+    """
+    if hasattr(data, 'get') and 'quantity' in data:
+        try:
+            parse_ascii_int(data.get('quantity'), label='quantity')
+        except NumericError:
+            raise serializers.ValidationError({'detail': "Quantité invalide (nombre entier en chiffres 0-9 attendu)."})
 
 
-def _refuse_non_ascii_fields(data, names):
-    """BUG-686 : champs numériques bruts en chiffres ASCII uniquement."""
+def _refuse_non_ascii_fields(data, names, places=None):
+    """
+    BUG-686/1015-1018 : champs numeriques bruts selon la regle canonique.
+    `places` : nombre de decimales (decimal) ; None = entier.
+    """
     if hasattr(data, 'get'):
         for name in names:
+            if name not in data:
+                continue
             raw = data.get(name)
-            if isinstance(raw, str) and not raw.isascii():
-                raise serializers.ValidationError({'detail': f"« {name} » invalide (chiffres 0-9 uniquement)."})
+            try:
+                if places is None:
+                    parse_ascii_int(raw, label=name)
+                else:
+                    parse_ascii_decimal(raw, places=places + 12, label=name)
+            except NumericError:
+                raise serializers.ValidationError({'detail': f"« {name} » invalide (nombre en chiffres 0-9 attendu)."})
 
 
 class ProductionSessionLineSerializer(serializers.ModelSerializer):
@@ -128,19 +144,15 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
         if hasattr(data, 'get') and 'flour_sacks_used' in data:
             raw = data.get('flour_sacks_used')
             msg = None
-            if raw is None or isinstance(raw, bool) or (isinstance(raw, str) and not raw.strip()):
-                msg = "« flour_sacks_used » : nombre de sacs invalide."
-            elif isinstance(raw, str) and not raw.isascii():
-                # BUG-654 : chiffres Unicode (« ٣ ») refusés, seuls 0-9 ASCII sont acceptés.
+            # BUG-309/654/1017 : regle canonique partagee (null, vide, bool, exposant,
+            # souligne, espaces/chiffres non ASCII refuses) ; bornes metier ci-dessous.
+            try:
+                val = parse_ascii_decimal(raw, places=12, label='flour_sacks_used')
+            except NumericError:
+                val = None
                 msg = "« flour_sacks_used » : nombre de sacs invalide (chiffres 0-9 uniquement)."
-            else:
-                try:
-                    val = Decimal(str(raw).strip())
-                except (InvalidOperation, ValueError):
-                    val = None
-                if val is None or not val.is_finite():
-                    msg = "« flour_sacks_used » : nombre de sacs invalide (valeur numérique finie attendue)."
-                elif val < 0:
+            if val is not None:
+                if val < 0:
                     msg = "« flour_sacks_used » : le nombre de sacs ne peut pas être négatif."
                 elif val > self.MAX_FLOUR_SACKS:
                     msg = f"« flour_sacks_used » : le nombre de sacs ne peut pas dépasser {self.MAX_FLOUR_SACKS}."
@@ -331,7 +343,10 @@ class ConsumableMovementSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
     def to_internal_value(self, data):
-        _refuse_non_ascii_fields(data, ('quantity', 'unit_price'))
+        _refuse_non_ascii_fields(data, ('quantity',), places=3)
+        raw_price = data.get('unit_price') if hasattr(data, 'get') else None
+        if isinstance(raw_price, str) and not raw_price.isascii():  # BUG-686 (prix : controle historique)
+            raise serializers.ValidationError({'detail': "« unit_price » invalide (chiffres 0-9 uniquement)."})
         return super().to_internal_value(data)
 
     def validate_stock(self, value):
@@ -362,7 +377,7 @@ class ConsumableCountSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'gap', 'system_quantity', 'counted_by', 'created_at']
 
     def to_internal_value(self, data):
-        _refuse_non_ascii_fields(data, ('physical_quantity',))
+        _refuse_non_ascii_fields(data, ('physical_quantity',), places=3)
         return super().to_internal_value(data)
 
     def validate_physical_quantity(self, value):
