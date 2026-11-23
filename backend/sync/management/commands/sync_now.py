@@ -183,6 +183,8 @@ def build_outbound_payload(node_code):
     simple (pas de pagination à 200 par lot ici — V2, voir SYNC.md §3.2) :
     la volumétrie d'une boulangerie entre deux cycles de 30 s est faible.
     """
+    from django.db.models import Q
+
     from clients.models import (
         Client, SocialContribution, SocialDistribution, SocialDistributionLine,
     )
@@ -324,7 +326,13 @@ def build_outbound_payload(node_code):
             node__code=node_code, inventory__isnull=True, is_synced=False,
         ).select_related('node')
     ]
-    transfers_qs = BreadTransfer.objects.filter(node_origin=node_code, is_synced=False)
+    # BUG-965 : un poste exporte aussi les transferts dont il est émettrice OU réceptrice
+    # (sa validation/ses écarts doivent remonter), pas seulement ceux qu'il a créés.
+    # Les restrictions de rôle du push (BUG-874/888/891) restent appliquées côté cloud.
+    transfers_qs = BreadTransfer.objects.filter(
+        Q(node_origin=node_code) | Q(from_node__code=node_code) | Q(to_node__code=node_code),
+        is_synced=False,
+    ).select_related('from_node', 'to_node').distinct()
     transfers = [
         {
             'id': str(t.id), 'from_node': t.from_node.code, 'to_node': t.to_node.code,
@@ -511,6 +519,82 @@ def apply_push_response(response_data):
             model.objects.filter(pk__in=accepted_ids).update(is_synced=True)
 
 
+def _apply_pulled_transfers(transfers, lines):
+    """BUG-964 : applique les transferts descendus du cloud (émetteur OU récepteur).
+
+    Aucun effet de stock : les mouvements (`_adjust_bread_stock`) restent produits
+    uniquement par les actions REST locales (send / respond / confirm_reception) ;
+    un transfert reçu par pull n'en crée donc jamais de double. Idempotent :
+    - inconnu localement : créé (`is_synced=True`, statut tel que décidé au cloud) ;
+    - connu : jamais de régression de statut, et jamais écrasé s'il a une
+      modification locale non poussée (`is_synced=False`).
+    Les entrées invalides sont ignorées silencieusement (BUG-781).
+    """
+    from django.db import transaction
+
+    from core.models import BreadPrice, Node
+    from production.models import BreadTransfer, BreadTransferLine
+    from sync.services import _strict_uuid, _sync_bounded_qty
+
+    if not isinstance(transfers, list):
+        return
+    rank = {'PENDING': 0, 'RESPONDED': 1, 'DISPUTED': 2, 'CONFIRMED': 3, 'CANCELLED': 3}
+    lines_by_transfer = {}
+    for ld in lines if isinstance(lines, list) else []:
+        if isinstance(ld, dict):
+            lines_by_transfer.setdefault(str(ld.get('transfer')), []).append(ld)
+    for td in transfers:
+        if not isinstance(td, dict):
+            continue
+        tid = _strict_uuid(td.get('id'))
+        status = td.get('transfer_status')
+        if tid is None or status not in rank:
+            continue
+        qsent = None if td.get('quantity_sent') is None else _sync_bounded_qty(td['quantity_sent'])
+        qrecv = None if td.get('quantity_received') is None else _sync_bounded_qty(td['quantity_received'])
+        with transaction.atomic():
+            local = BreadTransfer.objects.select_for_update().filter(pk=tid).first()
+            if local is None:
+                from_node = Node.objects.filter(code=td.get('from_node')).first()
+                to_node = Node.objects.filter(code=td.get('to_node')).first()
+                if from_node is None or to_node is None or from_node.pk == to_node.pk:
+                    continue
+                bp = td.get('bread_price')
+                local = BreadTransfer(
+                    id=tid, from_node=from_node, to_node=to_node,
+                    bread_price=BreadPrice.objects.filter(pk=bp).first() if isinstance(bp, int) else None,
+                    quantity_sent=qsent, quantity_received=qrecv, transfer_status=status,
+                    flow=td.get('flow') if td.get('flow') in BreadTransfer.Flow.values else BreadTransfer.Flow.REQUEST,
+                    notes=td.get('notes') if isinstance(td.get('notes'), str) else '',
+                    node_origin=td.get('node_origin') if isinstance(td.get('node_origin'), str) else from_node.code,
+                    is_synced=True,
+                )
+                local.save(_sync_bypass=True)
+            else:
+                if (not local.is_synced or rank[status] <= rank[local.transfer_status]
+                        or local.transfer_status in ('CONFIRMED', 'CANCELLED')):
+                    continue
+                local.transfer_status = status
+                local.quantity_received = qrecv
+                local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
+                           _sync_bypass=True)
+            for ld in lines_by_transfer.get(str(tid), []):
+                bp = ld.get('bread_price')
+                if not isinstance(bp, int) or isinstance(bp, bool):
+                    continue
+                price = BreadPrice.objects.filter(pk=bp).first()
+                ls, lr = _sync_bounded_qty(ld.get('quantity_sent')), (
+                    None if ld.get('quantity_received') is None else _sync_bounded_qty(ld['quantity_received']))
+                if price is None or ls is None:
+                    continue
+                line, created = BreadTransferLine.objects.get_or_create(
+                    transfer=local, bread_price=price,
+                    defaults={'quantity_sent': ls, 'quantity_received': lr})
+                if not created and lr is not None and line.quantity_received != lr:
+                    line.quantity_received = lr
+                    line.save(update_fields=['quantity_received'])
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -528,6 +612,8 @@ def apply_pull_response(payload):
 
     # BUG-781 : une réponse tronquée ou hostile ne doit jamais lever
     # d'exception : entrées invalides ignorées, rien d'écrit à tort.
+    if isinstance(payload, dict):
+        _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return

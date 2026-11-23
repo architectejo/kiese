@@ -365,7 +365,6 @@ class V12FullFlow(V12Base):
         self.assertFalse(_unresolved_incoming_transfer_gap(self.k3))
 
     # ----- nouveaux defauts : le poste recepteur n'est jamais au courant, ses transitions ne sont pas exportees
-    @expectedFailure
     def test_BUG_964_pull_descend_les_transferts_entrants_au_poste_receptrice(self):
         """BUG-964 : SYNC.md §5.3 prevoit que le cloud redescende vers `to_node` tout transfert le concernant
         (alerte + validation par la receptrice). `PullView` ne renvoie ni transfert ni ligne : un poste K2
@@ -378,7 +377,6 @@ class V12FullFlow(V12Base):
         blob = str(r.data)
         self.assertIn(str(t.pk), blob)
 
-    @expectedFailure
     def test_BUG_965_validation_de_la_receptrice_est_exportee_par_son_poste(self):
         """BUG-965 : `build_outbound_payload` filtre les transferts par `node_origin == code du poste`. Un transfert
         cree par K1 (node_origin K1) puis confirme par K2 n'est JAMAIS exporte par K2 (sa validation, ses
@@ -392,7 +390,6 @@ class V12FullFlow(V12Base):
         ids_k2 = [x['id'] for x in build_outbound_payload(self.k2.code)['records']['production.BreadTransfer']]
         self.assertIn(str(t.pk), ids_k2)
 
-    @expectedFailure
     def test_BUG_966_resolution_ou_recomptage_du_litige_atteint_le_cloud(self):
         """BUG-966 : `DISPUTED -> CONFIRMED` (re-validation de la receptrice apres recomptage, ou resolution par
         l'emettrice/le siege, REST) n'existe pas dans la machine d'etats de sync : le push est ACCEPTED (donc
@@ -423,7 +420,6 @@ class V12DecimalStrings(V12Base):
         for r in reasons(res):
             self.assertNotIn('erreur serveur', r, ctx)
 
-    @expectedFailure
     def test_BUG_967_transfert_entete_quantites_en_chaine_decimale(self):
         """BUG-967 : creation d'un `BreadTransfer` avec `quantity_sent`/`quantity_received` = '5.0' (ou '1e1',
         5.0) : le controle strict l'accepte (entier valide) mais la valeur brute est ecrite telle quelle dans le
@@ -454,7 +450,6 @@ class V12DecimalStrings(V12Base):
         self.assertEqual(BreadTransfer.objects.get(pk=t.pk).quantity_received, 10)
         self.assertEqual(self.tstate(t.pk)[1][self.b3.pk], (10, 10))
 
-    @expectedFailure
     def test_BUG_968_dispositions_quantites_en_chaine_decimale(self):
         """BUG-968 : `BreadDisposal` avec `quantity='3.0'`/`unit_price_sold='100.0'` (ou '1e1', 3.0) : controle
         strict OK, mais valeurs brutes -> `quantity * unit_price_sold` (str * str) TypeError -> « erreur serveur ».

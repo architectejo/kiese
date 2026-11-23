@@ -242,6 +242,35 @@ class PullView(APIView):
         ]
         payload['since_client_debt'] = now.isoformat()
 
+        # BUG-964 (SYNC.md §5.3) : les transferts dont ce poste est émettrice OU
+        # réceptrice (+ lignes) redescendent, pour que la réceptrice voie et valide
+        # un envoi d'une autre boulangerie. Les transferts terminés depuis plus de
+        # 30 jours ne sont plus renvoyés. Pas de curseur : lot petit, application idempotente.
+        from datetime import timedelta
+        from production.models import BreadTransfer
+        recent = now - timedelta(days=30)
+        transfers_qs = BreadTransfer.objects.filter(
+            Q(from_node=node) | Q(to_node=node)
+        ).exclude(
+            transfer_status__in=('CONFIRMED', 'CANCELLED'), updated_at__lt=recent,
+        ).select_related('from_node', 'to_node').prefetch_related('lines')
+        transfers, transfer_lines = [], []
+        for t in transfers_qs:
+            transfers.append({
+                'id': str(t.id), 'from_node': t.from_node.code, 'to_node': t.to_node.code,
+                'bread_price': t.bread_price_id, 'quantity_sent': t.quantity_sent,
+                'quantity_received': t.quantity_received, 'transfer_status': t.transfer_status,
+                'flow': t.flow, 'notes': t.notes, 'node_origin': t.node_origin,
+                'updated_at': t.updated_at.isoformat(),
+            })
+            for l in t.lines.all():
+                transfer_lines.append({
+                    'transfer': str(t.id), 'bread_price': l.bread_price_id,
+                    'quantity_sent': l.quantity_sent, 'quantity_received': l.quantity_received,
+                })
+        payload['transfers'] = transfers
+        payload['transfer_lines'] = transfer_lines
+
         Node.objects.filter(pk=node.pk).update(last_sync=now)
         return Response(payload)
 

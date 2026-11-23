@@ -1095,11 +1095,18 @@ def _push_bread_disposal(node, record):
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
+    # BUG-968 : '3.0' / '1e1' / 3.0 (entiers valides) normalisés en int, jamais de
+    # chaîne brute dans quantity * unit_price_sold ; rejet motivé sinon.
+    try:
+        qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
+        unit_price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
     disposal = BreadDisposal(
         id=record_id, node=bakery, session=session, bread_price=bread_price,
         disposal_type=record.get('disposal_type', ''),
-        quantity=record.get('quantity', 0),
-        unit_price_sold=record.get('unit_price_sold', 0),
+        quantity=qty,
+        unit_price_sold=unit_price,
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', bakery_code),
     )
@@ -1539,13 +1546,21 @@ def _push_bread_transfer(node, record):
             BreadTransfer.TransferStatus.RESPONDED: {
                 BreadTransfer.TransferStatus.CONFIRMED, BreadTransfer.TransferStatus.DISPUTED,
             },
+            # BUG-966 : sortie de litige (recomptage de la réceptrice, ou résolution
+            # par l'émettrice / le siège, REST resolve_dispute) ; acteurs ci-dessous.
+            BreadTransfer.TransferStatus.DISPUTED: {BreadTransfer.TransferStatus.CONFIRMED},
         }
         new_status = record.get('transfer_status')
         changed_fields = []
         if new_status and new_status != existing.transfer_status:
             # BUG-874 : seule la réceptrice valide la réception (CLAUDE.md 5.4).
+            # BUG-966 : exception : la sortie de litige (DISPUTED -> CONFIRMED) peut
+            # aussi venir de l'émettrice (résolution, comme resolve_dispute REST).
+            from_resolves = (new_status == BreadTransfer.TransferStatus.CONFIRMED
+                             and existing.transfer_status == BreadTransfer.TransferStatus.DISPUTED
+                             and node.pk == existing.from_node_id)
             if (new_status == BreadTransfer.TransferStatus.CONFIRMED
-                    and node.pk != existing.to_node_id):
+                    and node.pk != existing.to_node_id and not from_resolves):
                 return _record_result(
                     record_id, False,
                     "seule la boulangerie réceptrice peut confirmer la réception")
@@ -1554,14 +1569,26 @@ def _push_bread_transfer(node, record):
             # RESPONDED->CONFIRMED/DISPUTED. Toute autre combinaison refusée.
             TS = BreadTransfer.TransferStatus
             role_allowed = {
-                existing.from_node_id: {(TS.PENDING, TS.RESPONDED), (TS.PENDING, TS.CANCELLED)},
-                existing.to_node_id: {(TS.RESPONDED, TS.CONFIRMED), (TS.RESPONDED, TS.DISPUTED)},
+                existing.from_node_id: {(TS.PENDING, TS.RESPONDED), (TS.PENDING, TS.CANCELLED),
+                                        (TS.DISPUTED, TS.CONFIRMED)},
+                existing.to_node_id: {(TS.RESPONDED, TS.CONFIRMED), (TS.RESPONDED, TS.DISPUTED),
+                                      (TS.DISPUTED, TS.CONFIRMED)},
             }.get(node.pk, set())
             if ((existing.transfer_status, new_status) not in role_allowed
                     and new_status in allowed_forward.get(existing.transfer_status, set())):
                 return _record_result(
                     record_id, False,
                     "transition d'état réservée à l'autre boulangerie du transfert")
+            if (existing.transfer_status == TS.DISPUTED and new_status == TS.CONFIRMED
+                    and (existing.pk is None or any(
+                        l.quantity_received is None or l.quantity_received != l.quantity_sent
+                        for l in existing.lines.all()))):
+                # BUG-966 : le litige ne se lève que si les lignes ne présentent plus d'écart
+                # (recomptage égal à l'envoyé, ou lignes alignées par résolution).
+                return _record_result(
+                    record_id, False,
+                    "litige non résolu : les quantités reçues et envoyées diffèrent encore "
+                    "(poussez d'abord les lignes recomptées)")
             if new_status in allowed_forward.get(existing.transfer_status, set()):
                 existing.transfer_status = new_status
                 changed_fields.append('transfer_status')
@@ -1621,10 +1648,18 @@ def _push_bread_transfer(node, record):
     if bp_id:
         bread_price = BreadPrice.objects.filter(pk=bp_id).first()
 
+    # BUG-967 : quantités normalisées en entiers ('5.0', '1e1', 5.0 -> 5), jamais brutes.
+    try:
+        qty_sent = (None if record.get('quantity_sent') in (None, '')
+                    else _sync_int(record['quantity_sent'], 'quantity_sent'))
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+    qty_received = (None if record.get('quantity_received') is None
+                    else _sync_bounded_qty(record['quantity_received']))
     transfer = BreadTransfer(
         id=record_id, from_node=from_bakery, to_node=to_bakery, bread_price=bread_price,
-        quantity_sent=record.get('quantity_sent'),
-        quantity_received=record.get('quantity_received'),
+        quantity_sent=qty_sent,
+        quantity_received=qty_received,
         transfer_status=initial_status,
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', to_code or node.code),
