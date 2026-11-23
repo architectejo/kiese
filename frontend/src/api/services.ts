@@ -1605,6 +1605,34 @@ export const salesApi = {
 
 // ── Production API ───────────────────────────────────────────────────────────
 
+export interface FlourMonthRow {
+  date: string;
+  consumption: Record<string, string>;
+  total: string;
+  open_sessions: number;
+  entry_quantity?: string;
+  unit_price?: string | null;
+  total_price?: string;
+  balance?: string;
+}
+export interface FlourMonthStats {
+  month: string;
+  days_in_month: number;
+  bakeries: Array<{ code: string; name: string }>;
+  rows: FlourMonthRow[];
+  summary: {
+    total: Record<string, string>;
+    average_per_day: Record<string, string>;
+    average_per_calendar_day: Record<string, string>;
+    active_days: Record<string, number>;
+  };
+  purchases?: { quantity: string; total_price: string; average_unit_price: string | null };
+  opening_balance?: string;
+  closing_balance?: string;
+  direction_visible: boolean;
+  notes: string[];
+}
+
 export const productionApi = {
   // BUG-161 (B2) : le serveur calcule le jour calendaire et la période de service ; le frontend n'envoie AUCUNE date.
   // `node` : seulement pour un rôle Siège (ignoré côté serveur pour un non-HQ).
@@ -1705,6 +1733,11 @@ export const productionApi = {
     get: () => apiClient.get<GlobalConsumables>('/api/production/consumables/global/'),
     dispatch: (data: ConsumableDispatchPayload) =>
       apiClient.post<ConsumableDispatchResult>('/api/production/consumables/dispatch/', data),
+  },
+  // BUG-1110 (lot I-3) : statistiques mensuelles de la farine.
+  flourMonthStats: {
+    get: (params: { month: string; node?: string }) =>
+      apiClient.get<FlourMonthStats>('/api/production/consumables/flour-month-stats/', { params }),
   },
   inventories: {
     today: () => apiClient.get<InventoryToday>('/api/production/inventories/today/'),
