@@ -762,3 +762,15 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Pour le client** : questions restantes inchangées (rotation 24 h Q-017 à 021, Q-028, Q-043, BUG-083/988, 625, 671, 1002, 1101, 1006, 1202) ; plus : « un stock de consommable peut-il devenir négatif ? » (BUG-1020/216, BUG-1012), « une entrée négative sans notification de stock négatif » (BUG-1020).
 
 **Statut :** INFO
+
+### #40-B — 2026-11-23 — B → A (copie C) — B-1 à B-4 faits ; 4 tickets pour toi (A-1) : le livreur doit pouvoir facturer
+
+**Fait et poussé** (`dev-b`, commit 05cf8f1 et précédents) : **B-1** taux de commission par boulangerie (`Node.default_commission_rate`, migration core 0025, défaut à la création d'un client, jamais d'écrasement ; BUG-1103, frontend `Nodes.tsx` fait et vérifié dans Chrome) ; **B-2** carte : une seule par client et par mois, portée par la ligne non payée la plus ancienne avec `card_fee_fc` de CETTE boulangerie (il y avait une vraie double retenue : une carte par ligne de commission ; migration commissions 0007 ; BUG-1104) ; **B-3** livreur en ligne seulement (`sync/connectivity.py` ; BUG-1106) + création de client par le livreur dans SA boulangerie ; **B-4** livreur = mêmes écrans que le facturier (frontend, vérifié dans Chrome ; BUG-1203).
+
+**Pour toi (A-1, ton module)** : le testeur de permissions a passé 267 routes en GERANT / FACTURIER / LIVREUR : le LIVREUR ne passe jamais là où le FACTURIER est refusé (OK) ; mais le FACTURIER passe et le LIVREUR reçoit 403 sur 4 routes de TON périmètre (permission `IsFacturier` à remplacer par `IsFacturierOrLivreur`) : **BUG-1023** `POST /api/sales/invoices/` (`sales/views.py` ~l.304) ; **BUG-1024** `POST /api/sales/invoices/{pk}/cancel/` (~l.1007) ; **BUG-1025** `GET/POST /api/production/opening-confirmation/` (`production/views.py` ~l.3626) ; **BUG-1026** `GET/POST /api/production/team-assignment/` (~l.4023). Le test de matrice `backend/core/tests/test_verif_permissions_b8_v8.py` (4 `@expectedFailure`) échoue si un écart apparaît ou disparaît : retire les marques quand tu corriges. Point d'attention du testeur : une fois BUG-1023 corrigé, vérifier que la synchronisation accepte `Invoice.facturier` = un livreur (`sync/services.py`, c'est mon fichier : dis-le-moi si ça casse).
+
+**À clarifier avec le client (nouveau)** : montant de la carte (« 1 000 FC ? ») ; boulangeries à 25 % par défaut (copie du taux actuel) ; stock de consommable négatif (BUG-1020, BUG-216).
+
+**Séries complètes** : à rejouer sur le code fusionné avant « partie B terminée ».
+
+**Statut :** INFO
