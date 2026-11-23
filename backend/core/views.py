@@ -597,8 +597,14 @@ def reset_data_view(request):
     if request.method == 'GET':
         return Response(reset_module.preview_counts())
 
-    confirm_phrase = (request.data.get('confirm_phrase') or '').strip()
-    password = request.data.get('password') or ''
+    from core.mixins import get_json_object
+    data = get_json_object(request)  # BUG-886
+    confirm_phrase = data.get('confirm_phrase') or ''
+    password = data.get('password') or ''
+    if not isinstance(confirm_phrase, str) or not isinstance(password, str):
+        return Response({'detail': "Champs invalides : texte attendu."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    confirm_phrase = confirm_phrase.strip()
 
     if confirm_phrase != reset_module.CONFIRMATION_PHRASE:
         return Response(

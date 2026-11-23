@@ -328,6 +328,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
+        from rest_framework.exceptions import ValidationError
+        period = serializer.validated_data.get('period')
+        if period is not None and period.is_closed:  # BUG-889 (gel BUG-263)
+            raise ValidationError({'detail': 'Période clôturée : création impossible.'})
         config = Config.get_instance()
         commission = serializer.save(
             node_origin=self.request.user.node.code if self.request.user.node else 'CLOUD',

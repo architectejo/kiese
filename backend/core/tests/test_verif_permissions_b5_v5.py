@@ -79,7 +79,6 @@ class V872(B5):
         self.assertEqual(r.status_code, 400, r.content)
 
     # --- voisin : le meme gel contourne par le push de synchronisation
-    @expectedFailure
     def test_BUG_887_push_sync_ne_modifie_pas_une_ligne_de_distribution_cloturee(self):
         """BUG-887 : le push sync modifie les montants d'une ligne d'une distribution CLOTUREE (BUG-752 contourne)."""
         SocialDistribution.objects.filter(pk=self.dist1.pk).update(is_closed=True)
@@ -89,7 +88,6 @@ class V872(B5):
         self.line1.refresh_from_db()
         self.assertEqual(self.line1.total_social, Dc('1000.00'), r.content)
 
-    @expectedFailure
     def test_BUG_887_push_sync_ne_cree_pas_de_ligne_dans_une_distribution_cloturee(self):
         SocialDistribution.objects.filter(pk=self.dist1.pk).update(is_closed=True)
         c = Client.objects.create(node=self.k1, node_origin='P1', first_name='Zed', last_name='Nouveau')
@@ -170,20 +168,17 @@ class V873(B5):
             r = nocrash(cl(self.u['GERANT'])).post('/api/core/auth/logout/', body, format='json')
             self.assertLess(r.status_code, 500, body)
 
-    @expectedFailure
     def test_BUG_886_reset_data_corps_non_objet_est_400(self):
         su = User.objects.create(username='pr_su', role='ADMIN', is_superuser=True, is_staff=True)
         for body in BAD_BODIES:
             r = nocrash(cl(su)).post('/api/core/reset-data/', body, format='json')
             self.assertEqual(r.status_code, 400, (body, r.status_code))
 
-    @expectedFailure
     def test_BUG_886_chat_conversation_directe_corps_non_objet_est_400(self):
         for body in BAD_BODIES:
             r = nocrash(cl(self.u['GERANT'])).post('/api/chat/conversations/direct/', body, format='json')
             self.assertEqual(r.status_code, 400, (body, r.status_code))
 
-    @expectedFailure
     def test_BUG_886_reset_data_types_de_champs_est_400(self):
         su = User.objects.create(username='pr_su', role='ADMIN', is_superuser=True, is_staff=True)
         for body in ({'confirm_phrase': 5, 'password': 'x'}, {'confirm_phrase': ['a'], 'password': 5},
@@ -329,7 +324,6 @@ class V874(B5):
         self.assertEqual((t.transfer_status, t.quantity_received), ('CONFIRMED', 100))
 
     # --- voisins : autres transitions reservees
-    @expectedFailure
     def test_BUG_888_emetteur_ne_declare_pas_un_litige_a_la_place_de_la_receptrice(self):
         """BUG-888 : RESPONDED -> DISPUTED (acte de la receptrice, confirm_reception) accepte du jeton emetteur."""
         t = self.transfer('RESPONDED')
@@ -337,7 +331,6 @@ class V874(B5):
         t.refresh_from_db()
         self.assertNotEqual(t.transfer_status, 'DISPUTED')
 
-    @expectedFailure
     def test_BUG_888_receptrice_ne_declare_pas_la_reponse_de_l_emettrice(self):
         """BUG-888 : PENDING -> RESPONDED (acte de l'emettrice, respond_to_request) accepte du jeton receptrice."""
         t = self.transfer('PENDING')
@@ -376,7 +369,6 @@ class Figes(B5):
             self.assertEqual(c.post(f'/api/commissions/commissions/{cm.pk}/mark_paid/', {}, format='json').status_code,
                              403, role)
 
-    @expectedFailure
     def test_BUG_889_pas_de_creation_de_commission_dans_une_periode_cloturee(self):
         """BUG-889 : POST /commissions/commissions/ dans une periode CLOTUREE accepte (le gel ne couvre que update/destroy)."""
         per, _ = self.mk_commission(closed=True)

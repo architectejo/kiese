@@ -1296,6 +1296,19 @@ def _push_bread_transfer(node, record):
                 return _record_result(
                     record_id, False,
                     "seule la boulangerie réceptrice peut confirmer la réception")
+            # BUG-888 : machine d'états par rôle. Émettrice (from_node) :
+            # PENDING->RESPONDED/CANCELLED. Réceptrice (to_node) :
+            # RESPONDED->CONFIRMED/DISPUTED. Toute autre combinaison refusée.
+            TS = BreadTransfer.TransferStatus
+            role_allowed = {
+                existing.from_node_id: {(TS.PENDING, TS.RESPONDED), (TS.PENDING, TS.CANCELLED)},
+                existing.to_node_id: {(TS.RESPONDED, TS.CONFIRMED), (TS.RESPONDED, TS.DISPUTED)},
+            }.get(node.pk, set())
+            if ((existing.transfer_status, new_status) not in role_allowed
+                    and new_status in allowed_forward.get(existing.transfer_status, set())):
+                return _record_result(
+                    record_id, False,
+                    "transition d'état réservée à l'autre boulangerie du transfert")
             if new_status in allowed_forward.get(existing.transfer_status, set()):
                 existing.transfer_status = new_status
                 changed_fields.append('transfer_status')
@@ -1670,6 +1683,8 @@ def _push_social_distribution_line(node, record):
     if existing:
         if existing.distribution_id != distribution.pk:
             return _record_result(record_id, False, "distribution différente de l'enregistrement existant")
+        if distribution.is_closed:  # BUG-887 (comme BUG-752/872)
+            return _record_result(record_id, False, "distribution clôturée : ligne non modifiable")
         changed_fields = []
         for field, default in (
             ('indice', existing.indice), ('total_social', existing.total_social),
@@ -1689,6 +1704,8 @@ def _push_social_distribution_line(node, record):
             existing.save(update_fields=changed_fields, _sync_bypass=True)
         return _record_result(record_id, True)
 
+    if distribution.is_closed:  # BUG-887
+        return _record_result(record_id, False, "distribution clôturée : ligne non créable")
     client = Client.objects.filter(pk=record.get('client')).first()
     if client is None:
         return _record_result(record_id, False, "dépendance manquante : client")
