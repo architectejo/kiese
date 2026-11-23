@@ -387,7 +387,6 @@ class Nouveaux(Base):
     """Nouveaux defauts : voir REGISTRE_BUGS.md BUG-664 et suivants."""
 
     # ------------------------------------------------------------ bread_summary et ajustements
-    @expectedFailure
     def test_BUG_664_bread_summary_ajustement_negatif_soustrait(self):
         iid = self.post(lines=[{'bread_price': self.bp3.pk, 'quantity': 10}]).data['id']
         _api(self.lv1).post(f'{INV}{iid}/deliver/', {}, format='json')
@@ -399,7 +398,6 @@ class Nouveaux(Base):
         self.assertEqual((r.data['grand_total_qty'], r.data['grand_total_fc']), (6, 1800), r.data)
 
     # ------------------------------------------------------------ cancel : categorie client
-    @expectedFailure
     def test_BUG_665_annulation_rafraichit_la_categorie_client(self):
         Client.objects.filter(pk=self.cl.pk).update(current_debt=D('49000'))
         iid = self.post(lines=[{'bread_price': self.bp3.pk, 'quantity': 10}]).data['id']   # BP 52 000
@@ -411,7 +409,6 @@ class Nouveaux(Base):
         self.assertEqual(self.cl.category, 'NORMAL', 'client reste A RISQUE alors que BP < plafond')
 
     # ------------------------------------------------------------ compteur de pains
-    @expectedFailure
     def test_BUG_666_annulation_apres_ajustement_plus_laisse_le_compteur_incremente(self):
         iid = self.post(lines=[{'bread_price': self.bp3.pk, 'quantity': 2}]).data['id']
         _api(self.g1).post(f'{INV}{iid}/adjust/', {
@@ -422,7 +419,6 @@ class Nouveaux(Base):
         self.assertEqual((self.cl.current_debt, self.sent()), (D(0), 0))
         self.assertEqual(self.cl.total_breads_received, 0, 'aucun pain livre : compteur doit rester a 0')
 
-    @expectedFailure
     def test_BUG_667_livraison_ne_perd_pas_un_increment_concurrent_du_compteur(self):
         """Lecture-modification-ecriture : `Invoice.deliver` fait `client.total_breads_received += n` sur
         l'objet client charge par `_lock` ; une mise a jour validee entre-temps (autre livraison du meme
@@ -443,7 +439,6 @@ class Nouveaux(Base):
         self.assertEqual(self.cl.total_breads_received, 104, 'incrementation concurrente ecrasee')
 
     # ------------------------------------------------------------ dates
-    @expectedFailure
     def test_BUG_668_livraison_ne_peut_pas_preceder_la_facture(self):
         cfg = Config.get_instance()
         cfg.allow_backdated_sales = True
@@ -456,7 +451,6 @@ class Nouveaux(Base):
                         f'livree le {inv.delivered_at} pour une facture du {inv.invoice_date}')
 
     # ------------------------------------------------------------ vente sans client
-    @expectedFailure
     def test_BUG_669_vente_sans_client_paiement_superieur_a_la_commande(self):
         r = self.post(client=False, payment_type='CASH', payment_amount=1000000)
         if r.status_code == 201:
@@ -465,7 +459,6 @@ class Nouveaux(Base):
             self.assertEqual(r.status_code, 400)
 
     # ------------------------------------------------------------ versement conserve d'une facture Non servi
-    @expectedFailure
     def test_BUG_670_daily_summary_compte_le_versement_conserve_non_servi(self):
         iid = self.post(payment_amount=1000).data['id']
         self.assertEqual(_api(self.fa1).post(f'{INV}{iid}/mark-not-served/', {}, format='json').status_code, 200)
@@ -491,7 +484,6 @@ class Nouveaux(Base):
         self.assertEqual(again.status_code, 201, getattr(again, 'data', ''))
 
     # ------------------------------------------------------------ PATCH commission_exempt et periode close
-    @expectedFailure
     def test_BUG_672_patch_commission_exempt_periode_close_avertit(self):
         from commissions.models import CommissionPeriod
         from core.models import SystemNotification
@@ -507,7 +499,6 @@ class Nouveaux(Base):
                            'periode de commission close modifiee sans avertissement')
 
     # ------------------------------------------------------------ remboursement et code special
-    @expectedFailure
     def test_BUG_673_remboursement_code_special_ne_change_pas_le_resume_du_jour(self):
         """Un remboursement BP n'est ni NS ni RG : un `special_code` envoye ne doit ni etre stocke ni
         modifier la ventilation CASH / CREDIT de daily_summary."""

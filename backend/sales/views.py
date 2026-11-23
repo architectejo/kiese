@@ -367,6 +367,9 @@ class InvoiceViewSet(
                 f"(taux {old_rate} -> {new_rate}).",
                 node_origin=invoice.node.code,
             )
+            # BUG-672 : même avertissement que `adjust` / ventes rétroactives (BUG-083).
+            if invoice.client_id and invoice.status == Invoice.Status.DELIVERED:
+                _warn_if_commission_period_locked(invoice, invoice.client)
         return Response(InvoiceSerializer(invoice, context=self.get_serializer_context()).data)
 
     def _expire_visible(self):
@@ -618,7 +621,7 @@ class InvoiceViewSet(
                 commission_rate='0.00',
                 is_soldee=False,
                 is_debt_repayment=True,
-                special_code=special_code,
+                special_code='',   # BUG-673 : un remboursement BP n'est ni NS ni RG
                 motif=motif,
                 node_origin=node.code,
                 receipt_number=_make_receipt_number(node.code, requested_invoice_date),
@@ -696,6 +699,11 @@ class InvoiceViewSet(
                 {'detail': 'Une vente sans client doit être réglée au comptant : versez au moins la valeur de la commande ou sélectionnez un client.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # BUG-669 : sans client, le surplus versé est rendu (comme en livraison
+        # partielle) : l'encaissement ne dépasse jamais la valeur de la commande.
+        if client is None and not is_ns and not is_rg and payment_amount > order_total_est:
+            payment_amount = Decimal(order_total_est)
 
         # Credit block applies only when a client is selected — jamais pour
         # une NS (BUG-177 : écriture de régularisation d'une commande déjà
@@ -883,6 +891,13 @@ class InvoiceViewSet(
             )
             if date_error:
                 return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
+            # BUG-668 : la livraison ne peut pas précéder la facture.
+            if requested_delivery_date < invoice.invoice_date:
+                return Response(
+                    {'detail': "La date de livraison ne peut pas précéder la date de la facture "
+                               f"({invoice.invoice_date.isoformat()})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             delivered_at_dt = _combine_date_with_now_time(requested_delivery_date, invoice.node)
 
         try:
@@ -997,6 +1012,11 @@ class InvoiceViewSet(
                     _adjust_bread_stock(invoice.node, bps[bp_id], sent=-qty)
         invoice.status = Invoice.Status.CANCELLED
         invoice.save(update_fields=['status'])
+        if invoice.client_id:
+            # BUG-665 : la BP vient d'être rétablie -> catégorie recalculée.
+            client.refresh_from_db()
+            client.refresh_category()
+            client.save(update_fields=['category'])
         log_activity(
             request.user, "Annulation Facture",
             f"Facture {invoice.receipt_number} annulée — stock et BP restitués.",
@@ -1206,7 +1226,9 @@ class InvoiceViewSet(
                     )
                 # BUG-824 : le compteur de pains livrés suit l'ajustement (signé),
                 # sauf NS (aucun pain n'a été remis). Jamais négatif.
-                if not orig_is_ns:
+                # BUG-666 : facture encore EN ATTENTE -> rien n'est livré, le compteur sera
+                # alimenté net des ajustements par `Invoice.deliver`.
+                if not orig_is_ns and original.status == Invoice.Status.DELIVERED:
                     pains_delta = adjustment_sign * sum(l.quantity for l in adjustment.lines.all())
                     if pains_delta:
                         Client.objects.filter(pk=client.pk).update(
@@ -1286,11 +1308,16 @@ class InvoiceViewSet(
             return Response({'detail': _err}, status=status.HTTP_400_BAD_REQUEST)
         # BUG-275 : date de référence d'une vente = date de LIVRAISON (jour
         # calendaire), comme bread_summary, le rapport facturier et la clôture.
-        qs = self.get_queryset().filter(delivered_at__date=target_date, status=Invoice.Status.DELIVERED)
+        # BUG-670 : le versement CONSERVÉ d'une facture « Non servi » (BUG-318/320) est un
+        # encaissement réel, daté du jour du « non servi » (commande 0 -> CREDIT négatif).
+        qs = self.get_queryset().filter(
+            Q(delivered_at__date=target_date, status=Invoice.Status.DELIVERED)
+            | Q(not_served_at__date=target_date, status=Invoice.Status.NOT_SERVED, payment_amount__gt=0)
+        )
         # Décote d'une VENTE SOLDE/CASH : jamais une créance, exclue du CREDIT
         # (cohérent avec debt_delta = 0 pour is_soldee).
         per_node = qs.values('node__code').annotate(
-            cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id'),
+            cash=Sum('payment_amount'), order_value=Sum('order_total'), count=Count('id', filter=Q(status=Invoice.Status.DELIVERED)),
             solde_cash=Sum('payment_amount', filter=Q(is_soldee=True)),
             solde_value=Sum('order_total', filter=Q(is_soldee=True)),
             # BUG-287 : une RG a une variation de BP nulle (debt_delta = 0).
@@ -1342,12 +1369,20 @@ class InvoiceViewSet(
         for n in nodes:
             cond |= Q(invoice__node=n, **delivered_on_work_date_filter(n, target_date, 'invoice__delivered_at'))
         qs = InvoiceLine.objects.filter(invoice__status='DELIVERED').filter(cond)
+        # BUG-664 : une facture d'ajustement porte la MAGNITUDE en lignes ; le signe
+        # (`adjustment_sign`) s'applique aux quantités et aux montants.
+        from django.db.models import Case, When, Value, IntegerField
+        sign = Case(
+            When(invoice__is_adjustment=True, then=F('invoice__adjustment_sign')),
+            default=Value(1), output_field=IntegerField(),
+        )
+        qs = qs.annotate(signed_qty=F('quantity') * sign, signed_fc=F('line_total') * sign)
         summary = (
             qs.values('unit_price')
-              .annotate(total_qty=Sum('quantity'), total_fc=Sum('line_total'))
+              .annotate(total_qty=Sum('signed_qty'), total_fc=Sum('signed_fc'))
               .order_by('unit_price')
         )
-        totals = qs.aggregate(grand_qty=Sum('quantity'), grand_fc=Sum('line_total'))
+        totals = qs.aggregate(grand_qty=Sum('signed_qty'), grand_fc=Sum('signed_fc'))
         return Response({
             'by_category': list(summary),
             'grand_total_qty': totals['grand_qty'] or 0,
