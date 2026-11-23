@@ -155,7 +155,6 @@ class V911_Facturiers(Base10):
             FacturierReport.objects.all().delete()
 
     # --- defauts voisins : le champ facturier est desormais stocke sans controle
-    @expectedFailure  # BUG-929
     def test_facturier_autre_noeud_refuse(self):
         """REST : facturier = utilisateur connecte, donc de la boulangerie. Un noeud C1 ne doit pas
         attribuer un rapport a un utilisateur de C2."""
@@ -166,7 +165,6 @@ class V911_Facturiers(Base10):
         self.assertTrue(r is None or r.facturier_id != etranger.pk,
                         "rapport C1 attribue a un facturier de C2")
 
-    @expectedFailure  # BUG-929
     def test_facturier_non_facturier_refuse(self):
         """Un gerant, un comptable ou un administrateur n'est pas un facturier."""
         bad = []
@@ -179,7 +177,7 @@ class V911_Facturiers(Base10):
             FacturierReport.objects.all().delete()
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-929
+    @expectedFailure  # BUG-929 (volet equipe : contredit test_meme_facturier_autre_equipe_ou_autre_jour_accepte, a arbitrer)
     def test_facturier_d_une_autre_equipe_refuse(self):
         fb = make_user('FACTURIER', self.n1, 'B')
         rec = self.rep(team='A', facturier=str(fb.pk))
@@ -187,7 +185,6 @@ class V911_Facturiers(Base10):
         r = FacturierReport.objects.filter(pk=rec['id']).first()
         self.assertTrue(r is None or r.facturier_id != fb.pk, "facturier d'equipe B sur un rapport A")
 
-    @expectedFailure  # BUG-930
     def test_facturier_inexistant_pas_stocke_comme_nul_silencieusement(self):
         """Un uuid de facturier inexistant devient NULL sans rejet : le rapport est accepte avec une
         attribution perdue (et contourne l'unicite d'un facturier reel). On attend un rejet."""
@@ -223,7 +220,6 @@ class V911_Facturiers(Base10):
         d = self.close(self.g1, {'bills_5000': 1}).json()
         self.assertEqual(Dc(d['total_entries']), Dc('5000'))
 
-    @expectedFailure  # BUG-931
     def test_rapport_pousse_sur_jour_deja_confirme_refuse(self):
         """REST : _refuse_if_closure_confirmed interdit tout rapport un jour de cloture confirmee."""
         self.report(self.n1, 'A', '10000')
@@ -258,7 +254,6 @@ class V913_Cloture(Base10):
         c = CashClosure.objects.get(pk=rec['id'])
         self.assertEqual(c.physical_cash_total, Dc(20000 + 20000 + 15000 + 4000 + 2500 + 1200 + 700 + 400))
 
-    @expectedFailure  # BUG-932
     def test_cloture_zero_billet_et_chaines_numeriques_acceptees(self):
         rec = self.clo(**{**{b: '0' for b in BILLS}, 'bills_500': '4'})
         r = self.push(self.raw1, CLO, rec)
@@ -405,7 +400,6 @@ class JourneeMixtePush(Base10):
 
 
 class V919_Double_comptage(Base10):
-    @expectedFailure  # BUG-929
     def test_facturiers_forges_ne_doublent_pas_les_ventes_de_la_vacation(self):
         """Un noeud C1 pousse 3 rapports de la meme vacation (C1, A, aujourd'hui) en attribuant chacun a
         un utilisateur quelconque : tous acceptes, la cloture somme 3 x les ventes."""

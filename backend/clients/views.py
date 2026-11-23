@@ -667,6 +667,8 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             try:
                 if isinstance(manual_amount, (bool, list, dict)):
                     raise InvalidOperation
+                if not str(manual_amount).isascii():  # BUG-915 résiduel
+                    raise InvalidOperation
                 manual_amount = Decimal(str(manual_amount))
                 if not manual_amount.is_finite() or manual_amount < 0 or manual_amount > Decimal('99999999.99'):
                     raise InvalidOperation

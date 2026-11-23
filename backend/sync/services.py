@@ -692,7 +692,13 @@ def _push_debt_movement(node, record):
         if invoice.node_id != node.pk:
             return _record_result(record_id, False, "facture d'une autre boulangerie refusée")
 
-    amount = _to_decimal(record.get('amount'))
+    # BUG-933/934 : montant obligatoire, ASCII, 2 décimales au plus (comme BUG-900).
+    if record.get('amount') in (None, ''):
+        return _record_result(record_id, False, "« amount » obligatoire")
+    try:
+        amount = _sync_decimal(record['amount'], 'amount', 2)
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
     # BUG-721 : plage du DecimalField(14, 2) — jamais de valeur qui rendrait
     # `Client.current_debt` illisible (SQLite n'applique pas la contrainte).
     if abs(amount) >= MAX_DEBT_ABS:
@@ -756,10 +762,7 @@ def _push_cash_closure(node, record):
             date=closure_date,
             total_entries=_to_decimal(record.get('total_entries')),
             total_expenses=_to_decimal(record.get('total_expenses')),
-            bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
-            bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
-            bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
-            bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
+            **_bills_kwargs(record),
             is_validated=bool(record.get('is_validated', False)),
             notes=record.get('notes', ''),
             node_origin=record.get('node_origin', bakery_code),
@@ -1593,6 +1596,14 @@ def _push_local_expense(node, record):
     return _record_result(record_id, True)
 
 
+def _bills_kwargs(record):
+    """BUG-932 : billetage en entiers (les chaînes numériques ASCII validées par
+    `_check_bills` sont converties ; absent/vide = 0)."""
+    return {n: (0 if record.get(n) in (None, '') else int(_sync_decimal(record[n], n, 0)))
+            for n in ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                      'bills_500', 'bills_200', 'bills_100', 'bills_50')}
+
+
 def _push_facturier_report(node, record):
     from treasury.models import FacturierReport
 
@@ -1695,10 +1706,7 @@ def _push_disbursement_voucher(node, record):
             voucher = DisbursementVoucher(
                 id=record_id, date=_date.fromisoformat(record['date']),
                 motif=record.get('motif', ''), beneficiary=record.get('beneficiary', ''),
-                bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
-                bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
-                bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
-                bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
+                **_bills_kwargs(record),
                 piece_number=record.get('piece_number', ''),
                 node_origin=record.get('node_origin', node.code),
             )
@@ -2312,7 +2320,30 @@ def _check_facturier_report(node, record):
     if 'team' in record or not known:
         if record.get('team') not in ('A', 'B'):
             return "« team » invalide : équipe A ou B uniquement"
-    return _check_day(node, record)  # BUG-912
+    reason = _check_day(node, record)  # BUG-912
+    if reason or known:
+        return reason
+    # BUG-929/930 : facturier = utilisateur ACTIF de rôle FACTURIER, du MÊME nœud que le
+    # rapport (l'équipe du facturier n'est pas contrôlée : test c10 « même facturier, autre équipe »).
+    bakery_code = record.get('node') or node.code
+    pushed = record.get('facturier')
+    if pushed not in (None, ''):
+        uid = _strict_uuid(pushed) if isinstance(pushed, str) else None
+        from django.contrib.auth import get_user_model
+        fact = get_user_model().objects.filter(pk=uid).first() if uid else None
+        if fact is None:
+            return "« facturier » inconnu : utilisateur introuvable"
+        if not fact.is_active or fact.role != 'FACTURIER':
+            return "« facturier » doit être un utilisateur actif de rôle facturier"
+        if fact.node is None or fact.node.code != bakery_code:
+            return "« facturier » n'appartient pas à la boulangerie du rapport"
+    # BUG-931 : jour d'une clôture confirmée figé (comme REST).
+    from treasury.models import CashClosure
+    day = _strict_date(record['date']) if record.get('date') not in (None, '') else None
+    if day is not None and CashClosure.objects.filter(
+            node__code=bakery_code, date=day, is_validated=True).exists():
+        return f"la clôture de {bakery_code} du {day} est déjà confirmée : rapport refusé"
+    return None
 
 
 def _check_client(node, record):

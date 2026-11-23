@@ -63,7 +63,6 @@ class V915Rest(Base):
             self.assertEqual(r.status_code, 400, (body, r.data))
         self.assertEqual(SocialContribution.objects.count(), 1)
 
-    @expectedFailure  # BUG-915 (reouvert : `amount` de bulk_create_month non controle)
     def test_BUG_915_residuel_bulk_create_month_amount_non_ascii(self):
         Client.objects.filter(pk=self.c1.pk).update(cotisation_sociale=D('2000.00'))
         r = api(self.g1).post(CONTRIB + 'bulk_create_month/', {'node': str(self.k1.pk), 'month': 3, 'year': 2026,
@@ -288,7 +287,6 @@ class V919DebtMovement(Base):
             self.assertFalse(DebtMovement.objects.filter(pk=rec['id']).exists(), amount)
         self.assertEqual(Client.objects.get(pk=self.own.pk).current_debt, D('0.00'))
 
-    @expectedFailure  # BUG-933
     def test_BUG_933_montant_absent_ou_null_cree_mouvement_zero_silencieux(self):
         # `_to_decimal(None)` -> 0 : un mouvement sans montant est ACCEPTED (aucun effet) au lieu d'etre refuse.
         for rec in ({'id': str(uuid.uuid4()), 'client': str(self.own.id), 'kind': 'ORDER'},
@@ -296,7 +294,6 @@ class V919DebtMovement(Base):
                     {'id': str(uuid.uuid4()), 'client': str(self.own.id), 'amount': '', 'kind': 'ORDER'}):
             self.assertEqual(push(self.n1, 'sync.DebtMovement', rec)['status'], 'REJECTED', rec)
 
-    @expectedFailure  # BUG-934
     def test_BUG_934_sous_centime_arrondi_silencieusement_ou_a_zero(self):
         # 0.004 : valide par _validate_fields (arrondi) mais le handler quantize/cree selon le champ ; la dette ne
         # doit jamais bouger d'un montant different de celui pousse (REST : 2 decimales maximum).
