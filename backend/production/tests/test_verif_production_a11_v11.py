@@ -143,7 +143,6 @@ class V11InvoiceLineChain(V11Base):
         self.assertIn(r[0], ('ACCEPTED', 'REJECTED'))
         self.assertEqual(InvoiceLine.objects.filter(invoice_id=i1['id']).count(), 1 if r[0] == 'ACCEPTED' else 0)
 
-    @expectedFailure
     def test_BUG_951_reference_facture_malformee_ne_modifie_pas_une_ligne_existante(self):
         """BUG-955 : `invoice` present mais non UUID + id d'une ligne existante du MEME noeud -> la ligne est
         retrouvee par l'id seul (invoice_uuid None) et sa quantite ECRASEE, ACCEPTED, alors que la facture
@@ -253,7 +252,6 @@ class V11SessionUpdate(V11Base):
             self.assertEqual(st[0], exp, (val, st))
         self.assertEqual(ProductionSession.objects.get(pk=s['id']).sac_value_fc_used, 150000)
 
-    @expectedFailure
     def test_BUG_952_valeur_sac_decimale_en_chaine_ou_flottant_entier(self):
         """BUG-956 : `sac_value_fc_used` = '150000.0' (chaine) ou 150000.0 (flottant JSON entier) passe les
         controles (valeur entiere) mais `int(raw_sac)` (fournee ouverte) leve ValueError sur la chaine, et a la
@@ -300,7 +298,6 @@ class V11SessionUpdate(V11Base):
         self.post(self.a1, dict(old, batch_id=uid()))   # perime avec nouvel id : ecrase (dernier ecrivain)
         self.assertEqual(ProductionSession.objects.get(pk=s['id']).flour_sacks_used, Dc('2.00'))
 
-    @expectedFailure
     def test_BUG_953_valeur_sac_zero_conservee_a_la_creation(self):
         """BUG-957 : `sac_value_fc_used=0` a la creation devient 200000 (`record.get(...) or 200000`) alors que la
         mise a jour d'une fournee ouverte accepte 0 : valeur theorique differente selon le chemin. Attendu :
@@ -476,7 +473,6 @@ class V11ThreePostCycle(V11Base):
                 expected = (snap, snap2)
             self.assertEqual((snap, snap2), expected, perm)
 
-    @expectedFailure
     def test_BUG_954_transfert_envoi_direct_termine_hors_ligne_est_synchronisable(self):
         """BUG-958. Un transfert cree puis avance (envoi direct : statut deja RESPONDED, ou confirme) avant la premiere
         synchronisation : le poste n'exporte que son etat courant. La creation cloud n'accepte que PENDING."""

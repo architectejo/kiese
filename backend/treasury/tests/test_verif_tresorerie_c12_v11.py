@@ -160,7 +160,6 @@ class V935_936(Base12):
         self.assertFalse(self.has(FacturierReport, bad))
 
     # ---- defaut voisin : utilisateurs HQ sans boulangerie (cas reel de REST)
-    @expectedFailure  # BUG-963
     def test_REST_rapport_cree_par_comptable_sans_noeud_puis_push(self):
         """REST : COMPTABLE/DIRECTION sans boulangerie cree un rapport (201, facturier = lui-meme).
         Au push avec ce facturier, le contrôle « meme noeud » le refuse (« n'appartient pas »)."""
@@ -271,7 +270,6 @@ class V12_JourneeComplete(Base12):
         self.assertEqual(Dc(str(inc['operational_expenses'])), Dc('17500.50'))
         self.assertEqual(Dc(str(inc['previous_year']['operational_expenses'])), Dc('3000'))
 
-    @expectedFailure  # BUG-959
     def test_deux_facturiers_meme_equipe_meme_jour_via_sync_now(self):
         """REST autorise deux facturiers distincts dans une meme equipe ; le lot sortant de sync_now
         n'exporte pas `facturier` : le 2e rapport est refuse comme doublon et ses ventes cash sont
@@ -346,7 +344,6 @@ class V12_AjoutsPartieA(Base12):
         self._transfer(100, None, status='PENDING')
         self.assertEqual(self.valider(d['id']).status_code, 200)
 
-    @expectedFailure  # BUG-960
     def test_675_cloture_poussee_validee_avec_ecart_de_transfert_non_resolu(self):
         """REST refuse la confirmation (BUG-277) ; un lot de sync portant is_validated=True inscrit
         la cloture au livre direction malgre l'ecart de transfert entrant non resolu."""
@@ -389,7 +386,6 @@ class V12_AjoutsPartieA(Base12):
         self.assertEqual(Dc(c['total_expenses']), Dc('2500'))
 
     # ---- defauts voisins : push LocalExpense
-    @expectedFailure  # BUG-961
     def test_depense_poussee_sur_jour_de_cloture_confirmee(self):
         """REST (BUG-813) refuse toute depense sur un jour dont la cloture est confirmee ; le push
         l'accepte : net/ecart confirmes par le comptable deviennent perimes (dont le livre)."""
@@ -401,7 +397,6 @@ class V12_AjoutsPartieA(Base12):
         self.push(self.raw1, EXP, rec)
         self.assertFalse(LocalExpense.objects.filter(pk=rec['id']).exists())
 
-    @expectedFailure  # BUG-962
     def test_depense_poussee_date_future_et_invalide_refusee(self):
         bad = []
         for dte in (str(today() + timedelta(days=3)), '2999-01-01', '2026-02-30', '１２-01-01', 20261101):

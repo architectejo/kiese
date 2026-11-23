@@ -362,6 +362,9 @@ def build_outbound_payload(node_code):
     facturier_reports = [
         {
             'id': str(r.id), 'node': r.node.code, 'team': r.team, 'date': r.date.isoformat(),
+            # BUG-959 : facturier exporté (deux facturiers possibles par équipe/jour) ;
+            # un cloud ancien l'ignore, un poste ancien sans la clé reste accepté.
+            'facturier': str(r.facturier_id) if r.facturier_id else None,
             'total_cash_sales': _dec(r.total_cash_sales), 'total_credit_sales': _dec(r.total_credit_sales),
             'theoretical_cash': _dec(r.theoretical_cash), 'is_validated': r.is_validated,
             'validated_at': r.validated_at.isoformat() if r.validated_at else None,

@@ -5,6 +5,7 @@ indépendamment du transport HTTP (SYNC.md §2.2, §3).
 
 import logging
 import random
+import re
 import threading
 import time
 from datetime import date as _date
@@ -647,7 +648,8 @@ def _resolve_invoice_line(record_id, record):
     if line is None:
         return None     # id libre : nouvelle ligne (créée avec cet id)
     if invoice_uuid is None:
-        return line
+        # BUG-955 : repli par l'id seul réservé à l'ancien payload SANS clé `invoice`.
+        return line if 'invoice' not in record else None
     if line.invoice_id == invoice_uuid and (bp is None or line.bread_price_id == bp.pk):
         return line
     # id pris par la ligne d'une autre facture, ou d'une autre catégorie de la
@@ -855,6 +857,15 @@ def _push_cash_closure(node, record):
         closure_date = _strict_date(record.get('date'))
         if closure_date is None:
             return _record_result(record_id, False, "date invalide (AAAA-MM-JJ attendu)")
+        # BUG-960 : comme REST (BUG-037/277), pas de clôture confirmée tant qu'un transfert
+        # entrant de la boulangerie présente un écart non résolu.
+        if record.get('is_validated'):
+            from treasury.views import _unresolved_incoming_transfer_gap
+            gap = _unresolved_incoming_transfer_gap(bakery)
+            if gap:
+                return _record_result(
+                    record_id, False,
+                    f"clôture confirmée refusée : transfert entrant en écart non résolu ({gap})")
 
         closure = CashClosure(
             id=record_id,
@@ -875,6 +886,12 @@ def _push_cash_closure(node, record):
         return _record_result(record_id, False, "clôture d'une autre boulangerie refusée")
 
     if existing.is_validated and not existing.cashbook_entries.exists():
+        from treasury.views import _unresolved_incoming_transfer_gap
+        gap = _unresolved_incoming_transfer_gap(existing.node)
+        if gap:  # BUG-960 : même blocage que push_to_cashbook (REST)
+            return _record_result(
+                record_id, False,
+                f"versement au livre refusé : transfert entrant en écart non résolu ({gap})")
         try:
             # Le Livre de Caisse Direction n'est jamais écrit par un nœud :
             # c'est le Cloud qui, ici, appelle la même fonction que l'action
@@ -918,8 +935,10 @@ def _push_production_session(node, record):
                 if new_flour != existing.flour_sacks_used:
                     upd['flour_sacks_used'] = new_flour
             raw_sac = record.get('sac_value_fc_used')
-            if raw_sac not in (None, '') and int(raw_sac) != existing.sac_value_fc_used:
-                upd['sac_value_fc_used'] = int(raw_sac)
+            if raw_sac not in (None, ''):
+                new_sac = _sync_int(raw_sac, 'sac_value_fc_used', 0, 100_000_000)
+                if new_sac != existing.sac_value_fc_used:
+                    upd['sac_value_fc_used'] = new_sac
             if isinstance(record.get('notes'), str) and record['notes'] != existing.notes:
                 upd['notes'] = record['notes']
             if upd:
@@ -960,7 +979,9 @@ def _push_production_session(node, record):
         # BUG-924 : les totaux (pains, FC, rendement, écart) ne sont JAMAIS copiés
         # du poste : ils sont recalculés depuis les lignes (compute_totals, comme
         # la voie REST) après la sauvegarde, puis à chaque ligne poussée.
-        sac_value_fc_used=record.get('sac_value_fc_used') or 200000,
+        # BUG-956/957 : décimal entier ('150000.0') normalisé ; 0 conservé (comme la mise à jour).
+        sac_value_fc_used=(200000 if record.get('sac_value_fc_used') in (None, '')
+                           else _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)),
         is_closed=bool(record.get('is_closed', False)),
         closed_at=record.get('closed_at'),
         closure_summary=record.get('closure_summary'),
@@ -1579,10 +1600,18 @@ def _push_bread_transfer(node, record):
 
     # BUG-891 : un transfert naît toujours « en attente » ; les autres états
     # s'obtiennent par la machine d'états (BUG-888), jamais à la création.
-    initial_status = record.get('transfer_status', BreadTransfer.TransferStatus.PENDING)
-    if initial_status != BreadTransfer.TransferStatus.PENDING:
+    # BUG-958 : seul l'envoi direct de l'émettrice (transfers/send/) naît
+    # « répondu » (quantity_sent renseignée, aucune quantité reçue) ; le poste
+    # n'exporte que son état courant. CONFIRMED/DISPUTED/CANCELLED jamais à la création.
+    TS = BreadTransfer.TransferStatus
+    initial_status = record.get('transfer_status') or TS.PENDING
+    direct_send = (
+        initial_status == TS.RESPONDED and node.pk == from_bakery.pk
+        and record.get('quantity_received') in (None, ''))
+    if initial_status != TS.PENDING and not direct_send:
         return _record_result(
-            record_id, False, "un transfert est créé au statut « en attente » uniquement")
+            record_id, False,
+            "un transfert est créé au statut « en attente » (ou « répondu » par l'émettrice) uniquement")
     if record.get('quantity_received') is not None:
         if _sync_bounded_qty(record['quantity_received']) is None:
             return _record_result(record_id, False, "quantité reçue invalide")
@@ -1596,7 +1625,7 @@ def _push_bread_transfer(node, record):
         id=record_id, from_node=from_bakery, to_node=to_bakery, bread_price=bread_price,
         quantity_sent=record.get('quantity_sent'),
         quantity_received=record.get('quantity_received'),
-        transfer_status=record.get('transfer_status', BreadTransfer.TransferStatus.PENDING),
+        transfer_status=initial_status,
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', to_code or node.code),
     )
@@ -2164,6 +2193,9 @@ def _validate_fields(label, record):
             if isinstance(value, float) and (value != value or value in (float('inf'), float('-inf'))
                                              or value != int(value)):
                 return bad
+            # BUG-956 : '150000.0' (décimal entier en chaîne) = 150000 ; '1e3' reste refusé.
+            if isinstance(value, str) and re.fullmatch(r'\s*[+-]?\d+\.0+\s*', value):
+                value = value.strip().split('.')[0]
         elif itype == 'BooleanField':
             if not isinstance(value, (bool, int, str)):
                 return bad
@@ -2458,7 +2490,9 @@ def _check_facturier_report(node, record):
         # BUG-936 : un facturier désactivé depuis la saisie hors ligne reste accepté.
         if fact.role not in ('FACTURIER', 'GERANT', 'COMPTABLE', 'DIRECTION', 'ADMIN'):
             return "« facturier » doit être un utilisateur de rôle facturier, gérant ou supérieur"
-        if fact.node is None or fact.node.code != bakery_code:
+        # BUG-963 : les rôles sans rattachement (COMPTABLE/DIRECTION/ADMIN) créent des
+        # rapports pour toute boulangerie en REST : pas de contrôle de nœud pour eux.
+        if not fact.can_access_all_nodes and (fact.node is None or fact.node.code != bakery_code):
             return "« facturier » n'appartient pas à la boulangerie du rapport"
     # BUG-931 : jour d'une clôture confirmée figé (comme REST).
     from treasury.models import CashClosure
@@ -2466,6 +2500,24 @@ def _check_facturier_report(node, record):
     if day is not None and CashClosure.objects.filter(
             node__code=bakery_code, date=day, is_validated=True).exists():
         return f"la clôture de {bakery_code} du {day} est déjà confirmée : rapport refusé"
+    return None
+
+
+def _check_local_expense(node, record):
+    # BUG-962 : date valide et non future (REST BUG-086/812) avec motif précis.
+    reason = _check_day(node, record)
+    if reason:
+        return reason
+    # BUG-961 : jour d'une clôture confirmée figé (REST _refuse_if_closure_confirmed).
+    from treasury.models import CashClosure, LocalExpense
+    if record.get('id') not in (None, '') and _strict_uuid(record['id']) \
+            and LocalExpense.objects.filter(pk=record['id']).exists():
+        return None  # rejeu : le handler reste idempotent
+    day = _strict_date(record['date']) if record.get('date') not in (None, '') else None
+    bakery_code = record.get('node') or node.code
+    if day is not None and CashClosure.objects.filter(
+            node__code=bakery_code, date=day, is_validated=True).exists():
+        return f"la clôture de {bakery_code} du {day} est déjà confirmée : dépense refusée"
     return None
 
 
@@ -2577,6 +2629,7 @@ _STRICT_CHECKS = {
     'clients.SocialDistribution': _check_social_distribution,
     'clients.SocialDistributionLine': _check_social_distribution_line,
     'treasury.FacturierReport': _check_facturier_report,
+    'treasury.LocalExpense': _check_local_expense,
     'treasury.CashClosure': _check_cash_closure,
     'treasury.DisbursementVoucher': _check_disbursement_voucher,
     'production.ProductionSession': _check_production_session,
