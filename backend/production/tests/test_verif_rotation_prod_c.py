@@ -24,7 +24,7 @@ from core.testing import make_bread_price, make_client, make_node, make_user
 from production import views as pviews
 from production.models import (
     BreadDisposal, BreadStock, DailyBreadStockSnapshot, DailyOpeningConfirmation,
-    DailyTeamAssignment, ProductionSession,
+    DailyTeamAssignment, ProductionSession, _adjust_bread_stock,
 )
 
 J = date(2026, 11, 12)
@@ -391,6 +391,7 @@ class Bug193Tests(_Base):
                             format='json')
             self.assertEqual(c.status_code, 201, c.data)
             tid = c.data['id']
+            _adjust_bread_stock(other, self.bp300, produced=qty)  # BUG-652 : stock émettrice requis
             self.assertEqual(a2.post(f'{TRANSFERS}{tid}/respond_to_request/', {
                 'approved': True, 'lines': [{'bread_price': self.bp300.pk, 'quantity_sent': qty}]},
                 format='json').status_code, 200)
@@ -432,8 +433,8 @@ class Bug193Tests(_Base):
         with _now(14, 0, d=J1):
             r1 = self.g.get(CLOSURE, {'date': str(J1)})
             r0 = self.g.get(CLOSURE, {'date': str(J)})
-        # appro reçu 15 x 300 = 4500 dans le total du jour J1 uniquement
-        self.assertEqual(Decimal(r1.data['totals']['total_du_jour_fc']), Decimal('4500.00'))
+        # appro reçu 15 x 300 = 4500 RETRANCHÉ du total du jour J1 uniquement (BUG-675)
+        self.assertEqual(Decimal(r1.data['totals']['total_du_jour_fc']), Decimal('-4500.00'))
         self.assertEqual(Decimal(r0.data['totals']['total_du_jour_fc']), Decimal('0.00'))
 
 

@@ -111,6 +111,8 @@ class RichScenarioClosureTests(TestCase):
             'from_node': self.other.pk,
             'lines': [{'bread_price': self.bp300.pk, 'quantity_sent': 15}]}, format='json')
         self.assertEqual(t.status_code, 201, t.data)
+        from production.models import _adjust_bread_stock
+        _adjust_bread_stock(self.other, self.bp300, produced=15)  # BUG-652 : stock émettrice requis
         self.assertEqual(self.og.post(f"/api/production/transfers/{t.data['id']}/respond_to_request/", {
             'approved': True, 'lines': [{'bread_price': self.bp300.pk, 'quantity_sent': 15}]}, format='json').status_code, 200)
         c = self.g.post(f"/api/production/transfers/{t.data['id']}/confirm_reception/", {
@@ -121,6 +123,7 @@ class RichScenarioClosureTests(TestCase):
             'from_node': self.node.pk,
             'lines': [{'bread_price': self.bp500.pk, 'quantity_sent': 12}]}, format='json')
         self.assertEqual(t2.status_code, 201, t2.data)
+        _adjust_bread_stock(self.node, self.bp500, produced=12)  # BUG-652 : stock émettrice requis
         r2 = self.g.post(f"/api/production/transfers/{t2.data['id']}/respond_to_request/", {
             'approved': True, 'lines': [{'bread_price': self.bp500.pk, 'quantity_sent': 12}]}, format='json')
         self.assertEqual(r2.status_code, 200, r2.data)
@@ -159,7 +162,8 @@ class RichScenarioClosureTests(TestCase):
         self.assertEqual(c5['produit']['quantity'], 50)
 
         # --- FACTURE MVM INTERNE (classeur : somme signée des rubriques)
-        mvm3 = (D(30) * 300 + D(-15 + 0) * 300 + 0 + D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
+        # BUG-675 : appro recu (-D(15)*300) retranche
+        mvm3 = (D(30) * 300 + D(-15 + 0) * 300 + 0 - D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
         mvm5 = (D(-2) * 500 + D(-8) * 500 + D(12) * 500 + 0 - D(1000) + D(2500) + D(1500) + D(1200) + 0)
         self.assertEqual(c3['facture_mvm_interne']['fc'], f'{mvm3:.2f}')
         self.assertEqual(c5['facture_mvm_interne']['fc'], f'{mvm5:.2f}')

@@ -21,7 +21,7 @@ from core.models import SystemNotification
 from core.testing import make_bread_price, make_client, make_node, make_user
 from production.models import (
     BreadStock, DailyBreadStockSnapshot, DailyOpeningConfirmation, DailyTeamAssignment,
-    ProductionSession, ProductionSessionLine,
+    ProductionSession, ProductionSessionLine, _adjust_bread_stock,
 )
 from sales.models import Invoice
 
@@ -566,6 +566,7 @@ class ReportAttributionTests(_Base):
             }, format='json')
             self.assertEqual(c.status_code, 201, c.data)
             tid = c.data['id']
+            _adjust_bread_stock(other, self.bp300, produced=15)  # BUG-652 : stock émettrice requis
             r = a2.post(f'/api/production/transfers/{tid}/respond_to_request/', {
                 'approved': True, 'lines': [{'bread_price': self.bp300.pk, 'quantity_sent': 15}],
             }, format='json')

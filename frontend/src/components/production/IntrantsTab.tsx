@@ -25,9 +25,11 @@ export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, set
   const role = user?.role;
   const isGlobalViewer = role === 'ADMIN' || role === 'DIRECTION' || role === 'COMPTABLE';
   const isGerant = role === 'GERANT';
+  // BUG-656 : la direction ne voit que la vue globale (orientation, approvisionnement du stock
+  // direction, inventaire physique par boulangerie), sans la section « Stocks Consommables (§3.2) ».
+  if (isGlobalViewer) return <GlobalConsumablesSection role={role} />;
   return (
     <>
-      {isGlobalViewer && <GlobalConsumablesSection role={role} />}
         <div className="glass-card" style={{ padding: '14px', minWidth: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h2 style={{ fontSize: '0.88rem', fontWeight: 800 }}>

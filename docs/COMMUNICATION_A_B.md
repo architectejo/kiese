@@ -659,3 +659,33 @@ Chaque ticket a son test `@expectedFailure` dans `backend/finance/tests/test_aud
 **Autres points ouverts de A** : `ClotureOperations.tsx` (84 Ko) à découper (lot dédié, BUG-385/533 déjà faits pour Production/Sales/Treasury) ; rendu 360/768/1440 px et e2e non rejoués (poste avec navigateur) ; décisions de #22 à confirmer par le client (COMPTABLE sans « Versement », dépenses locales en « clôture », envoi direct sans annulation, deux sélecteurs de succursale côté siège) ; `Ets_KIESE_Module_Patisserie.pdf` non suivi (laisser).
 
 **Statut :** INFO
+
+### #33-B — 2026-11-23 — B → A — Reprise de dev-a : plan de répartition A / B
+
+**dev-a reprend du service.** Le plan détaillé est dans `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` (répartition, tickets, contrôle global, règles communes). À lire avant toute action.
+
+**Premier geste de dev-a** : `git fetch origin && git merge origin/dev-b`. `dev-b` contient déjà tout le travail de `dev-a` (dernier push) et de `dev-c`.
+
+**Répartition en une ligne** : dev-a = production, ventes, trésorerie, blockchain, finance (backend et frontend) + e2e + rendu 360/768/1440 px ; dev-b = clients, commissions, core, sync, chat, desktop, documentation de livraison, intégration et PR.
+
+**Numérotation** : dev-a BUG-1000 et suivants ; dev-b BUG-1100 et suivants. Relire le registre avant d'écrire un numéro.
+
+**Fait depuis #32-A** (tout est dans `dev-b`) : tickets de production BUG-652, 653, 654, 626, 680 à 683, 686 à 688 corrigés et vérifiés ; ventes BUG-610, 611, 613, 640 à 650 et 664 à 673 vérifiés (sauf BUG-671, à clarifier), BUG-890 corrigé ; demande 4 de `remarque.md` faite (BUG-674 à 677, frontend compris) ; demande 3 faite côté backend et frontend (BUG-973 : heure de clôture, blocage des ventes jusqu'à validation par la direction, interrupteur désactivé par défaut par boulangerie) ; synchronisation durcie (BUG-901 à 984 : contrôles stricts du push, transferts descendus et exportés pour les deux boulangeries, stock miroir par delta, état des clôtures au pull). La synchronisation des modèles de production, ventes et trésorerie est désormais couverte par les tests.
+
+**Reste pour A** : BUG-660 à 663 (ventes, mineurs), nettoyage des statuts périmés du registre pour BUG-810 à 819, vérification visuelle des frontends BUG-655/656/674 à 677/685/973, découpage de `ClotureOperations.tsx`, puis contrôle global (auditeur comptable, e2e `--repeat-each=5`, charge, séries complètes).
+
+**À clarifier avec le client** (aucun code tant que non tranché) : BUG-625, 671, 684, 937, 953, 973 (5 points : ventes de l'après-validation, clôture non validée la veille, ventes rétroactives et remboursements, une ou deux heures, restes du jour en stock de départ), signe des transferts BUG-675 sur les chiffres d'août, valorisation par repli BUG-676, catégories « direction » dans le livre de caisse BUG-677.
+
+**Statut :** INFO
+
+### #34-B — 2026-11-23 — B → A — Message direct pour ton redémarrage (à lire en premier)
+
+Salut dev-a, tu reprends du service. Trois choses avant de commencer :
+
+1. **Premier geste** : `git fetch origin && git merge origin/dev-b`. `dev-b` contient déjà ton dernier push et celui de `dev-c`. Puis lis `docs/PLAN_REPRISE_DEV_A_ET_DEV_B_2026-11-23.md` (ta part : production, ventes, trésorerie, blockchain, finance, e2e, rendu 360/768/1440 px) et le message #33-B ci-dessus.
+2. **Registre** : trois testeurs (cycle 15 : production, trésorerie, clients) écrivent encore dans `docs/qa/REGISTRE_BUGS.md` et dans leurs fichiers de tests, et je pousse leurs résultats au fil de l'eau. Fais des **éditions ciblées** du registre (jamais une réécriture complète du fichier), relis le numéro libre juste avant d'écrire, et refais `git merge origin/dev-b` avant chaque série de tests ou chaque push. Tes numéros de tickets : BUG-1000 et suivants (les miens : BUG-1100 et suivants).
+3. **Fichiers à ne pas modifier** : `backend/sync/services.py`, `backend/sync/management/commands/sync_now.py`, `backend/sync/views.py` (j'y corrige encore la synchronisation). Si tu trouves un défaut de synchronisation sur un modèle de production, ventes ou trésorerie, **ouvre un ticket** et je le corrige. Pas de `git stash` quand plusieurs agents travaillent.
+
+Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cycles sans nouveau ticket, puis écris « partie A terminée » ici. Les points À CLARIFIER ne sont pas codés, tu les listes dans ton message de fin pour le client.
+
+**Statut :** INFO

@@ -3,7 +3,8 @@ import { FiPackage } from 'react-icons/fi';
 import type { ProductionSession, BreadDisposal, BakeryNode, BreadPrice } from '@/api/services';
 import type { UserProfile } from '@/store/authStore';
 import { ReconciliationPanel } from './ReconciliationPanel';
-import { DISPOSAL_CREATE_LABELS, DISPOSAL_COLORS } from './productionHelpers';
+import { DISPOSAL_CREATE_LABELS } from './productionHelpers';
+import { DisposalJournal } from './DisposalJournal';
 
 export interface ReconciliationTabProps {
   sessions: ProductionSession[];
@@ -103,39 +104,7 @@ export const ReconciliationTab: React.FC<ReconciliationTabProps> = ({ sessions, 
           </div>
 
           {/* DISPOSAL LOG */}
-          <div>
-            <h3 style={{ fontSize: '0.75rem', fontWeight: 700, marginBottom: '8px', color: 'hsl(var(--text-secondary))' }}>Journal des Sorties Non Valorisées</h3>
-            {disposals.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '20px', color: 'hsl(var(--text-muted))', fontSize: '0.7rem' }}>Aucune sortie enregistrée.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="premium-table">
-                  <thead>
-                    <tr style={{ fontSize: '0.6rem', textTransform: 'uppercase' }}>
-                      <th>Type</th><th>Catégorie</th><th style={{ textAlign: 'right' }}>Qté</th><th style={{ textAlign: 'right' }}>Valeur FC</th><th>Date</th>
-                    </tr>
-                  </thead>
-                  <tbody style={{ fontSize: '0.68rem' }}>
-                    {disposals.map(d => (
-                      <tr key={d.id}>
-                        <td>
-                          <span style={{ fontSize: '0.58rem', fontWeight: 700, color: `hsl(${DISPOSAL_COLORS[d.disposal_type]})` }}>
-                            {d.disposal_type.replace('_', ' ')}
-                          </span>
-                        </td>
-                        <td style={{ color: 'hsl(var(--text-secondary))' }}>{d.bread_price_display || '—'}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 800 }}>{d.quantity}</td>
-                        <td style={{ textAlign: 'right', color: parseFloat(d.total_value) > 0 ? 'hsl(var(--color-success))' : 'hsl(var(--text-muted))' }}>
-                          {parseFloat(d.total_value) > 0 ? `${parseFloat(d.total_value).toLocaleString('fr-FR')}` : '—'}
-                        </td>
-                        <td style={{ color: 'hsl(var(--text-muted))', fontSize: '0.6rem' }}>{d.created_at?.split('T')[0]}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <DisposalJournal defaultDisposals={disposals} workDate={workDate} effectiveNode={effectiveNode} />
         </div>
       </div>
   );

@@ -27,7 +27,13 @@ export const formatFC = (value: string | number | null | undefined): string => {
   return Math.round(n).toLocaleString('fr-FR') + ' FC';
 };
 
-export const formatQty = (n: number | null | undefined): string => {
+const REPARTITION_BASE_LABELS: Record<'produit' | 'vendu_jour' | 'facture', string> = {
+  produit: 'sur la production',
+  vendu_jour: 'sur les ventes du jour',
+  facture: 'sur les pains facturés',
+};
+
+export const formatQty =(n: number | null | undefined): string => {
   if (n === null || n === undefined) return '—';
   return n.toLocaleString('fr-FR');
 };
@@ -247,6 +253,11 @@ export const ClotureJournaliere: React.FC = () => {
                 <option value="VALEUR">Répartition par valeur (FC)</option>
               </select>
             </div>
+            {totals.repartition_base && (
+              <p style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', margin: '0 0 8px' }}>
+                Pourcentages calculés {REPARTITION_BASE_LABELS[totals.repartition_base]}.
+              </p>
+            )}
             <div style={{ overflowX: 'auto' }}>
               <table className="premium-table">
                 <thead>
@@ -330,8 +341,10 @@ export const ClotureJournaliere: React.FC = () => {
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_effectue.fc)}</div>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        {formatQty(cat.appro_recu.quantity)}
-                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.appro_recu.fc)}</div>
+                        {cat.appro_recu.quantity > 0 ? `−${formatQty(cat.appro_recu.quantity)}` : formatQty(cat.appro_recu.quantity)}
+                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>
+                          {Number(cat.appro_recu.fc) > 0 ? `−${formatFC(cat.appro_recu.fc)}` : formatFC(cat.appro_recu.fc)}
+                        </div>
                       </td>
                       <td style={{ textAlign: 'right' }} title={NON_SERVI_INCLUT_HELP}>
                         {formatFC(nonServiCumul(cat).fc)}
@@ -376,18 +389,8 @@ export const ClotureJournaliere: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            <ul style={{ fontSize: '0.66rem', color: 'hsl(var(--text-secondary))', marginTop: '10px', paddingLeft: '16px', lineHeight: 1.5 }}>
-              <li><strong>Régularisation</strong> : {REGULARISATION_HELP.replace(/^Régularisation : /, '')}</li>
-              <li><strong>Non Servi</strong> : {NON_SERVI_HELP.replace(/^Non Servi : /, '')}</li>
-            </ul>
-            <p style={{ fontSize: '0.7rem', fontWeight: 700, marginTop: '8px' }} title={NON_SERVI_INCLUT_HELP}>
+            <p style={{ fontSize: '0.7rem', fontWeight: 700, marginTop: '10px' }} title={NON_SERVI_INCLUT_HELP}>
               Total Non servi (code NS + factures déclarées Non servi) : {formatFC(nonServiTotalFc(report))}
-              <span style={{ fontWeight: 400, color: 'hsl(var(--text-secondary))' }}> — {NON_SERVI_INCLUT_HELP}</span>
-            </p>
-            <p style={{ fontSize: '0.62rem', color: 'hsl(var(--text-muted))', marginTop: '8px' }}>
-              Excédent et manquant pains ne sont pas encore décomposés par catégorie dans le modèle actuel
-              (uniquement disponibles au niveau global via « Écart / Production » ci-dessus) — voir
-              docs/qa/rapports/dev-backend-2026-11-02-bug120-corrections-client.md.
             </p>
           </div>
         </>

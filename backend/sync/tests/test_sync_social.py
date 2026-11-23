@@ -140,7 +140,7 @@ class SocialDistributionAndLineSyncTests(TestCase):
         self.assertTrue(SocialDistribution.objects.filter(pk=dist_id).exists())
         line = SocialDistributionLine.objects.get(pk=line_id)
         self.assertEqual(line.distribution_id, uuid.UUID(dist_id))
-        self.assertEqual(line.total_payer, Decimal('1400.00'))
+        self.assertEqual(line.total_payer, Decimal('7400.00'))  # BUG-918 : recalcule = total_social + remise + merite
 
     def test_line_referencing_unknown_distribution_is_rejected_then_accepted_after_retry(self):
         dist_id = str(uuid.uuid4())
@@ -218,7 +218,7 @@ class SocialDistributionAndLineSyncTests(TestCase):
 
         line = SocialDistributionLine.objects.get(pk=line_id)
         self.assertEqual(line.merite, Decimal('500.00'))
-        self.assertEqual(line.total_payer, Decimal('1900.00'))
+        self.assertEqual(line.total_payer, Decimal('7900.00'))  # BUG-918 : recalcule cote serveur
         self.assertEqual(SocialDistributionLine.objects.filter(pk=line_id).count(), 1)
 
 

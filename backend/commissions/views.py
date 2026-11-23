@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param, get_json_object
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -43,6 +43,27 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         if not user.can_access_all_nodes:
             qs = qs.filter(node=user.node)
         return qs
+
+    def _refuse_identity_change(self, request):
+        # BUG-893 : month/year/node d'une période clôturée ou portant des
+        # commissions sont figés (l'historique de paie ne se déplace pas).
+        period = self.get_object()
+        if not (period.is_closed or ClientCommission.objects.filter(period=period).exists()):
+            return None
+        data = request.data if hasattr(request.data, 'get') else {}
+        for name, current in (('month', period.month), ('year', period.year), ('node', period.node_id)):
+            if name in data and str(data.get(name)) != str(current):
+                return Response(
+                    {'detail': "Le mois, l'année et la boulangerie d'une période clôturée "
+                               "ou contenant des commissions ne sont pas modifiables."},
+                    status=status.HTTP_400_BAD_REQUEST)
+        return None
+
+    def update(self, request, *args, **kwargs):
+        refused = self._refuse_identity_change(request)
+        if refused is not None:
+            return refused
+        return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
         # BUG-263 : l'historique de paie d'une période clôturée (ou contenant
@@ -121,15 +142,18 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         Deduction fields (debt/social/prints/other) default to 0 and stay
         editable afterwards — they are not derivable from invoice data alone.
         """
-        node_id = request.data.get('node')
-        month   = request.data.get('month')
-        year    = request.data.get('year')
+        data    = get_json_object(request)  # BUG-762
+        node_id = data.get('node')
+        month   = data.get('month')
+        year    = data.get('year')
         if node_id in (None, '') or month in (None, '') or year in (None, ''):
             return Response({'detail': '`node`, `month` et `year` sont requis.'}, status=status.HTTP_400_BAD_REQUEST)
         # BUG-736 : validation stricte (jamais de 500 sur paramètres invalides).
         node_id = parse_node_param(node_id)
         try:
             if isinstance(month, (bool, list, dict)) or isinstance(year, (bool, list, dict)):
+                raise ValueError
+            if not (str(month).isascii() and str(year).isascii()):  # BUG-915
                 raise ValueError
             month = int(str(month).strip())
             year = int(str(year).strip())
@@ -327,6 +351,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
         return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
+        from rest_framework.exceptions import ValidationError
+        period = serializer.validated_data.get('period')
+        if period is not None and period.is_closed:  # BUG-889 (gel BUG-263)
+            raise ValidationError({'detail': 'Période clôturée : création impossible.'})
         config = Config.get_instance()
         commission = serializer.save(
             node_origin=self.request.user.node.code if self.request.user.node else 'CLOUD',
@@ -337,9 +365,16 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
+        log_activity(  # BUG-944
+            self.request.user, "Création Commission",
+            f"Commission de {commission.client.full_name} ({commission.period}) créée : "
+            f"net à payer {commission.net_payable} FC.",
+            node_origin=commission.period.node.code,
+        )
 
     def perform_update(self, serializer):
         config = Config.get_instance()
+        old_net = serializer.instance.net_payable
         commission = serializer.save()
         commission.compute(float(config.annual_bonus_rate))
         commission.save(update_fields=[
@@ -347,6 +382,21 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             'deduction_carte', 'deduction_remise', 'total_deductions', 'carried_debt_in',
             'net_ordi', 'net_carte', 'net_payable',
         ])
+        log_activity(  # BUG-944
+            self.request.user, "Modification Commission",
+            f"Commission de {commission.client.full_name} ({commission.period}) modifiée : "
+            f"net à payer {old_net} -> {commission.net_payable} FC.",
+            node_origin=commission.period.node.code,
+        )
+
+    def perform_destroy(self, instance):
+        label = f"{instance.client.full_name} ({instance.period}) — net à payer {instance.net_payable} FC"
+        node_code = instance.period.node.code
+        instance.delete()
+        log_activity(  # BUG-944
+            self.request.user, "Suppression Commission",
+            f"Commission de {label} supprimée.", node_origin=node_code,
+        )
 
     @action(detail=False, methods=['get'], permission_classes=[IsGerant])
     def summary(self, request):
@@ -371,6 +421,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
 
     @action(detail=True, methods=['post'], permission_classes=[IsDirection])
     def mark_paid(self, request, pk=None):
+        data = get_json_object(request)  # BUG-762
         with transaction.atomic():
             commission = self._get_locked_object()
             if commission.is_paid:
@@ -380,7 +431,7 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                 return Response(
                     {'detail': 'Net à payer négatif : paiement impossible, le solde est reporté comme dette sur la période suivante.'},
                     status=status.HTTP_400_BAD_REQUEST)
-            paid_by = request.data.get('paid_by', request.user.get_full_name())
+            paid_by = data.get('paid_by', request.user.get_full_name())
             # Mise à jour conditionnelle : garde-fou même sans verrou de ligne (SQLite).
             rows = ClientCommission.objects.filter(pk=commission.pk, is_paid=False).update(
                 is_paid=True, paid_at=timezone.now(), paid_by=paid_by)
@@ -397,13 +448,10 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
     @action(detail=True, methods=['patch'], permission_classes=[IsDirection])
     def set_manuel(self, request, pk=None):
         """Override net_payable with a manual adjustment (DIRECTION only)."""
+        data = get_json_object(request)  # BUG-762
         config = Config.get_instance()
-        adj = request.data.get('manuel_adjustment')
-        # BUG-749 : au moins un des deux champs doit être fourni (sinon 400, rien n'est effacé).
-        if 'manuel_adjustment' not in request.data and 'manuel_notes' not in request.data:
-            return Response({'detail': 'Champ « manuel_adjustment » requis (null pour effacer l\'ajustement).'},
-                            status=status.HTTP_400_BAD_REQUEST)
-        notes = request.data.get('manuel_notes', '')
+        adj = data.get('manuel_adjustment')
+        notes = data.get('manuel_notes', '')
         if notes is None:
             notes = ''  # BUG-750 : null = vide
         with transaction.atomic():
@@ -411,7 +459,12 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             locked = self._locked_response(commission)
             if locked is not None:
                 return locked
-            if 'manuel_adjustment' not in request.data:
+            # BUG-749 : au moins un des deux champs doit être fourni (sinon 400, rien n'est effacé).
+            # Contrôle après la recherche de l'objet : une commission inconnue reste un 404.
+            if 'manuel_adjustment' not in data and 'manuel_notes' not in data:
+                return Response({'detail': 'Champ « manuel_adjustment » requis (null pour effacer l\'ajustement).'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if 'manuel_adjustment' not in data:
                 # BUG-749 : champ absent = ajustement inchangé (seules les notes sont mises à jour).
                 commission.manuel_notes = notes
             elif adj is None:
@@ -421,6 +474,8 @@ class ClientCommissionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
             else:
                 try:
                     if isinstance(adj, (bool, list, dict)):
+                        raise InvalidOperation
+                    if not str(adj).isascii():  # BUG-897 : chiffres non ASCII refusés
                         raise InvalidOperation
                     value = Decimal(str(adj))
                     # BUG-745 : valeur finie, 12 chiffres entiers + 2 décimales max.

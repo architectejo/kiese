@@ -26,6 +26,8 @@ export interface BakeryNode {
   // BUG-161 : heure de relève ("HH:MM:SS") et mode rotation de 24 h.
   handover_time?: string;
   team_rotation_enabled?: boolean;
+  /** BUG-973 : bloque les ventes après l'heure de clôture jusqu'à validation par la direction. */
+  block_sales_after_closure?: boolean;
 }
 
 // <input type="time"> attend/renvoie "HH:MM" ; l'API lit/écrit "HH:MM:SS" (ou null).
@@ -77,6 +79,7 @@ export const Nodes: React.FC = () => {
     team_b_end_time: '',
     handover_time: '12:00',
     team_rotation_enabled: false,
+    block_sales_after_closure: false,
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -114,6 +117,7 @@ export const Nodes: React.FC = () => {
         team_b_end_time: toTimeInputValue(node.team_b_end_time),
         handover_time: toTimeInputValue(node.handover_time) || '12:00',
         team_rotation_enabled: !!node.team_rotation_enabled,
+        block_sales_after_closure: !!node.block_sales_after_closure,
       });
     } else {
       setEditingNode(null);
@@ -131,6 +135,7 @@ export const Nodes: React.FC = () => {
         team_b_end_time: '',
         handover_time: '12:00',
         team_rotation_enabled: false,
+        block_sales_after_closure: false,
       });
     }
     setFormErrors({});
@@ -464,7 +469,7 @@ export const Nodes: React.FC = () => {
               <div style={{ border: '1px solid hsl(var(--border-color))', borderRadius: 'var(--radius-sm)', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div>
                   <label htmlFor="node-handover-time" style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '4px' }}>
-                    Heure de relève des équipes
+                    Heure de clôture
                   </label>
                   <input
                     id="node-handover-time"
@@ -477,9 +482,21 @@ export const Nodes: React.FC = () => {
                   />
                   {formErrors.handover_time && <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', marginTop: '3px', display: 'block' }}>{formErrors.handover_time}</span>}
                   <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                    Heure à laquelle une équipe remplace l'autre (défaut 12:00). Seule l'équipe en service change à cette heure : la date, elle, suit le jour calendaire (minuit à minuit).
+                    Heure de clôture de la journée, qui sert aussi de relève entre équipes (défaut 12:00). À cette heure, le gérant saisit les sorties non valorisées ; la date, elle, suit le jour calendaire (minuit à minuit).
                   </span>
                 </div>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.block_sales_after_closure}
+                    onChange={(e) => setFormData({ ...formData, block_sales_after_closure: e.target.checked })}
+                    style={{ width: '20px', height: '20px', marginTop: '1px', flexShrink: 0 }}
+                  />
+                  <span>Bloquer les ventes après la clôture jusqu'à validation par la direction</span>
+                </label>
+                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-warning))', lineHeight: 1.4 }}>
+                  Lorsque cette option est activée, la création de factures est refusée dès l'heure de clôture, tant que la direction n'a pas validé la clôture du jour de cette boulangerie.
+                </span>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
                   <input
                     type="checkbox"

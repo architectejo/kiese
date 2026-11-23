@@ -7,7 +7,7 @@ from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import ProtectedError
 from django.db.models import Sum, F, Q
 from django.utils import timezone
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, get_json_object
 from kiese.node_guard import NoNodeGuardMixin, resolve_node_param, parse_date_param
 from rest_framework import viewsets, mixins, status, filters
 from rest_framework.decorators import action
@@ -466,7 +466,11 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         """
         from django.utils.dateparse import parse_date
 
+        from core.mixins import get_json_object
+
         from .services import regenerate_facturier_reports
+
+        get_json_object(request)  # BUG-892 : corps non objet -> 400
 
         # BUG-161 (B3) : le nœud est résolu AVANT la date (la date de travail
         # en dépend) ; l'absence de nœud reste signalée après la date, comme avant.
@@ -821,12 +825,13 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
                     f"({unresolved_gap}). Faites valider/corriger le transfert d'abord."
                 )
             }, status=status.HTTP_400_BAD_REQUEST)
-        comptable_note = (request.data.get('notes') or '').strip()
+        comptable_note = (get_json_object(request).get('notes') or '').strip()  # BUG-762
         update_fields = ['is_validated', 'is_rejected', 'rejection_reason']
         # BUG-839 (c) : le montant confirmé doit être celui qui sera inscrit au livre :
         # totaux du jour relus à la confirmation (dépense saisie après la clôture).
         fresh_entries, fresh_expenses = _fresh_closure_totals(closure)
         _check_closure_totals(fresh_entries, fresh_expenses)
+        previous_gap = closure.cash_gap
         if fresh_entries != closure.total_entries or fresh_expenses != closure.total_expenses:
             closure.total_entries = fresh_entries
             closure.total_expenses = fresh_expenses
@@ -847,6 +852,19 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
             + (f" Commentaire: {comptable_note}" if comptable_note else ""),
             node_origin=closure.node.code,
         )
+        # BUG-863 : écart recalculé à la confirmation (dépense saisie après la clôture)
+        # -> même notification qu'à la création / resoumission.
+        if closure.cash_gap != 0 and closure.cash_gap != previous_gap:
+            create_notification(
+                title=f"Écart de Caisse — {closure.node.code}",
+                message=(
+                    f"Clôture du {closure.date} (confirmée, écart recalculé) : écart de "
+                    f"{closure.cash_gap:+,.0f} FC (théorique {closure.net_cash:,.0f} FC, "
+                    f"compté {closure.physical_cash_total:,.0f} FC)."
+                ),
+                severity='WARNING' if abs(closure.cash_gap) < 10000 else 'DANGER',
+                node_origin=closure.node.code
+            )
         return Response(CashClosureSerializer(closure).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsHeadquarters])
@@ -855,7 +873,7 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         closure = self.get_object()
         if closure.is_validated:
             return Response({'detail': 'Impossible d\'infirmer une clôture déjà confirmée.'}, status=status.HTTP_400_BAD_REQUEST)
-        reason = request.data.get('reason', '').strip()
+        reason = (get_json_object(request).get('reason') or '').strip()  # BUG-762
         closure.is_rejected      = True
         closure.rejection_reason = reason
         closure.is_validated     = False
@@ -1625,3 +1643,31 @@ class DailySavingsViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewsets
             'total_savings': str(totals['total_savings'] or 0),
             'by_node': by_node,
         })
+
+
+from rest_framework.views import APIView as _APIView
+
+
+class ClosureStatusView(_APIView):
+    """GET /api/treasury/closure-status/ : état du verrou de vente (BUG-973), lecture seule.
+    `?node=<code|uuid>` réservé aux profils multi-boulangeries ; sinon nœud de l'utilisateur."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .closure_lock import closure_status
+        user = request.user
+        node = user.node if user.node_id else None
+        param = request.query_params.get('node')
+        if param:
+            if not user.can_access_all_nodes:
+                return Response({'detail': "Accès refusé : vous ne pouvez consulter que votre boulangerie."},
+                                status=status.HTTP_403_FORBIDDEN)
+            node = Node.objects.filter(code=param).first()
+            if node is None:
+                try:
+                    node = Node.objects.filter(pk=param).first()
+                except Exception:
+                    node = None
+            if node is None:
+                return Response({'detail': "Boulangerie introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(closure_status(node))

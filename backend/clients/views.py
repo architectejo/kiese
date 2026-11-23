@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import ProtectedError, Case, When, Value, IntegerField
 from django.db.models.functions import Lower, Concat
 from .search import AccentInsensitiveSearchFilter, fold_expr, fold_term
-from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param
+from core.mixins import NodeImmutableForNonHQMixin, is_node_less_non_hq, parse_node_param, get_json_object
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -158,18 +158,46 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         user = self.request.user
+        data = dict(serializer.validated_data)
         if not user.can_access_all_nodes:
             # BUG-025 (perform_update) : même motif que perform_create — un
             # GERANT non-HQ ne doit jamais pouvoir déplacer un client existant
             # vers une autre boulangerie en forgeant `node` dans le payload.
-            # On ignore silencieusement toute valeur de `node` envoyée et on
-            # réimpose le nœud actuel de l'utilisateur.
-            serializer.validated_data.pop('node', None)
-            client = serializer.save(node=user.node)
-        else:
-            client = serializer.save()
-        client.refresh_category()
-        client.save(update_fields=['category'])
+            # On ignore silencieusement toute valeur de `node` envoyée.
+            data.pop('node', None)
+        # BUG-943 : écriture PARTIELLE sur une ligne verrouillée : seuls les champs
+        # modifiés sont écrits ; `current_debt` / `total_breads_received` (F() des
+        # livraisons concurrentes) ne sont jamais réécrits.
+        with transaction.atomic():
+            client = Client.objects.select_for_update().select_related('node').get(pk=serializer.instance.pk)
+            old_category = client.category
+            old_limit, old_rate = client.credit_limit, client.commission_rate
+            fields = []
+            new_node = data.pop('node', None)
+            for name, value in data.items():
+                setattr(client, name, value)
+                fields.append(name)
+            if new_node is not None and new_node.pk != client.node_id:
+                # BUG-949 : comme bulk_move, le code reflète la boulangerie.
+                client.node = new_node
+                client.code = _generate_client_code(new_node.code)
+                client.node_origin = new_node.code
+                fields += ['node', 'code', 'node_origin']
+            client.refresh_category()
+            fields.append('category')
+            if data:
+                client.identity_updated_at = timezone.now()  # BUG-951
+                fields.append('identity_updated_at')
+            client.save(update_fields=list(dict.fromkeys(fields + ['updated_at'])))
+            client.notify_risk_transition(old_category)  # BUG-945
+        serializer.instance = client
+        if client.credit_limit != old_limit or client.commission_rate != old_rate:
+            log_activity(  # BUG-944
+                user, "Modification Plafond/Taux Client",
+                f"Client {client.code} — {client.full_name} : plafond {old_limit} -> {client.credit_limit} FC, "
+                f"taux de commission {old_rate} -> {client.commission_rate}.",
+                node_origin=client.node.code,
+            )
 
     @action(detail=True, methods=['post'], permission_classes=[IsGerant])
     def recalculate_category(self, request, pk=None):
@@ -477,8 +505,9 @@ class ClientViewSet(viewsets.ModelViewSet):
     def bulk_move(self, request):
         """Move a set of clients to another bakery (Direction centrale uniquement).
         The code prefix reflects the bakery, so it's regenerated for the new node."""
-        ids = request.data.get('ids') or []
-        node_id = request.data.get('node')
+        data = get_json_object(request)  # BUG-762
+        ids = data.get('ids') or []
+        node_id = data.get('node')
         if not ids or not node_id:
             raise ValidationError({'detail': 'ids et node sont requis.'})
         ids = self._parse_ids(ids)  # BUG-741 : 400 au lieu de 500
@@ -511,7 +540,13 @@ class ClientViewSet(viewsets.ModelViewSet):
         sociales : relations PROTECT) n'est pas supprimable : 400 explicite,
         comme `bulk_delete`, jamais un 500."""
         try:
-            return super().destroy(request, *args, **kwargs)
+            client = self.get_object()
+            label = f"{client.code} — {client.full_name} ({client.node.code})"
+            node_code = client.node.code
+            response = super().destroy(request, *args, **kwargs)
+            log_activity(request.user, "Suppression Client",  # BUG-944
+                         f"Client {label} supprimé.", node_origin=node_code)
+            return response
         except ProtectedError:
             return Response(
                 {'detail': "Ce client est référencé par des factures, commissions ou distributions "
@@ -524,7 +559,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         """Delete a set of clients (Direction centrale uniquement). Clients with
         protected relations (factures, commissions, distributions sociales) are
         skipped and reported instead of failing the whole batch."""
-        ids = request.data.get('ids') or []
+        ids = get_json_object(request).get('ids') or []  # BUG-762
         if not ids:
             raise ValidationError({'detail': 'ids requis.'})
         ids = self._parse_ids(ids)  # BUG-741
@@ -620,20 +655,47 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             raise ValidationError({'client': "Ce client n'appartient pas à la boulangerie indiquée."})
         serializer.save(node=node)
 
+    def perform_update(self, serializer):
+        # BUG-954 : le PATCH direct de is_paid a le même effet que toggle_paid : journalisé.
+        was_paid = serializer.instance.is_paid
+        contrib = serializer.save()
+        if contrib.is_paid != was_paid:
+            log_activity(
+                self.request.user, "Cotisation Sociale " + ("payée" if contrib.is_paid else "annulée"),
+                f"Cotisation {contrib.month:02d}/{contrib.year} de {contrib.client.full_name} "
+                f"({contrib.amount} FC) marquée {'payée' if contrib.is_paid else 'non payée'}.",
+                node_origin=contrib.node.code,
+            )
+
+    def perform_destroy(self, instance):
+        # BUG-954 : la suppression d'une cotisation laisse une trace.
+        desc = (f"Cotisation {instance.month:02d}/{instance.year} de {instance.client.full_name} "
+                f"({instance.amount} FC, {'payée' if instance.is_paid else 'non payée'}) supprimée.")
+        node_code = instance.node.code
+        instance.delete()
+        log_activity(self.request.user, "Suppression Cotisation Sociale", desc, node_origin=node_code)
+
     @action(detail=True, methods=['post'])
     def toggle_paid(self, request, pk=None):
         contrib = self.get_object()
         contrib.is_paid = not contrib.is_paid
         contrib.paid_at = timezone.now() if contrib.is_paid else None
         contrib.save(update_fields=['is_paid', 'paid_at'])
+        log_activity(  # BUG-944
+            request.user, "Cotisation Sociale " + ("payée" if contrib.is_paid else "annulée"),
+            f"Cotisation {contrib.month:02d}/{contrib.year} de {contrib.client.full_name} "
+            f"({contrib.amount} FC) marquée {'payée' if contrib.is_paid else 'non payée'}.",
+            node_origin=contrib.node.code,
+        )
         return Response(SocialContributionSerializer(contrib).data)
 
     @action(detail=False, methods=['post'])
     def bulk_create_month(self, request):
         """Create SocialContribution records for all active clients of a node for a given month/year."""
-        node_id = request.data.get('node')
-        month   = request.data.get('month')
-        year    = request.data.get('year')
+        data    = get_json_object(request)  # BUG-751 / BUG-762
+        node_id = data.get('node')
+        month   = data.get('month')
+        year    = data.get('year')
         user = request.user
         if not user.can_access_all_nodes:
             # BUG-249 : le nœud est imposé pour un non-siège ; un `node`
@@ -648,6 +710,8 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         try:
             if isinstance(month, (bool, list, dict, float)) or isinstance(year, (bool, list, dict, float)):
                 raise ValueError
+            if not (str(month).isascii() and str(year).isascii()):  # BUG-915
+                raise ValueError
             month = int(str(month).strip())
             year = int(str(year).strip())
         except (TypeError, ValueError):
@@ -656,12 +720,14 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             raise ValidationError({'detail': 'Paramètre « month » invalide : un mois entre 1 et 12 est attendu.'})
         if not 2000 <= year <= 2100:
             raise ValidationError({'detail': 'Paramètre « year » invalide : une année entre 2000 et 2100 est attendue.'})
-        manual_amount = request.data.get('amount')
+        manual_amount = data.get('amount')
         if manual_amount in (None, ''):
             manual_amount = None
         else:
             try:
                 if isinstance(manual_amount, (bool, list, dict)):
+                    raise InvalidOperation
+                if not str(manual_amount).isascii():  # BUG-915 résiduel
                     raise InvalidOperation
                 manual_amount = Decimal(str(manual_amount))
                 if not manual_amount.is_finite() or manual_amount < 0 or manual_amount > Decimal('99999999.99'):
@@ -681,12 +747,20 @@ class SocialContributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                 node_id=node_id,
                 month=month,
                 year=year,
-                defaults={'amount': manual_amount if manual_amount else client.effective_cotisation_sociale},
+                # BUG-950 : un montant 0 explicite est respecté (seul « absent » = défaut).
+                defaults={'amount': manual_amount if manual_amount is not None
+                          else client.effective_cotisation_sociale},
             )
             if is_new:
                 created += 1
             else:
                 skipped += 1
+        if created:
+            log_activity(  # BUG-944
+                request.user, "Génération Cotisations Sociales",
+                f"{created} cotisation(s) générée(s) pour {month:02d}/{year} ({skipped} déjà existante(s)).",
+                node_origin=Node.objects.get(pk=node_id).code,
+            )
         return Response({'created': created, 'skipped': skipped})
 
 
@@ -745,7 +819,21 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         new_year = serializer.validated_data.get('year')
         if instance.is_closed and new_year is not None and new_year != instance.year:
             raise ValidationError({'detail': "Distribution clôturée : l'année ne peut plus être modifiée."})
+        was_closed, old_tarif = instance.is_closed, instance.tarif
         distribution = serializer.save()
+        if distribution.is_closed and not was_closed:
+            log_activity(  # BUG-944
+                self.request.user, "Clôture Distribution Sociale",
+                f"Distribution sociale {distribution.node.code} {distribution.year} clôturée (irréversible).",
+                node_origin=distribution.node.code,
+            )
+        elif Decimal(str(distribution.tarif)) != Decimal(str(old_tarif)):
+            log_activity(
+                self.request.user, "Modification Tarif Distribution Sociale",
+                f"Distribution {distribution.node.code} {distribution.year} : tarif {old_tarif} -> "
+                f"{distribution.tarif} FC.",
+                node_origin=distribution.node.code,
+            )
         if not distribution.is_closed:
             # BUG-295 : REMISE = INDICE × TARIF + MÉRITE ; un nouveau tarif
             # recalcule les lignes déjà créées (distribution non clôturée).
@@ -753,7 +841,15 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                 line.compute()
                 line.save(update_fields=['remise', 'total_payer', 'updated_at'])
 
+    def destroy(self, request, *args, **kwargs):
+        # BUG-872 : une distribution clôturée est figée, sa suppression effacerait les montants.
+        if self.get_object().is_closed:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Distribution clôturée : suppression impossible.'})
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=True, methods=['post'])
+    @transaction.atomic  # BUG-753 : tout ou rien
     def refresh_indices(self, request, pk=None):
         """BUG-295 : recalcule INDICE (= nombre de mois de cotisation payés de
         l'année, boulangerie de la distribution) et TOTAL SOCIAL de chaque ligne
@@ -773,6 +869,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             line.indice = paid_qs.count()
             line.total_social = paid_qs.aggregate(total=Sum('amount'))['total'] or 0
             line.compute()
+            _check_line_columns(line)  # BUG-753
             line.save()
             updated += 1
         distribution.refresh_from_db()
@@ -780,6 +877,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
                          'distribution': SocialDistributionSerializer(distribution).data})
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic  # BUG-753 : tout ou rien
     def auto_populate_lines(self, request, pk=None):
         """Auto-create distribution lines for all active cotisation_sociale clients,
         computing indice = count of paid contributions for this year and node."""
@@ -805,6 +903,7 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
             )
             if is_new:
                 line.compute()
+                _check_line_columns(line)  # BUG-753
                 line.save()
                 created += 1
             else:
@@ -812,6 +911,23 @@ class SocialDistributionViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSe
         distribution.refresh_from_db()
         return Response({'created': created, 'skipped': skipped,
                          'distribution': SocialDistributionSerializer(distribution).data})
+
+
+_COLUMN_LIMIT = Decimal('100000000')  # colonnes DecimalField(max_digits=10, decimal_places=2)
+
+
+def _check_line_columns(line):
+    """BUG-753 : 400 français si un montant recalculé dépasse la colonne (au lieu d'un 500)."""
+    if any(Decimal(str(v)) >= _COLUMN_LIMIT for v in (line.total_social, line.remise, line.total_payer)):
+        raise ValidationError({'detail': (
+            f"Montant hors limite pour {line.client.full_name} : total social, remise et total à payer "
+            "doivent rester inférieurs à 100 000 000 FC.")})
+
+
+def _refuse_if_closed(distribution):
+    """BUG-752 : les lignes d'une distribution clôturée sont immuables."""
+    if distribution.is_closed:
+        raise ValidationError({'detail': 'Cette distribution est clôturée : ses lignes ne sont plus modifiables.'})
 
 
 class SocialDistributionLineViewSet(viewsets.ModelViewSet):
@@ -832,11 +948,30 @@ class SocialDistributionLineViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        _refuse_if_closed(serializer.validated_data['distribution'])  # BUG-752
         line = serializer.save()
         line.compute()
         line.save()
+        self._log(line, "Création", f"créée (total à recevoir {line.total_payer} FC)")
 
     def perform_update(self, serializer):
+        _refuse_if_closed(serializer.instance.distribution)  # BUG-752
+        if 'distribution' in serializer.validated_data:
+            _refuse_if_closed(serializer.validated_data['distribution'])
         line = serializer.save()
         line.compute()
         line.save()
+        self._log(line, "Modification", f"modifiée (total à recevoir {line.total_payer} FC)")
+
+    def perform_destroy(self, instance):
+        _refuse_if_closed(instance.distribution)  # BUG-752
+        self._log(instance, "Suppression", "supprimée")
+        instance.delete()
+
+    def _log(self, line, verb, what):
+        # BUG-944 : traçabilité des lignes de la caisse sociale.
+        log_activity(
+            self.request.user, f"{verb} Ligne Caisse Sociale",
+            f"Ligne de {line.client.full_name} ({line.distribution.node.code} {line.distribution.year}) {what}.",
+            node_origin=line.distribution.node.code,
+        )

@@ -5,6 +5,8 @@ indépendamment du transport HTTP (SYNC.md §2.2, §3).
 
 import logging
 import random
+import re
+import threading
 import time
 from datetime import date as _date
 from decimal import Decimal, InvalidOperation
@@ -72,9 +74,13 @@ def recompute_client_debt(client_id, opening=None):
                 )['total'] or Decimal('0.00')
                 if opening:
                     total = total + opening
+                old_category = client.category
                 client.current_debt = total
                 client.refresh_category()
-                client.save(update_fields=['current_debt', 'category'])
+                # BUG-787 : `updated_at` doit avancer pour que le pull
+                # incrémental renvoie ce client aux autres postes.
+                client.save(update_fields=['current_debt', 'category', 'updated_at'])
+                client.notify_risk_transition(old_category)  # BUG-945
                 return client
         except OperationalError as exc:
             last_exc = exc
@@ -236,6 +242,19 @@ PUSH_MODEL_ORDER = [
 ACCEPTED = 'ACCEPTED'
 REJECTED = 'REJECTED'
 
+# BUG-905/909 : une ligne ne s'ajoute pas à une fournée clôturée ni à une
+# facture livrée/annulée (comme la voie REST). Exception légitime : le nœud
+# pousse la fournée/facture DÉJÀ terminée avec ses lignes dans le MÊME lot
+# (le parent précède ses lignes dans PUSH_MODEL_ORDER). Le lot en cours
+# retient donc les parents créés/passés à l'état terminal par ce lot.
+_batch_ctx = threading.local()
+
+
+def _batch_terminal_parents():
+    if not hasattr(_batch_ctx, 'parents'):
+        _batch_ctx.parents = set()
+    return _batch_ctx.parents
+
 
 def _record_result(record_id, accepted, reason=None):
     result = {'id': str(record_id)[:64], 'status': ACCEPTED if accepted else REJECTED}
@@ -276,6 +295,134 @@ def _to_decimal(value, default=Decimal('0')):
         return default
 
 
+_CLIENT_TEXT_FIELDS = (('first_name', 100, True), ('last_name', 100, True), ('phone', 25, False),
+                       ('address', None, False), ('notes', None, False))
+
+
+def _apply_client_identity_push(existing, record, node):
+    """
+    BUG-941 (SYNC.md §5.1) : identité et paramètres d'un client (nom, téléphone,
+    adresse, plafond, taux, cotisation, type) = dernier écrivain gagne, poussés
+    par le nœud propriétaire. `current_debt`, `total_breads_received` et le
+    stock ne sont JAMAIS touchés (§2.2). Un enregistrement plus ancien que la
+    version du Cloud (`updated_at`) est ignoré (no-op accepté). Champ invalide :
+    tout l'enregistrement est rejeté, rien n'est écrit.
+    """
+    from clients.models import Client
+
+    record_id = record.get('id')
+    try:
+        # BUG-970 : version d'identité du poste si fournie, sinon `updated_at`
+        # (ancien poste : rien n'est envoyé, le push est appliqué).
+        sent_at = _parse_aware_datetime(record.get('identity_updated_at') or record.get('updated_at'))
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+    # BUG-951 : la garde porte sur la version de l'IDENTITÉ seule. Un mouvement de
+    # dette (d'un autre poste) fait avancer `updated_at` sans toucher l'identité :
+    # il ne doit jamais invalider une édition. Sans édition d'identité tracée, la
+    # référence est `updated_at` tant qu'aucun mouvement de dette n'existe ; sinon
+    # `updated_at` ne dit plus rien de l'identité et le propriétaire fait autorité.
+    reference = existing.identity_updated_at
+    if reference is None and not DebtMovement.objects.filter(client_id=existing.pk).exists():
+        reference = existing.updated_at
+    # BUG-981 : horodatage du poste au-delà de la tolérance de dérive (5 min dans le futur) :
+    # l'édition reste appliquée (ne pas empoisonner le Cloud, cf. clamp ci-dessous) mais
+    # l'écrasement est TRACÉ avec les valeurs écrasées.
+    from datetime import timedelta as _td
+    from django.utils import timezone as _tz
+    future_drift = sent_at is not None and sent_at > _tz.now() + _td(minutes=5)
+    if sent_at is not None and reference is not None and sent_at < reference:
+        # BUG-969 : perte tracée (journal de conflits + notification), statut ACCEPTED
+        # conservé pour que le poste marque l'enregistrement synchronisé.
+        # Un rejeu d'un push déjà appliqué (mêmes valeurs) n'est pas une perte : pas de bruit.
+        def _differs(name):
+            if name not in record or record[name] in (None, ''):
+                return False
+            cur = getattr(existing, name)
+            try:
+                return (Decimal(str(record[name])) != Decimal(str(cur))
+                        if isinstance(cur, Decimal) else str(record[name]) != str(cur))
+            except InvalidOperation:
+                return True
+        if not any(_differs(n) for n in ('first_name', 'last_name', 'phone', 'address', 'notes', 'credit_limit',
+                                          'commission_rate', 'cotisation_sociale', 'client_type')):
+            return _record_result(record_id, True)
+        conflict = _log_conflict(
+            node, 'clients.Client', record_id, 'IDENTITE_OBSOLETE',
+            f"Modification d'identité du client {existing.code} poussée par {node.code} ignorée : "
+            f"plus ancienne que la version du Cloud ({reference.isoformat()}).")
+        conflict.refresh_from_db()
+        try:
+            from core.models import SystemNotification
+            from core.utils import create_notification
+            # BUG-982 : une notification par client et par conflit ouvert, pas une par push.
+            if conflict.occurrences > 1 and SystemNotification.objects.filter(
+                    title="Modification de client ignorée", node_origin=node.code,
+                    message__contains=f"client {existing.code} ").exists():
+                return _record_result(record_id, True)
+            create_notification(
+                title="Modification de client ignorée",
+                message=(f"La modification du client {existing.code} faite sur {node.code} est plus ancienne "
+                         f"que celle déjà enregistrée : elle a été ignorée. Vérifiez la fiche client."),
+                severity='WARNING', node_origin=node.code,
+            )
+        except Exception:  # la notification ne doit jamais faire échouer le lot
+            logger.warning("Notification d'identité obsolète non créée (%s)", record_id)
+        return _record_result(record_id, True)
+
+    changes = {}
+    try:
+        for name, max_len, required in _CLIENT_TEXT_FIELDS:
+            if name not in record:
+                continue
+            val = record[name]
+            if val is None and not required:
+                val = ''
+            if not isinstance(val, str) or (required and not val.strip()) or (max_len and len(val) > max_len):
+                raise ValueError(f"« {name} » invalide")
+            changes[name] = val
+        if record.get('credit_limit') not in (None, ''):
+            changes['credit_limit'] = _sync_decimal(record['credit_limit'], 'credit_limit', 2,
+                                                    Decimal('0'), Decimal('10000000'))
+        if record.get('commission_rate') not in (None, ''):
+            changes['commission_rate'] = _sync_decimal(record['commission_rate'], 'commission_rate', 2,
+                                                       Decimal('0'), MAX_SYNC_COMMISSION_RATE)
+        if 'cotisation_sociale' in record:
+            raw = record['cotisation_sociale']
+            changes['cotisation_sociale'] = (None if raw in (None, '') else
+                                             _sync_decimal(raw, 'cotisation_sociale', 2, Decimal('0'), max_digits=10))
+        if record.get('client_type') not in (None, ''):
+            if record['client_type'] not in Client.ClientType.values:
+                raise ValueError("« client_type » invalide")
+            changes['client_type'] = record['client_type']
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+
+    changes = {k: v for k, v in changes.items() if getattr(existing, k) != v}
+    if not changes:
+        return _record_result(record_id, True)
+    with transaction.atomic():
+        locked = Client.objects.select_for_update().get(pk=existing.pk)
+        old_category = locked.category
+        if future_drift:
+            overwritten = ", ".join(f"{k}: {getattr(locked, k)!r} -> {v!r}" for k, v in changes.items())
+            _log_conflict(
+                node, 'clients.Client', record_id, 'HORLOGE_POSTE_EN_AVANCE',
+                f"Édition du client {locked.code} poussée par {node.code} avec un horodatage dans le futur "
+                f"({sent_at.isoformat()}) : appliquée, valeurs écrasées conservées ici — {overwritten}.")
+        for k, v in changes.items():
+            setattr(locked, k, v)
+        fields = list(changes)
+        if 'credit_limit' in changes:
+            locked.refresh_category()
+            fields.append('category')
+        from django.utils import timezone
+        locked.identity_updated_at = timezone.now()  # BUG-951
+        locked.save(update_fields=fields + ['updated_at', 'identity_updated_at'], _sync_bypass=True)
+        locked.notify_risk_transition(old_category)
+    return _record_result(record_id, True)
+
+
 def _push_client(node, record):
     from clients.models import Client
 
@@ -297,7 +444,7 @@ def _push_client(node, record):
                 f"Le nœud {node.code} a tenté de modifier un client appartenant à {existing.node_origin}."
             )
             return _record_result(record_id, False, "nœud non propriétaire de ce client")
-        return _record_result(record_id, True)
+        return _apply_client_identity_push(existing, record, node)  # BUG-941
 
     bakery_code = record.get('node') or node.code
     try:
@@ -416,6 +563,8 @@ def _push_invoice(node, record):
                         changed_fields.append(fname)
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if 'status' in changed_fields and existing.status in ('DELIVERED', 'CANCELLED'):
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     bakery_code = record.get('node') or node.code
@@ -451,6 +600,8 @@ def _push_invoice(node, record):
         node_origin=record.get('node_origin', bakery_code),
     )
     invoice.save(_sync_bypass=True)
+    if invoice.status in ('DELIVERED', 'CANCELLED'):
+        _batch_terminal_parents().add(str(invoice.pk))
     return _record_result(record_id, True)
 
 
@@ -510,12 +661,58 @@ def _parse_line_price(value):
     return int(number)
 
 
+def _resolve_invoice_line(record_id, record):
+    """BUG-919 : retrouve la ligne déjà connue du cloud pour ce payload.
+
+    Contrat d'id : l'id envoyé par le poste (PK entière locale) n'est qu'un
+    INDICE. Il désigne la ligne cloud de même PK seulement si elle appartient à
+    la facture indiquée (ou si la facture n'est pas précisée : ancien payload).
+    Sinon (collision avec la ligne d'un autre poste), la ligne est cherchée par
+    clé naturelle (facture, catégorie de pain)."""
+    from sales.models import InvoiceLine
+
+    invoice_uuid = _strict_uuid(record.get('invoice'))
+    line = None
+    id_valid = (record_id not in (None, '') and not isinstance(record_id, bool)
+                and str(record_id).strip().isdigit() and str(record_id).isascii())
+    if id_valid:
+        line = InvoiceLine.objects.filter(pk=int(str(record_id).strip())).first()
+    bp = _bread_price_or_none(record.get('bread_price'))
+
+    def natural():
+        # Clé naturelle (facture, catégorie[, prix net]) : BUG-938/940.
+        if invoice_uuid is None or bp is None:
+            return None
+        qs = InvoiceLine.objects.filter(invoice_id=invoice_uuid, bread_price=bp).order_by('pk')
+        price = record.get('unit_price')
+        if price is not None:
+            exact = _parse_line_price(price)
+            if exact is not None:
+                match = qs.filter(unit_price=exact).first()
+                if match is not None:
+                    return match
+        return qs.first()
+
+    if not id_valid:
+        return natural()    # BUG-940 : id absent / non numérique -> idempotent
+    if line is None:
+        return None     # id libre : nouvelle ligne (créée avec cet id)
+    if invoice_uuid is None:
+        # BUG-955 : repli par l'id seul réservé à l'ancien payload SANS clé `invoice`.
+        return line if 'invoice' not in record else None
+    if line.invoice_id == invoice_uuid and (bp is None or line.bread_price_id == bp.pk):
+        return line
+    # id pris par la ligne d'une autre facture, ou d'une autre catégorie de la
+    # même facture (BUG-938) : collision d'id entre postes, on n'écrase pas.
+    return natural()
+
+
 def _push_invoice_line(node, record):
     from core.models import BreadPrice
     from sales.models import Invoice, InvoiceLine
 
     record_id = record.get('id')
-    existing_line = InvoiceLine.objects.filter(pk=record_id).first() if record_id else None
+    existing_line = _resolve_invoice_line(record_id, record)
     if existing_line is not None:
         # BUG-321 : quantité servie réduite (livraison partielle / non servi).
         # Le prix figé et le commandé initial restent inchangés ; on ne
@@ -576,6 +773,10 @@ def _push_invoice_line(node, record):
     # BUG-732 (a) : jamais de ligne sur la facture d'une autre boulangerie.
     if invoice.node_id != node.pk:
         return _record_result(record_id, False, "facture d'une autre boulangerie : ligne refusée")
+    # BUG-909 : pas de nouvelle ligne sur une facture livrée/annulée (sauf
+    # facture poussée terminée dans ce même lot, avec ses lignes).
+    if invoice.status in ('DELIVERED', 'CANCELLED') and str(invoice.pk) not in _batch_terminal_parents():
+        return _record_result(record_id, False, "facture livrée ou annulée : ajout de ligne refusé")
     bp_id = record.get('bread_price')
     if isinstance(bp_id, bool) or not isinstance(bp_id, (int, str)) or not str(bp_id).strip().isdigit():
         return _record_result(record_id, False, "dépendance manquante : bread_price")
@@ -608,8 +809,11 @@ def _push_invoice_line(node, record):
     kwargs = dict(invoice=invoice, bread_price=bread_price, quantity=quantity)
     if full_unit_price is not None:
         kwargs['full_unit_price'] = full_unit_price
-    if record_id:
-        kwargs['id'] = record_id
+    # BUG-919 : l'id du poste n'est repris comme clé que s'il est libre ; sinon
+    # (collision avec la ligne d'un autre poste) la clé cloud est auto-attribuée
+    # et la ligne se retrouve ensuite par (facture, catégorie).
+    if record_id and str(record_id).strip().isdigit() and str(record_id).isascii()             and not InvoiceLine.objects.filter(pk=int(record_id)).exists():
+        kwargs['id'] = int(record_id)
     line = InvoiceLine.objects.create(**kwargs)
     if unit_price is not None and line.unit_price != unit_price:
         # Prix net exact du nœud local (ex. arrondi soldée) : update() pour ne
@@ -640,7 +844,13 @@ def _push_debt_movement(node, record):
         if invoice.node_id != node.pk:
             return _record_result(record_id, False, "facture d'une autre boulangerie refusée")
 
-    amount = _to_decimal(record.get('amount'))
+    # BUG-933/934 : montant obligatoire, ASCII, 2 décimales au plus (comme BUG-900).
+    if record.get('amount') in (None, ''):
+        return _record_result(record_id, False, "« amount » obligatoire")
+    try:
+        amount = _sync_decimal(record['amount'], 'amount', 2)
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
     # BUG-721 : plage du DecimalField(14, 2) — jamais de valeur qui rendrait
     # `Client.current_debt` illisible (SQLite n'applique pas la contrainte).
     if abs(amount) >= MAX_DEBT_ABS:
@@ -697,6 +907,15 @@ def _push_cash_closure(node, record):
         closure_date = _strict_date(record.get('date'))
         if closure_date is None:
             return _record_result(record_id, False, "date invalide (AAAA-MM-JJ attendu)")
+        # BUG-960 : comme REST (BUG-037/277), pas de clôture confirmée tant qu'un transfert
+        # entrant de la boulangerie présente un écart non résolu.
+        if record.get('is_validated'):
+            from treasury.views import _unresolved_incoming_transfer_gap
+            gap = _unresolved_incoming_transfer_gap(bakery)
+            if gap:
+                return _record_result(
+                    record_id, False,
+                    f"clôture confirmée refusée : transfert entrant en écart non résolu ({gap})")
 
         closure = CashClosure(
             id=record_id,
@@ -704,11 +923,11 @@ def _push_cash_closure(node, record):
             date=closure_date,
             total_entries=_to_decimal(record.get('total_entries')),
             total_expenses=_to_decimal(record.get('total_expenses')),
-            bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
-            bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
-            bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
-            bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
-            is_validated=bool(record.get('is_validated', False)),
+            **_bills_kwargs(record),
+            # BUG-971 : un jeton de boulangerie ne confirme jamais une clôture
+            # (remarque.md l.156, BUG-200) ; seule la voie REST IsHeadquarters
+            # (validate / push_to_cashbook) la confirme.
+            is_validated=False,
             notes=record.get('notes', ''),
             node_origin=record.get('node_origin', bakery_code),
         )
@@ -719,7 +938,49 @@ def _push_cash_closure(node, record):
     if existing.node_id != node.pk:
         return _record_result(record_id, False, "clôture d'une autre boulangerie refusée")
 
+    if existing.is_rejected and not existing.is_validated:
+        # BUG-983 : resoumission d'une clôture infirmée (même règle que REST
+        # `perform_update`, BUG-034/860) : seul un contenu CORRIGÉ (billetage ou
+        # totaux différents) lève le rejet ; un simple rejeu ne le lève jamais.
+        # La clôture n'est jamais confirmée par le poste (BUG-971).
+        try:
+            bills = _bills_kwargs(record)
+        except ValueError as exc:
+            return _record_result(record_id, False, str(exc))
+        entries = (_to_decimal(record.get('total_entries'))
+                   if record.get('total_entries') not in (None, '') else existing.total_entries)
+        expenses = (_to_decimal(record.get('total_expenses'))
+                    if record.get('total_expenses') not in (None, '') else existing.total_expenses)
+        changed = (any(getattr(existing, n) != v for n, v in bills.items())
+                   or entries != existing.total_entries or expenses != existing.total_expenses)
+        if changed:
+            with transaction.atomic():
+                locked = type(existing).objects.select_for_update().get(pk=existing.pk)
+                if locked.is_rejected and not locked.is_validated:
+                    for n, v in bills.items():
+                        setattr(locked, n, v)
+                    locked.total_entries, locked.total_expenses = entries, expenses
+                    if isinstance(record.get('notes'), str):
+                        locked.notes = record['notes']
+                    locked.compute_physical_cash()
+                    locked.is_rejected, locked.rejection_reason = False, ''
+                    locked.save(update_fields=[*bills, 'total_entries', 'total_expenses', 'notes', 'net_cash',
+                                               'physical_cash_total', 'cash_gap', 'is_rejected',
+                                               'rejection_reason', 'updated_at'], _sync_bypass=True)
+                    from core.utils import log_activity
+                    log_activity(None, "Resoumission Clôture de Caisse",
+                                 f"Clôture {locked.node.code} {locked.date} resoumise par le poste — "
+                                 f"Compté: {locked.physical_cash_total} FC · Écart: {locked.cash_gap} FC.",
+                                 node_origin=locked.node.code)
+            existing.refresh_from_db()
+
     if existing.is_validated and not existing.cashbook_entries.exists():
+        from treasury.views import _unresolved_incoming_transfer_gap
+        gap = _unresolved_incoming_transfer_gap(existing.node)
+        if gap:  # BUG-960 : même blocage que push_to_cashbook (REST)
+            return _record_result(
+                record_id, False,
+                f"versement au livre refusé : transfert entrant en écart non résolu ({gap})")
         try:
             # Le Livre de Caisse Direction n'est jamais écrit par un nœud :
             # c'est le Cloud qui, ici, appelle la même fonction que l'action
@@ -752,6 +1013,29 @@ def _push_production_session(node, record):
         # Transition idempotente is_closed False→True uniquement (comme
         # Invoice.status) : jamais de régression closed→ouvert.
         changed_fields = []
+        # BUG-939 : tant que la fournée est ouverte, ses champs modifiables
+        # (farine, valeur du sac, notes) suivent le poste (valeurs déjà bornées
+        # par _check_production_session) ; jamais sur une fournée close.
+        if not existing.is_closed and existing.node_id == node.pk:
+            upd = {}
+            raw_flour = record.get('flour_sacks_used')
+            if raw_flour not in (None, ''):
+                new_flour = _to_decimal(raw_flour)
+                if new_flour != existing.flour_sacks_used:
+                    upd['flour_sacks_used'] = new_flour
+            raw_sac = record.get('sac_value_fc_used')
+            if raw_sac not in (None, ''):
+                new_sac = _sync_int(raw_sac, 'sac_value_fc_used', 0, 100_000_000)
+                if new_sac != existing.sac_value_fc_used:
+                    upd['sac_value_fc_used'] = new_sac
+            if isinstance(record.get('notes'), str) and record['notes'] != existing.notes:
+                upd['notes'] = record['notes']
+            if upd:
+                from production.models import ProductionSession as _PS
+                _PS.objects.filter(pk=existing.pk).update(**upd)
+                for k, v in upd.items():
+                    setattr(existing, k, v)
+                _recompute_session_totals(existing)
         if record.get('is_closed') and not existing.is_closed:
             existing.is_closed = True
             changed_fields.append('is_closed')
@@ -763,6 +1047,8 @@ def _push_production_session(node, record):
                 changed_fields.append('closure_summary')
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if 'is_closed' in changed_fields:
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     if not record.get('date'):
@@ -779,15 +1065,12 @@ def _push_production_session(node, record):
         team=record.get('team', ''),
         date=_date.fromisoformat(record['date']),
         flour_sacks_used=_to_decimal(record.get('flour_sacks_used')),
-        breads_300=record.get('breads_300', 0),
-        breads_400=record.get('breads_400', 0),
-        breads_500=record.get('breads_500', 0),
-        breads_1000=record.get('breads_1000', 0),
-        total_breads=record.get('total_breads', 0),
-        total_fc_produced=record.get('total_fc_produced', 0),
-        theoretical_yield=record.get('theoretical_yield', 0),
-        yield_gap=record.get('yield_gap', 0),
-        sac_value_fc_used=record.get('sac_value_fc_used', 200000),
+        # BUG-924 : les totaux (pains, FC, rendement, écart) ne sont JAMAIS copiés
+        # du poste : ils sont recalculés depuis les lignes (compute_totals, comme
+        # la voie REST) après la sauvegarde, puis à chaque ligne poussée.
+        # BUG-956/957 : décimal entier ('150000.0') normalisé ; 0 conservé (comme la mise à jour).
+        sac_value_fc_used=(200000 if record.get('sac_value_fc_used') in (None, '')
+                           else _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)),
         is_closed=bool(record.get('is_closed', False)),
         closed_at=record.get('closed_at'),
         closure_summary=record.get('closure_summary'),
@@ -795,42 +1078,85 @@ def _push_production_session(node, record):
         node_origin=record.get('node_origin', bakery_code),
     )
     session.save(_sync_bypass=True)
+    _recompute_session_totals(session)
+    if session.is_closed:
+        _batch_terminal_parents().add(str(session.pk))
     return _record_result(record_id, True)
 
 
+def _recompute_session_totals(session):
+    """BUG-924 : totaux de la fournée dérivés de ses lignes (update() : pas de save())."""
+    from production.models import ProductionSession
+    session.compute_totals()
+    ProductionSession.objects.filter(pk=session.pk).update(
+        total_breads=session.total_breads, total_fc_produced=session.total_fc_produced,
+        theoretical_yield=session.theoretical_yield, yield_gap=session.yield_gap,
+        breads_300=session.breads_300, breads_400=session.breads_400,
+        breads_500=session.breads_500, breads_1000=session.breads_1000,
+    )
+
+
 def _push_production_session_line(node, record):
-    from core.models import BreadPrice
+    """Ligne de fournée. BUG-919 : l'id local du poste (PK entière auto-incrémentée)
+    n'est JAMAIS utilisé comme clé cloud ; la ligne est identifiée par sa clé
+    naturelle (session, catégorie de pain, source), unique en base. Rejeu
+    idempotent, pas de collision entre postes, lignes déjà synchronisées
+    retrouvées sans doublon."""
     from production.models import ProductionSession, ProductionSessionLine
 
     record_id = record.get('id')
-    if record_id and ProductionSessionLine.objects.filter(pk=record_id).exists():
-        return _record_result(record_id, True)
-
-    session = ProductionSession.objects.filter(pk=record.get('session')).first()
+    session_uuid = _strict_uuid(record.get('session'))
+    session = ProductionSession.objects.filter(pk=session_uuid).first() if session_uuid else None
     if session is None:
         return _record_result(record_id, False, "dépendance manquante : session")
     if session.node_id != node.pk:
         return _record_result(record_id, False, "session d'une autre boulangerie refusée")
-    bread_price = BreadPrice.objects.filter(pk=record.get('bread_price')).first()
+    bread_price = _bread_price_or_none(record.get('bread_price'))
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
-    # BUG-142 : propage `source` (DECLARED/CARRYOVER) si le nœud source l'a
-    # envoyé ; sinon le défaut du modèle (DECLARED) s'applique — compatible
-    # avec un nœud distant pas encore mis à jour (champ absent du payload).
-    kwargs = dict(
-        session=session, bread_price=bread_price, quantity=record.get('quantity', 0),
-        source=record.get('source', 'DECLARED'),
-    )
-    if record_id:
-        kwargs['id'] = record_id
+    # BUG-904 : une quantité absente/nulle n'est jamais « acceptée » sans ligne.
+    if record.get('quantity', 0) is None:
+        return _record_result(record_id, False, "« quantity » manquante")
+    quantity = _sync_int(record.get('quantity', 0), 'quantity')
+    # BUG-142 : `source` (DECLARED/CARRYOVER), défaut DECLARED si absent.
+    source = record.get('source') or ProductionSessionLine.Source.DECLARED
+    if source not in ProductionSessionLine.Source.values:
+        return _record_result(record_id, False, "« source » invalide")
+
+    # BUG-905 : pas de nouvelle valeur sur une fournée clôturée (sauf fournée
+    # terminée dans ce même lot, avec ses lignes).
+    locked = session.is_closed and str(session.pk) not in _batch_terminal_parents()
+    existing = ProductionSessionLine.objects.filter(
+        session=session, bread_price=bread_price, source=source).first()
+    if existing is not None:
+        if existing.quantity == quantity:
+            return _record_result(record_id, True)      # rejeu idempotent
+        if locked:
+            return _record_result(record_id, False, "fournée clôturée : modification de ligne refusée")
+        # BUG-920 : même (fournée, catégorie, source) avec une autre quantité =
+        # mise à jour de la ligne (ex. incrément à la livraison), jamais « accepté » sans effet.
+        ProductionSessionLine.objects.filter(pk=existing.pk).update(quantity=quantity)
+        _recompute_session_totals(session)
+        return _record_result(record_id, True)
+    if locked:
+        return _record_result(record_id, False, "fournée clôturée : ajout de ligne refusé")
+
     try:
-        ProductionSessionLine.objects.create(**kwargs)
+        with transaction.atomic():
+            ProductionSessionLine.objects.create(
+                session=session, bread_price=bread_price, quantity=quantity, source=source)
     except IntegrityError:
-        # Rejeu sans id (ou unique_together session+bread_price déjà
-        # honoré par une tentative concurrente) — idempotent par construction.
-        pass
+        return _record_result(record_id, False, "ligne en double (écriture concurrente) : à rejouer")
+    _recompute_session_totals(session)
     return _record_result(record_id, True)
+
+
+def _bread_price_or_none(raw):
+    from core.models import BreadPrice
+    if isinstance(raw, bool) or not str(raw).strip().isdigit() or not str(raw).strip().isascii():
+        return None
+    return BreadPrice.objects.filter(pk=int(str(raw).strip())).first()
 
 
 def _push_bread_disposal(node, record):
@@ -858,11 +1184,18 @@ def _push_bread_disposal(node, record):
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
 
+    # BUG-968 : '3.0' / '1e1' / 3.0 (entiers valides) normalisés en int, jamais de
+    # chaîne brute dans quantity * unit_price_sold ; rejet motivé sinon.
+    try:
+        qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
+        unit_price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
     disposal = BreadDisposal(
         id=record_id, node=bakery, session=session, bread_price=bread_price,
         disposal_type=record.get('disposal_type', ''),
-        quantity=record.get('quantity', 0),
-        unit_price_sold=record.get('unit_price_sold', 0),
+        quantity=qty,
+        unit_price_sold=unit_price,
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', bakery_code),
     )
@@ -893,6 +1226,9 @@ def _push_consumable_movement(node, record):
         bakery = Node.objects.get(code=bakery_code)
     except Node.DoesNotExist:
         return _record_result(record_id, False, f"boulangerie inconnue : {bakery_code}")
+    # BUG-788 : un poste ne modifie que le stock de consommables de sa boulangerie.
+    if bakery.pk != node.pk:
+        return _record_result(record_id, False, "mouvement de consommable d'une autre boulangerie refusé")
 
     consumable_type = record.get('consumable_type')
     if not consumable_type:
@@ -1253,6 +1589,24 @@ def _restamp_orphan_exits(stock_id):
         return len(pending)
 
 
+def _sync_bounded_qty(raw):
+    """BUG-894 : entier 0..2e9 (comme production.views._strict_int), sinon None."""
+    if isinstance(raw, bool):
+        return None
+    try:
+        d = Decimal(str(raw).strip())
+    except (ArithmeticError, ValueError):
+        return None
+    if not str(raw).strip().isascii() or not d.is_finite() or d != d.to_integral_value():
+        return None
+    if d < 0 or d > 2_000_000_000:
+        return None
+    return int(d)
+
+
+_TRANSFER_LOCKED = ('CONFIRMED', 'CANCELLED')  # BUG-921 : transfert immuable une fois terminé
+
+
 def _push_bread_transfer(node, record):
     from core.models import BreadPrice
     from production.models import BreadTransfer
@@ -1281,18 +1635,65 @@ def _push_bread_transfer(node, record):
             BreadTransfer.TransferStatus.RESPONDED: {
                 BreadTransfer.TransferStatus.CONFIRMED, BreadTransfer.TransferStatus.DISPUTED,
             },
+            # BUG-966 : sortie de litige (recomptage de la réceptrice, ou résolution
+            # par l'émettrice / le siège, REST resolve_dispute) ; acteurs ci-dessous.
+            BreadTransfer.TransferStatus.DISPUTED: {BreadTransfer.TransferStatus.CONFIRMED},
         }
         new_status = record.get('transfer_status')
         changed_fields = []
         if new_status and new_status != existing.transfer_status:
+            # BUG-874 : seule la réceptrice valide la réception (CLAUDE.md 5.4).
+            # BUG-966 : exception : la sortie de litige (DISPUTED -> CONFIRMED) peut
+            # aussi venir de l'émettrice (résolution, comme resolve_dispute REST).
+            from_resolves = (new_status == BreadTransfer.TransferStatus.CONFIRMED
+                             and existing.transfer_status == BreadTransfer.TransferStatus.DISPUTED
+                             and node.pk == existing.from_node_id)
+            if (new_status == BreadTransfer.TransferStatus.CONFIRMED
+                    and node.pk != existing.to_node_id and not from_resolves):
+                return _record_result(
+                    record_id, False,
+                    "seule la boulangerie réceptrice peut confirmer la réception")
+            # BUG-888 : machine d'états par rôle. Émettrice (from_node) :
+            # PENDING->RESPONDED/CANCELLED. Réceptrice (to_node) :
+            # RESPONDED->CONFIRMED/DISPUTED. Toute autre combinaison refusée.
+            TS = BreadTransfer.TransferStatus
+            role_allowed = {
+                existing.from_node_id: {(TS.PENDING, TS.RESPONDED), (TS.PENDING, TS.CANCELLED),
+                                        (TS.DISPUTED, TS.CONFIRMED)},
+                existing.to_node_id: {(TS.RESPONDED, TS.CONFIRMED), (TS.RESPONDED, TS.DISPUTED),
+                                      (TS.DISPUTED, TS.CONFIRMED)},
+            }.get(node.pk, set())
+            if ((existing.transfer_status, new_status) not in role_allowed
+                    and new_status in allowed_forward.get(existing.transfer_status, set())):
+                return _record_result(
+                    record_id, False,
+                    "transition d'état réservée à l'autre boulangerie du transfert")
+            if (existing.transfer_status == TS.DISPUTED and new_status == TS.CONFIRMED
+                    and (existing.pk is None or any(
+                        l.quantity_received is None or l.quantity_received != l.quantity_sent
+                        for l in existing.lines.all()))):
+                # BUG-966 : le litige ne se lève que si les lignes ne présentent plus d'écart
+                # (recomptage égal à l'envoyé, ou lignes alignées par résolution).
+                return _record_result(
+                    record_id, False,
+                    "litige non résolu : les quantités reçues et envoyées diffèrent encore "
+                    "(poussez d'abord les lignes recomptées)")
             if new_status in allowed_forward.get(existing.transfer_status, set()):
                 existing.transfer_status = new_status
                 changed_fields.append('transfer_status')
-                if record.get('quantity_received') is not None:
-                    existing.quantity_received = record['quantity_received']
+                # BUG-788 : la quantité reçue ne vient que de la boulangerie réceptrice.
+                if record.get('quantity_received') is not None and node.pk == existing.to_node_id:
+                    # BUG-894 : mêmes bornes que la voie REST (entier 0 à 2e9).
+                    qty_recv = _sync_bounded_qty(record['quantity_received'])
+                    if qty_recv is None:
+                        return _record_result(record_id, False, "quantité reçue invalide")
+                    existing.quantity_received = qty_recv
                     changed_fields.append('quantity_received')
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
+            if existing.transfer_status in _TRANSFER_LOCKED:
+                # BUG-921 : le lot qui termine le transfert peut encore pousser ses lignes.
+                _batch_terminal_parents().add(str(existing.pk))
         return _record_result(record_id, True)
 
     from_code = record.get('from_node')
@@ -1302,17 +1703,58 @@ def _push_bread_transfer(node, record):
         to_bakery = Node.objects.get(code=to_code)
     except Node.DoesNotExist:
         return _record_result(record_id, False, "boulangerie inconnue (from_node/to_node)")
+    # BUG-788 : seul un nœud partie au transfert (émetteur ou récepteur) peut le créer.
+    if node.pk not in (from_bakery.pk, to_bakery.pk):
+        return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
+    # BUG-874 : l'émettrice ne crée pas un transfert déjà reçu/confirmé.
+    if node.pk != to_bakery.pk and (
+            record.get('quantity_received') is not None
+            or record.get('transfer_status') == BreadTransfer.TransferStatus.CONFIRMED):
+        return _record_result(
+            record_id, False,
+            "seule la boulangerie réceptrice peut confirmer la réception")
+
+    # BUG-891 : un transfert naît toujours « en attente » ; les autres états
+    # s'obtiennent par la machine d'états (BUG-888), jamais à la création.
+    # BUG-958 : seul l'envoi direct de l'émettrice (transfers/send/) naît
+    # « répondu » (quantity_sent renseignée, aucune quantité reçue) ; le poste
+    # n'exporte que son état courant. CONFIRMED/DISPUTED/CANCELLED jamais à la création.
+    TS = BreadTransfer.TransferStatus
+    initial_status = record.get('transfer_status') or TS.PENDING
+    direct_send = (
+        initial_status == TS.RESPONDED and node.pk == from_bakery.pk
+        and record.get('quantity_received') in (None, ''))
+    if initial_status != TS.PENDING and not direct_send:
+        return _record_result(
+            record_id, False,
+            "un transfert est créé au statut « en attente » (ou « répondu » par l'émettrice) uniquement")
+    if record.get('quantity_received') is not None:
+        if _sync_bounded_qty(record['quantity_received']) is None:
+            return _record_result(record_id, False, "quantité reçue invalide")
 
     bread_price = None
     bp_id = record.get('bread_price')
     if bp_id:
         bread_price = BreadPrice.objects.filter(pk=bp_id).first()
 
+    # BUG-967 : quantités normalisées en entiers ('5.0', '1e1', 5.0 -> 5), jamais brutes.
+    try:
+        qty_sent = (None if record.get('quantity_sent') in (None, '')
+                    else _sync_int(record['quantity_sent'], 'quantity_sent'))
+    except ValueError as exc:
+        return _record_result(record_id, False, str(exc))
+    qty_received = (None if record.get('quantity_received') is None
+                    else _sync_bounded_qty(record['quantity_received']))
     transfer = BreadTransfer(
         id=record_id, from_node=from_bakery, to_node=to_bakery, bread_price=bread_price,
-        quantity_sent=record.get('quantity_sent'),
-        quantity_received=record.get('quantity_received'),
-        transfer_status=record.get('transfer_status', BreadTransfer.TransferStatus.PENDING),
+        quantity_sent=qty_sent,
+        quantity_received=qty_received,
+        transfer_status=initial_status,
+        # BUG-977 : `flow` conservé ; DIRECT uniquement pour un envoi direct de l'émettrice
+        # (statut RESPONDED à la création), y compris d'un poste ancien qui n'exporte pas `flow`.
+        flow=(BreadTransfer.Flow.DIRECT
+              if direct_send and record.get('flow') != BreadTransfer.Flow.REQUEST
+              else BreadTransfer.Flow.REQUEST),
         notes=record.get('notes', ''),
         node_origin=record.get('node_origin', to_code or node.code),
     )
@@ -1321,42 +1763,80 @@ def _push_bread_transfer(node, record):
 
 
 def _push_bread_transfer_line(node, record):
-    from core.models import BreadPrice
+    """Ligne de transfert. BUG-919 : identifiée par sa clé naturelle
+    (transfert, catégorie de pain), unique en base ; l'id local du poste n'est
+    jamais utilisé comme clé cloud."""
     from production.models import BreadTransfer, BreadTransferLine
 
     record_id = record.get('id')
-    if record_id:
-        existing = BreadTransferLine.objects.filter(pk=record_id).first()
-        if existing:
-            changed_fields = []
-            if (record.get('quantity_received') is not None
-                    and existing.quantity_received != record['quantity_received']):
-                existing.quantity_received = record['quantity_received']
-                changed_fields.append('quantity_received')
-            if changed_fields:
-                existing.save(update_fields=changed_fields)
-            return _record_result(record_id, True)
-
-    transfer = BreadTransfer.objects.filter(pk=record.get('transfer')).first()
+    transfer_uuid = _strict_uuid(record.get('transfer'))
+    transfer = BreadTransfer.objects.filter(pk=transfer_uuid).first() if transfer_uuid else None
     if transfer is None:
         return _record_result(record_id, False, "dépendance manquante : transfer")
     if node.pk not in (transfer.from_node_id, transfer.to_node_id):
         return _record_result(record_id, False, "transfert étranger à ce nœud refusé")
-    bread_price = BreadPrice.objects.filter(pk=record.get('bread_price')).first()
+    bread_price = _bread_price_or_none(record.get('bread_price'))
     if bread_price is None:
         return _record_result(record_id, False, "dépendance manquante : bread_price")
+    # BUG-921 : transfert confirmé/annulé = immuable (hors lot qui le termine).
+    locked = (transfer.transfer_status in _TRANSFER_LOCKED
+              and str(transfer.pk) not in _batch_terminal_parents())
 
-    kwargs = dict(
-        transfer=transfer, bread_price=bread_price,
-        quantity_sent=record.get('quantity_sent', 0),
-        quantity_received=record.get('quantity_received'),
-    )
-    if record_id:
-        kwargs['id'] = record_id
+    existing = BreadTransferLine.objects.filter(transfer=transfer, bread_price=bread_price).first()
+    if existing is not None:
+        # BUG-788 : la quantité reçue n'est modifiable que par la boulangerie réceptrice.
+        sent = record.get('quantity_sent')
+        in_dispute = transfer.transfer_status == 'DISPUTED'
+        update_fields = []
+        if (sent not in (None, '') and node.pk == transfer.from_node_id
+                and _sync_int(sent, 'quantity_sent') != existing.quantity_sent):
+            # BUG-974 : résolution de l'émettrice « le reçu fait foi » (REST resolve_dispute
+            # ALIGN_ON_RECEIVED) : seule exception, dans un litige et uniquement pour aligner
+            # l'envoyé sur la quantité reçue déclarée par la réceptrice.
+            new_sent = _sync_int(sent, 'quantity_sent')
+            if in_dispute and existing.quantity_received is not None and new_sent == existing.quantity_received:
+                existing.quantity_sent = new_sent
+                update_fields.append('quantity_sent')
+            else:
+                # BUG-920 : doublon de ligne avec une autre quantité : jamais « accepté » sans effet.
+                return _record_result(record_id, False, "ligne en double avec une quantité envoyée différente")
+        recv = record.get('quantity_received')
+        if (recv is not None and node.pk == transfer.from_node_id and in_dispute
+                and existing.quantity_received != recv):
+            # BUG-974 : résolution de l'émettrice « l'envoyé fait foi » (ALIGN_ON_SENT) : la
+            # reçue est alignée sur l'envoyé, rien d'autre.
+            recv_i = _sync_int(recv, 'quantity_received')
+            if recv_i == existing.quantity_sent:
+                existing.quantity_received = recv_i
+                update_fields.append('quantity_received')
+        if update_fields:
+            existing.save(update_fields=update_fields)
+        if recv is not None and node.pk == transfer.to_node_id and existing.quantity_received != recv:
+            recv = _sync_int(recv, 'quantity_received')
+            if recv != existing.quantity_received:
+                if locked and existing.quantity_received is not None:
+                    return _record_result(record_id, False, "transfert terminé : quantité reçue non modifiable")
+                existing.quantity_received = recv
+                existing.save(update_fields=['quantity_received'])
+        return _record_result(record_id, True)
+
+    if locked:
+        return _record_result(record_id, False, "transfert terminé : ajout de ligne refusé")
+    # BUG-874 : la quantité reçue ne vient que de la boulangerie réceptrice.
+    if record.get('quantity_received') is not None and node.pk != transfer.to_node_id:
+        return _record_result(
+            record_id, False,
+            "seule la boulangerie réceptrice peut renseigner la quantité reçue")
+    recv = record.get('quantity_received')
     try:
-        BreadTransferLine.objects.create(**kwargs)
+        with transaction.atomic():
+            BreadTransferLine.objects.create(
+                transfer=transfer, bread_price=bread_price,
+                quantity_sent=_sync_int(record.get('quantity_sent', 0) or 0, 'quantity_sent'),
+                quantity_received=None if recv is None else _sync_int(recv, 'quantity_received'),
+            )
     except IntegrityError:
-        pass
+        return _record_result(record_id, False, "ligne en double (écriture concurrente) : à rejouer")
     return _record_result(record_id, True)
 
 
@@ -1384,14 +1864,56 @@ def _push_local_expense(node, record):
     if category is None:
         return _record_result(record_id, False, "dépendance manquante : category")
 
+    # BUG-899 : comme l'API REST (BUG-677), une catégorie réservée à la direction
+    # est refusée à un jeton de boulangerie. Une catégorie désactivée reste
+    # acceptée (dépense saisie hors ligne avant la désactivation).
+    if node.code != 'SIEGE' and category.scope == category.Scope.DIRECTION:
+        return _record_result(record_id, False, "catégorie réservée à la direction : refusée pour une boulangerie")
+
+    # BUG-898 : comme l'API REST (BUG-205), le montant doit être un nombre
+    # ASCII fini strictement positif (-500, 0, absent, texte, NaN -> rejet).
+    raw_amount = record.get('amount')
+    amount = None
+    if raw_amount is not None and not isinstance(raw_amount, bool) and str(raw_amount).isascii():
+        try:
+            amount = Decimal(str(raw_amount).strip())
+        except InvalidOperation:
+            amount = None
+    if amount is None or not amount.is_finite() or amount <= 0 or amount >= Decimal('1E12'):
+        return _record_result(record_id, False, "montant invalide : un nombre strictement positif est attendu")
+    # BUG-900 : comme l'API REST, 2 décimales au plus (pas de sous-centime arrondi à 0).
+    if amount != amount.quantize(Decimal('0.01')):
+        return _record_result(record_id, False, "montant invalide : 2 décimales au plus")
+
     expense = LocalExpense(
         id=record_id, node=bakery, description=record.get('description', ''),
-        amount=_to_decimal(record.get('amount')), category=category,
+        amount=amount, category=category,
         date=_date.fromisoformat(record['date']),
         node_origin=record.get('node_origin', bakery_code),
     )
     expense.save(_sync_bypass=True)
     return _record_result(record_id, True)
+
+
+def _bill_int(raw, name):
+    """Billetage : ENTIER strict. Int (non booléen) ou chaîne de chiffres ASCII 0-9
+    uniquement ; '2.0', '1e3', négatifs, flottants, non ASCII refusés (ValueError)."""
+    if isinstance(raw, bool) or isinstance(raw, float):
+        raise ValueError(f"« {name} » invalide : entier attendu")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not (text.isascii() and text.isdigit()):
+            raise ValueError(f"« {name} » invalide : entier attendu (chiffres 0-9 uniquement)")
+        raw = text
+    return _sync_int(raw, name)
+
+
+def _bills_kwargs(record):
+    """BUG-932 : billetage en entiers (les chaînes numériques ASCII validées par
+    `_check_bills` sont converties ; absent/vide = 0)."""
+    return {n: (0 if record.get(n) in (None, '') else _bill_int(record[n], n))
+            for n in ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                      'bills_500', 'bills_200', 'bills_100', 'bills_50')}
 
 
 def _push_facturier_report(node, record):
@@ -1424,9 +1946,27 @@ def _push_facturier_report(node, record):
     except Node.DoesNotExist:
         return _record_result(record_id, False, f"boulangerie inconnue : {bakery_code}")
 
+    # BUG-911 : la contrainte (node, facturier, team, date) ne protège pas quand
+    # `facturier` est NULL (rapport poussé) : une seule vacation (boulangerie,
+    # équipe, jour), sinon la clôture compterait les ventes en double.
+    report_date = _date.fromisoformat(record['date'])
+    # d27 : REST autorise deux facturiers distincts sur la même vacation ; on ne
+    # rejette que le doublon du même facturier (ou indéterminé des deux côtés).
+    from django.contrib.auth import get_user_model
+    pushed_fact = record.get('facturier')
+    fact_id = None
+    if pushed_fact not in (None, '') and _strict_uuid(pushed_fact):
+        fact_id = get_user_model().objects.filter(pk=pushed_fact).values_list('pk', flat=True).first()
+    duplicate = FacturierReport.objects.filter(
+        node=bakery, team=record.get('team', ''), date=report_date, facturier_id=fact_id).exists()
+    if duplicate:
+        return _record_result(
+            record_id, False,
+            f"un rapport existe déjà pour {bakery.code}, équipe {record.get('team')}, à la date {report_date}")
+
     report = FacturierReport(
         id=record_id, node=bakery, team=record.get('team', ''),
-        date=_date.fromisoformat(record['date']),
+        date=report_date, facturier_id=fact_id,
         total_cash_sales=_to_decimal(record.get('total_cash_sales')),
         total_credit_sales=_to_decimal(record.get('total_credit_sales')),
         theoretical_cash=_to_decimal(record.get('theoretical_cash')),
@@ -1460,53 +2000,65 @@ def _push_disbursement_voucher(node, record):
     if not record_id:
         return _record_result(record_id, False, "id manquant")
 
+    # BUG-789 : le bordereau débite le livre de caisse direction (SIEGE) ;
+    # comme l'API REST (IsHeadquarters), seul un jeton du nœud siège peut le pousser.
+    if node.code != 'SIEGE':
+        return _record_result(
+            record_id, False, "bordereau de versement réservé au siège : refusé pour une boulangerie")
+
     existing = DisbursementVoucher.objects.filter(pk=record_id).first()
-    if existing is None:
-        if not record.get('date') or not record.get('motif'):
-            return _record_result(record_id, False, "champs requis manquants (date/motif)")
-        voucher = DisbursementVoucher(
-            id=record_id, date=_date.fromisoformat(record['date']),
-            motif=record.get('motif', ''), beneficiary=record.get('beneficiary', ''),
-            bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
-            bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
-            bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
-            bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
-            piece_number=record.get('piece_number', ''),
-            node_origin=record.get('node_origin', node.code),
-        )
-        voucher.compute_physical_cash()
-        if not voucher.piece_number:
-            voucher.piece_number = f"BV-{voucher.date.strftime('%Y%m%d')}-{str(voucher.id)[:6].upper()}"
-        voucher.save(_sync_bypass=True)
-        existing = voucher
+    created = existing is None
+    if created and (not record.get('date') or not record.get('motif')):
+        return _record_result(record_id, False, "champs requis manquants (date/motif)")
 
-    if CashbookEntry.objects.filter(source_bordereau=existing).exists():
-        return _record_result(record_id, True)
-
-    siege = Node.objects.filter(code='SIEGE').first()
-    if siege is None:
-        return _record_result(record_id, False, "nœud SIEGE introuvable — exécutez les migrations avant de synchroniser un bordereau")
-
-    label = f"Bordereau de versement — {existing.motif}"
-    if existing.beneficiary:
-        label += f" ({existing.beneficiary})"
-
-    def _check_sufficient_balance(last_balance):
-        if existing.physical_cash_total > last_balance:
-            raise DRFValidationError(
-                f"Montant du bordereau ({existing.physical_cash_total:,.0f} FC) "
-                f"supérieur au solde disponible ({last_balance:,.0f} FC)."
+    # BUG-914 : bon + écriture au livre dans UNE transaction (comme REST) : un refus
+    # (solde insuffisant) ne laisse aucun bon orphelin en base.
+    with transaction.atomic():
+        if created:
+            voucher = DisbursementVoucher(
+                id=record_id, date=_date.fromisoformat(record['date']),
+                motif=record.get('motif', ''), beneficiary=record.get('beneficiary', ''),
+                **_bills_kwargs(record),
+                piece_number=record.get('piece_number', ''),
+                node_origin=record.get('node_origin', node.code),
             )
+            voucher.compute_physical_cash()
+            if not voucher.piece_number:
+                voucher.piece_number = f"BV-{voucher.date.strftime('%Y%m%d')}-{str(voucher.id)[:6].upper()}"
+            voucher.save(_sync_bypass=True)
+            existing = voucher
 
-    try:
-        append_cashbook_entry(
-            validate_balance=_check_sufficient_balance,
-            node=siege, date=existing.date, piece_number=existing.piece_number,
-            imputation='SORTIE', label=label, exit_amount=existing.physical_cash_total,
-            source_bordereau=existing, node_origin='CLOUD',
-        )
-    except DRFValidationError as exc:
-        return _record_result(record_id, False, str(exc.detail[0]) if hasattr(exc, 'detail') else str(exc))
+        if CashbookEntry.objects.filter(source_bordereau=existing).exists():
+            return _record_result(record_id, True)
+
+        siege = Node.objects.filter(code='SIEGE').first()
+        if siege is None:
+            transaction.set_rollback(True)
+            return _record_result(record_id, False, "nœud SIEGE introuvable — exécutez les migrations avant de synchroniser un bordereau")
+
+        label = f"Bordereau de versement — {existing.motif}"
+        if existing.beneficiary:
+            label += f" ({existing.beneficiary})"
+
+        def _check_sufficient_balance(last_balance):
+            if existing.physical_cash_total > last_balance:
+                raise DRFValidationError(
+                    f"Montant du bordereau ({existing.physical_cash_total:,.0f} FC) "
+                    f"supérieur au solde disponible ({last_balance:,.0f} FC)."
+                )
+
+        try:
+            with transaction.atomic():
+                append_cashbook_entry(
+                    validate_balance=_check_sufficient_balance,
+                    node=siege, date=existing.date, piece_number=existing.piece_number,
+                    imputation='SORTIE', label=label, exit_amount=existing.physical_cash_total,
+                    source_bordereau=existing, node_origin='CLOUD',
+                )
+        except DRFValidationError as exc:
+            if created:
+                transaction.set_rollback(True)  # aucun bon sans écriture au livre
+            return _record_result(record_id, False, str(exc.detail[0]) if hasattr(exc, 'detail') else str(exc))
     return _record_result(record_id, True)
 
 
@@ -1632,6 +2184,8 @@ def _push_social_distribution_line(node, record):
     if existing:
         if existing.distribution_id != distribution.pk:
             return _record_result(record_id, False, "distribution différente de l'enregistrement existant")
+        if distribution.is_closed:  # BUG-887 (comme BUG-752/872)
+            return _record_result(record_id, False, "distribution clôturée : ligne non modifiable")
         changed_fields = []
         for field, default in (
             ('indice', existing.indice), ('total_social', existing.total_social),
@@ -1639,7 +2193,7 @@ def _push_social_distribution_line(node, record):
             ('total_payer', existing.total_payer),
         ):
             if field in record:
-                value = record[field] if field == 'indice' else _to_decimal(record[field], default)
+                value = int(record[field]) if field == 'indice' else _to_decimal(record[field], default)
                 if value != getattr(existing, field):
                     setattr(existing, field, value)
                     changed_fields.append(field)
@@ -1648,16 +2202,22 @@ def _push_social_distribution_line(node, record):
                 setattr(existing, field, record[field])
                 changed_fields.append(field)
         if changed_fields:
+            # BUG-918 : remise et total_payer sont calculés côté serveur (comme REST).
+            existing.distribution = distribution
+            existing.compute()
+            changed_fields = list(dict.fromkeys(changed_fields + ['remise', 'total_payer']))
             existing.save(update_fields=changed_fields, _sync_bypass=True)
         return _record_result(record_id, True)
 
+    if distribution.is_closed:  # BUG-887
+        return _record_result(record_id, False, "distribution clôturée : ligne non créable")
     client = Client.objects.filter(pk=record.get('client')).first()
     if client is None:
         return _record_result(record_id, False, "dépendance manquante : client")
 
     line = SocialDistributionLine(
         id=record_id, distribution=distribution, client=client,
-        indice=record.get('indice', 0),
+        indice=int(record.get('indice') or 0),
         total_social=_to_decimal(record.get('total_social')),
         remise=_to_decimal(record.get('remise')),
         merite=_to_decimal(record.get('merite')),
@@ -1666,6 +2226,7 @@ def _push_social_distribution_line(node, record):
         form=record.get('form', 'especes'),
         node_origin=record.get('node_origin', node.code),
     )
+    line.compute()  # BUG-918 : remise / total_payer jamais pris tels que poussés
     line.save(_sync_bypass=True)
     return _record_result(record_id, True)
 
@@ -1774,6 +2335,8 @@ def _validate_fields(label, record):
         elif itype == 'DecimalField':
             if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
                 return bad
+            if isinstance(value, str) and not value.isascii():  # BUG-902/907 : chiffres 0-9 uniquement
+                return bad
             try:
                 dec = Decimal(str(value).strip())
                 if dec.is_finite():
@@ -1787,9 +2350,14 @@ def _validate_fields(label, record):
                        'SmallIntegerField', 'PositiveSmallIntegerField'):
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 return bad
+            if isinstance(value, str) and not value.isascii():  # BUG-903 : chiffres 0-9 uniquement
+                return bad
             if isinstance(value, float) and (value != value or value in (float('inf'), float('-inf'))
                                              or value != int(value)):
                 return bad
+            # BUG-956 : '150000.0' (décimal entier en chaîne) = 150000 ; '1e3' reste refusé.
+            if isinstance(value, str) and re.fullmatch(r'\s*[+-]?\d+\.0+\s*', value):
+                value = value.strip().split('.')[0]
         elif itype == 'BooleanField':
             if not isinstance(value, (bool, int, str)):
                 return bad
@@ -1798,6 +2366,442 @@ def _validate_fields(label, record):
         except (ValidationError, ValueError, TypeError, OverflowError):
             return bad
     return None
+
+
+# ─── Contrôles stricts alignés sur la voie REST (BUG-901 à 909) ─────────
+#
+# `_validate_fields` appelle `field.clean(value, None)` : aucune plage métier,
+# aucun contrôle ASCII (Decimal/int Python acceptent « ٣ »), aucune date
+# future. Les helpers ci-dessous complètent ce contrôle générique, par modèle,
+# avec les mêmes bornes que l'API REST. Un rejet = motif français, les autres
+# enregistrements du lot passent.
+
+MAX_FLOUR_SACKS_SYNC = Decimal('100000')   # ProductionSessionSerializer.MAX_FLOUR_SACKS
+MAX_SYNC_INT = 2_000_000_000               # production.views._strict_int
+MAX_SYNC_DISPOSAL_QTY = 1_000_000          # production.serializers.MAX_DISPOSAL_QTY
+MAX_SYNC_DISPOSAL_VALUE = 9_999_999_999    # production.serializers.MAX_DISPOSAL_VALUE
+MAX_SYNC_COMMISSION_RATE = Decimal('0.30')  # ClientBoundsMixin.MAX_COMMISSION_RATE
+
+
+def _sync_decimal(raw, name, places, minimum=None, maximum=None, max_digits=None):
+    """
+    Décimal strict (ASCII, fini, `places` décimales au plus SANS arrondi
+    silencieux, bornes incluses). Renvoie un Decimal ou lève ValueError
+    (message français). Valeurs None/'' : à traiter par l'appelant.
+    """
+    bad = f"« {name} » invalide ou hors plage"
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float, Decimal)):
+        raise ValueError(bad)
+    text = str(raw).strip()
+    if not text.isascii():
+        raise ValueError(f"« {name} » : chiffres 0-9 uniquement")
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        raise ValueError(bad)
+    if not dec.is_finite():
+        raise ValueError(bad)
+    try:
+        quantized = dec.quantize(Decimal(1).scaleb(-places))
+    except InvalidOperation:
+        raise ValueError(bad)
+    if quantized != dec:
+        raise ValueError(f"« {name} » : {places} décimale(s) au maximum")
+    if minimum is not None and quantized < minimum:
+        raise ValueError(f"« {name} » ne peut pas être inférieur à {minimum}")
+    if maximum is not None and quantized > maximum:
+        raise ValueError(f"« {name} » ne peut pas dépasser {maximum}")
+    if max_digits is not None and len(quantized.as_tuple().digits) > max_digits:
+        raise ValueError(bad)
+    return quantized
+
+
+def _sync_int(raw, name, minimum=0, maximum=MAX_SYNC_INT):
+    """Entier strict ASCII borné (comme la voie REST), ValueError français sinon."""
+    try:
+        dec = _sync_decimal(raw, name, 0, minimum=Decimal(minimum), maximum=Decimal(maximum))
+    except ValueError as exc:
+        raise ValueError(str(exc))
+    return int(dec)
+
+
+def _sync_not_future_date(node, value, name):
+    """Date (objet date) non postérieure à la date de travail du serveur."""
+    from core.workday import work_date_for
+    if value > work_date_for(node):
+        raise ValueError(f"« {name} » ne peut pas être dans le futur")
+
+
+def _check_production_session(node, record):
+    if 'date' in record and record['date'] not in (None, ''):
+        day = _strict_date(record['date'])
+        if day is None:
+            return "« date » invalide (AAAA-MM-JJ attendu)"
+        try:
+            _sync_not_future_date(node, day, 'date')
+        except ValueError as exc:
+            return str(exc)
+    raw = record.get('flour_sacks_used')
+    if raw not in (None, ''):
+        try:
+            _sync_decimal(raw, 'flour_sacks_used', 2, Decimal('0'), MAX_FLOUR_SACKS_SYNC)
+        except ValueError as exc:
+            return str(exc)
+    # BUG-924 : valeur du sac bornée (les totaux, eux, sont recalculés depuis les lignes).
+    if record.get('sac_value_fc_used') not in (None, ''):
+        try:
+            _sync_int(record['sac_value_fc_used'], 'sac_value_fc_used', 0, 100_000_000)
+        except ValueError as exc:
+            return str(exc)
+    # BUG-923 : l'horodatage de clôture ne peut pas être dans le futur.
+    if record.get('closed_at') not in (None, ''):
+        from django.utils import timezone
+        try:
+            moment = _parse_aware_datetime(record['closed_at'])
+            _sync_not_future_date(node, timezone.localtime(moment).date(), 'closed_at')
+        except (ValueError, TypeError, OverflowError) as exc:
+            return str(exc) or "« closed_at » invalide"
+    return None
+
+
+def _check_production_session_line(node, record):
+    if 'quantity' in record:
+        if record['quantity'] is None:
+            return "« quantity » manquante"
+        try:
+            _sync_int(record['quantity'], 'quantity')
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_bread_transfer(node, record):
+    # BUG-922 : pas de transfert d'une boulangerie vers elle-même (REST).
+    if record.get('from_node') not in (None, '') and record.get('from_node') == record.get('to_node'):
+        return "une boulangerie ne peut pas s'envoyer un transfert à elle-même"
+    return _check_transfer_quantities(record)
+
+
+def _check_transfer_quantities(record):
+    # BUG-928 : mêmes bornes que BUG-894 (entier 0 à 2e9).
+    for name in ('quantity_sent', 'quantity_received'):
+        if record.get(name) not in (None, ''):
+            try:
+                _sync_int(record[name], name)
+            except ValueError as exc:
+                return str(exc)
+    return None
+
+
+def _check_bread_transfer_line(node, record):
+    return _check_transfer_quantities(record)
+
+
+def _check_bread_disposal(node, record):
+    from production.models import BreadDisposal
+    dtype = record.get('disposal_type')
+    if dtype is None and record.get('id') and BreadDisposal.objects.filter(pk=record['id']).exists():
+        return None  # rejeu minimal d'une disposition connue : le handler reste idempotent
+    if dtype not in BreadDisposal.DisposalType.values:
+        return "« disposal_type » manquant ou invalide"
+    if 'quantity' in record and record['quantity'] not in (None, ''):
+        low = -MAX_SYNC_INT if dtype == 'REMAINING' else 0
+        try:
+            _sync_int(record['quantity'], 'quantity', minimum=low)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('unit_price_sold') not in (None, ''):
+        try:
+            _sync_int(record['unit_price_sold'], 'unit_price_sold')
+        except ValueError as exc:
+            return str(exc)
+    # BUG-925 : mêmes bornes que la voie REST (quantité <= 1 000 000, valeur
+    # totale <= 9 999 999 999 : colonne Decimal(12, 2)).
+    qty = _sync_int(record.get('quantity') or 0, 'quantity', minimum=-MAX_SYNC_INT)
+    price = _sync_int(record.get('unit_price_sold') or 0, 'unit_price_sold')
+    if abs(qty) > MAX_SYNC_DISPOSAL_QTY:
+        return f"« quantity » ne peut pas dépasser {MAX_SYNC_DISPOSAL_QTY}"
+    if abs(qty) * price > MAX_SYNC_DISPOSAL_VALUE:
+        return "la valeur totale (quantité × prix unitaire) dépasse la limite autorisée"
+    return None
+
+
+def _check_consumable_movement(node, record):
+    # BUG-926 : code de consommable bien formé (texte court, sans blanc, comme
+    # ConsumableCount) ; l'appartenance à ConsumableType reste du ressort de BUG-729
+    # (des suites existantes poussent des codes métier non seedés : SEL, FARINE...).
+    ctype = record.get('consumable_type')
+    if ctype not in (None, ''):
+        import re
+        if not isinstance(ctype, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,10}', ctype):
+            return "« consumable_type » invalide (code de 1 à 10 caractères sans espace attendu)"
+    unit = record.get('unit')
+    if unit not in (None, '') and (not isinstance(unit, str) or len(unit) > 20):
+        return "« unit » invalide"
+    if record.get('quantity') not in (None, ''):
+        try:
+            _sync_decimal(record['quantity'], 'quantity', 3, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('unit_price') not in (None, ''):
+        try:
+            _sync_decimal(record['unit_price'], 'unit_price', 4, Decimal('0'), max_digits=16)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_invoice(node, record):
+    from django.utils import timezone
+
+    if record.get('commission_rate') not in (None, ''):
+        try:
+            _sync_decimal(record['commission_rate'], 'commission_rate', 2,
+                          Decimal('0'), MAX_SYNC_COMMISSION_RATE)
+        except ValueError as exc:
+            return str(exc)
+    for name in ('delivered_at', 'not_served_at'):
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            moment = _parse_aware_datetime(record[name])
+            _sync_not_future_date(node, timezone.localtime(moment).date(), name)
+        except ValueError as exc:
+            return str(exc)
+    # BUG-927 : équipes A et B uniquement (CLAUDE.md 5.2).
+    if record.get('team') not in (None, '', 'A', 'B'):
+        return "« team » invalide : équipe A ou B uniquement"
+    receipt = record.get('receipt_number')
+    if receipt not in (None, ''):
+        if not isinstance(receipt, str) or not receipt.isascii():
+            return "« receipt_number » : caractères ASCII uniquement"
+    return None
+
+
+def _check_day(node, record, key='date'):
+    """Date AAAA-MM-JJ valide et non future (si présente). Renvoie un motif ou None."""
+    if record.get(key) in (None, ''):
+        return None
+    day = _strict_date(record[key])
+    if day is None:
+        return "« date » invalide (AAAA-MM-JJ attendu)"
+    try:
+        _sync_not_future_date(node, day, 'date')
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def _check_amounts(record, specs):
+    """specs : (champ, décimales, minimum, max_digits). Renvoie un motif ou None."""
+    for name, places, low, digits in specs:
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _sync_decimal(record[name], name, places, low, max_digits=digits)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+_BILL_FIELDS = ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                'bills_500', 'bills_200', 'bills_100', 'bills_50')
+
+
+def _check_bills(record):
+    for name in _BILL_FIELDS:
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _bill_int(record[name], name)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_facturier_report(node, record):
+    # BUG-910 : montants >= 0, ASCII, 2 décimales (sacks_value_gap peut être négatif).
+    zero = Decimal('0')
+    reason = _check_amounts(record, (
+        ('total_cash_sales', 2, zero, 14), ('total_credit_sales', 2, zero, 14),
+        ('theoretical_cash', 2, zero, 14), ('sacks_consumed', 2, zero, 8),
+        ('sacks_value_gap', 2, None, 14),
+    ))
+    if reason:
+        return reason
+    # BUG-911 : équipes A et B uniquement (CLAUDE.md 5.2, REST BUG-812).
+    from treasury.models import FacturierReport
+    known = record.get('id') not in (None, '') and FacturierReport.objects.filter(pk=record['id']).exists()
+    if 'team' in record or not known:
+        if record.get('team') not in ('A', 'B'):
+            return "« team » invalide : équipe A ou B uniquement"
+    reason = _check_day(node, record)  # BUG-912
+    if reason or known:
+        return reason
+    # BUG-929/930 : facturier = utilisateur ACTIF de rôle FACTURIER, du MÊME nœud que le
+    # rapport (l'équipe du facturier n'est pas contrôlée : test c10 « même facturier, autre équipe »).
+    bakery_code = record.get('node') or node.code
+    pushed = record.get('facturier')
+    if pushed not in (None, ''):
+        uid = _strict_uuid(pushed) if isinstance(pushed, str) else None
+        from django.contrib.auth import get_user_model
+        fact = get_user_model().objects.filter(pk=uid).first() if uid else None
+        if fact is None:
+            return "« facturier » inconnu : utilisateur introuvable"
+        # BUG-935 : rôles de la règle REST (IsGerant crée ; IsFacturier = FACTURIER et au-dessus).
+        # BUG-936 : un facturier désactivé depuis la saisie hors ligne reste accepté.
+        if fact.role not in ('FACTURIER', 'GERANT', 'COMPTABLE', 'DIRECTION', 'ADMIN'):
+            return "« facturier » doit être un utilisateur de rôle facturier, gérant ou supérieur"
+        # BUG-963 : les rôles sans rattachement (COMPTABLE/DIRECTION/ADMIN) créent des
+        # rapports pour toute boulangerie en REST : pas de contrôle de nœud pour eux.
+        if not fact.can_access_all_nodes and (fact.node is None or fact.node.code != bakery_code):
+            return "« facturier » n'appartient pas à la boulangerie du rapport"
+    # BUG-931 : jour d'une clôture confirmée figé (comme REST).
+    from treasury.models import CashClosure
+    day = _strict_date(record['date']) if record.get('date') not in (None, '') else None
+    if day is not None and CashClosure.objects.filter(
+            node__code=bakery_code, date=day, is_validated=True).exists():
+        return f"la clôture de {bakery_code} du {day} est déjà confirmée : rapport refusé"
+    return None
+
+
+def _check_local_expense(node, record):
+    # BUG-962 : date valide et non future (REST BUG-086/812) avec motif précis.
+    reason = _check_day(node, record)
+    if reason:
+        return reason
+    # BUG-961 : jour d'une clôture confirmée figé (REST _refuse_if_closure_confirmed).
+    from treasury.models import CashClosure, LocalExpense
+    if record.get('id') not in (None, '') and _strict_uuid(record['id']) \
+            and LocalExpense.objects.filter(pk=record['id']).exists():
+        return None  # rejeu : le handler reste idempotent
+    day = _strict_date(record['date']) if record.get('date') not in (None, '') else None
+    bakery_code = record.get('node') or node.code
+    if day is not None and CashClosure.objects.filter(
+            node__code=bakery_code, date=day, is_validated=True).exists():
+        return f"la clôture de {bakery_code} du {day} est déjà confirmée : dépense refusée"
+    return None
+
+
+def _check_client(node, record):
+    # BUG-916 : mêmes bornes que ClientBoundsMixin (REST).
+    from clients.models import Client
+    known = record.get('id') not in (None, '') and Client.objects.filter(pk=record['id']).exists()
+    if known:
+        return None  # client connu : le handler tranche (no-op / non propriétaire)
+    for name in ('first_name', 'last_name'):
+        val = record.get(name)
+        if not isinstance(val, str) or not val.strip():
+            return f"« {name} » obligatoire"
+    reason = _check_amounts(record, (('cotisation_sociale', 2, Decimal('0'), 10),))
+    if reason:
+        return reason
+    for name, places, low, high in (
+        ('commission_rate', 2, Decimal('0'), MAX_SYNC_COMMISSION_RATE),
+        ('credit_limit', 2, Decimal('0'), Decimal('10000000')),
+    ):
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _sync_decimal(record[name], name, places, low, high)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_social_contribution(node, record):
+    # BUG-917 : montant >= 0, mois 1-12, client de la boulangerie du jeton.
+    from clients.models import Client
+    if record.get('amount') not in (None, ''):
+        try:
+            _sync_decimal(record['amount'], 'amount', 2, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('month') not in (None, ''):
+        try:
+            _sync_int(record['month'], 'month', 1, 12)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('year') not in (None, ''):
+        try:
+            _sync_int(record['year'], 'year', 2000, 2200)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('client') not in (None, ''):
+        owner = Client.objects.filter(pk=record['client']).values_list('node_id', flat=True).first()             if _strict_uuid(record['client']) else None
+        if owner is not None and owner != node.pk:
+            return "ce client n'appartient pas à la boulangerie indiquée"
+    return None
+
+
+def _check_social_distribution(node, record):
+    if record.get('tarif') not in (None, ''):
+        try:
+            _sync_decimal(record['tarif'], 'tarif', 2, Decimal('0'), max_digits=10)
+        except ValueError as exc:
+            return str(exc)
+    if record.get('year') not in (None, ''):
+        try:
+            _sync_int(record['year'], 'year', 2000, 2200)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_social_distribution_line(node, record):
+    # BUG-918 : indice 0-12, mérite / total >= 0, client du même nœud (comme REST).
+    from clients.models import Client
+    if record.get('indice') not in (None, ''):
+        try:
+            _sync_int(record['indice'], 'indice', 0, 12)
+        except ValueError as exc:
+            return str(exc)
+    reason = _check_amounts(record, (('merite', 2, Decimal('0'), 8), ('total_social', 2, Decimal('0'), 8)))
+    if reason:
+        return reason
+    if record.get('client') not in (None, ''):
+        owner = Client.objects.filter(pk=record['client']).values_list('node_id', flat=True).first()             if _strict_uuid(record['client']) else None
+        if owner is not None and owner != node.pk:
+            return "ce client n'appartient pas à la boulangerie de la distribution"
+    return None
+
+
+def _check_cash_closure(node, record):
+    zero = Decimal('0')
+    reason = _check_amounts(record, (('total_entries', 2, zero, 14), ('total_expenses', 2, zero, 14)))
+    return reason or _check_bills(record) or _check_day(node, record)  # BUG-913 / 912
+
+
+def _check_disbursement_voucher(node, record):
+    reason = _check_bills(record) or _check_day(node, record)  # BUG-914 / 912
+    if reason:
+        return reason
+    from treasury.models import DisbursementVoucher
+    if record.get('id') not in (None, '') and DisbursementVoucher.objects.filter(pk=record['id']).exists():
+        return None  # rejeu : le handler reste idempotent
+    total = sum(int(_sync_int(record.get(n) or 0, n)) * int(n.split('_')[1]) for n in _BILL_FIELDS)
+    if total <= 0:
+        return "le bordereau doit comporter au moins un billet (montant supérieur à 0 FC)"
+    return None
+
+
+_STRICT_CHECKS = {
+    'clients.Client': _check_client,
+    'clients.SocialContribution': _check_social_contribution,
+    'clients.SocialDistribution': _check_social_distribution,
+    'clients.SocialDistributionLine': _check_social_distribution_line,
+    'treasury.FacturierReport': _check_facturier_report,
+    'treasury.LocalExpense': _check_local_expense,
+    'treasury.CashClosure': _check_cash_closure,
+    'treasury.DisbursementVoucher': _check_disbursement_voucher,
+    'production.ProductionSession': _check_production_session,
+    'production.ProductionSessionLine': _check_production_session_line,
+    'production.BreadDisposal': _check_bread_disposal,
+    'production.BreadTransfer': _check_bread_transfer,
+    'production.BreadTransferLine': _check_bread_transfer_line,
+    'production.ConsumableMovement': _check_consumable_movement,
+    'sales.Invoice': _check_invoice,
+}
 
 
 def _check_node_scope(node, label, record):
@@ -1844,6 +2848,8 @@ def _preflight(node, label, record):
         return None, _record_result(rid, False, reason)
 
     reason = _validate_fields(label, record)
+    if not reason and label in _STRICT_CHECKS:
+        reason = _STRICT_CHECKS[label](node, record)
     if reason:
         return None, _record_result(rid, False, reason)
 
@@ -1886,7 +2892,9 @@ def process_push_batch(node, records_by_model):
     from django.db import transaction as _tx
 
     results = {}
+    _batch_ctx.parents = set()
     for model_label in PUSH_MODEL_ORDER:
+        seen_ids = set()
         records = records_by_model.get(model_label) or []
         handler = PUSH_HANDLERS[model_label]
         model_results = []
@@ -1896,6 +2904,15 @@ def process_push_batch(node, records_by_model):
             continue
         for record in records:
             raw_record = record
+            if model_label == 'clients.Client' and isinstance(record, dict) and record.get('id'):
+                # BUG-972 : dans un même lot, un id déjà traité plus haut = rejeu (le premier
+                # enregistrement gagne). Un AUTRE lot peut modifier l'identité (BUG-941).
+                _u = _strict_uuid(record['id'])  # BUG-984 : forme normalisée (casse, tirets, accolades)
+                rid_key = str(_u) if _u is not None else str(record['id'])
+                if rid_key in seen_ids:
+                    model_results.append(_record_result(record['id'], True))
+                    continue
+                seen_ids.add(rid_key)
             try:
                 with _tx.atomic():
                     record, rejected = _preflight(node, model_label, record)

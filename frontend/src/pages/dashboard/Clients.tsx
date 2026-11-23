@@ -6,7 +6,8 @@ import {
   SocialContribution,
   BassinRow, ClientImportResult,
 } from '@/api/services';
-import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError, isSalesBlockedError } from '@/api/errors';
+import { useClosureStatusStore } from '@/store/closureStatusStore';
 import { useAuthStore } from '@/store/authStore';
 import { useWorkDate } from '@/store/workDateStore';
 import { TEAM_NOT_ASSIGNED_MESSAGE, useTeamAssignmentStore } from '@/store/teamAssignmentStore';
@@ -36,6 +37,7 @@ export const Clients: React.FC = () => {
   // BUG-161 : jour calendaire du serveur (jamais la date UTC du navigateur) ; 403 TEAM_NOT_ASSIGNED.
   const workDate = useWorkDate();
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
+  const requestClosureRefresh = useClosureStatusStore(s => s.requestRefresh);
   const [clients, setClients] = useState<ClientItem[]>([]);
   const [breadPrices, setBreadPrices] = useState<BreadPrice[]>([]);
   const [debtCeiling, setDebtCeiling] = useState<number>(50000);
@@ -609,6 +611,8 @@ export const Clients: React.FC = () => {
           setIsSubmitting(false);
           return;
         }
+        // BUG-973 : clôture du jour en attente de validation -> message du serveur + relecture du statut.
+        if (isSalesBlockedError(err)) requestClosureRefresh();
         // BUG-230 : `detail` d'abord, puis erreurs par champ (helper commun).
         setSaleError(getErrorDetail(err, 'Erreur lors de la facturation.'));
         setIsSubmitting(false);

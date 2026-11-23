@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from core.mixins import AsciiDigitsMixin
 from .models import Invoice, InvoiceLine
 
 
@@ -28,6 +29,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     node_display         = serializers.StringRelatedField(source='node', read_only=True)
     status_display       = serializers.CharField(source='get_status_display', read_only=True)
     payment_type_display = serializers.CharField(source='get_payment_type_display', read_only=True)
+    # BUG-651b : code boulangerie (K1, B2...) pour le reçu thermique, lecture seule.
+    node_code            = serializers.CharField(source='node.code', read_only=True, default=None)
     # BUG-092 : perte totale de la facture (somme des pertes par ligne),
     # exposée pour le reçu/l'historique client — jamais stockée, toujours
     # recalculée depuis les lignes réelles.
@@ -41,7 +44,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Invoice
         fields = [
-            'id', 'receipt_number', 'node', 'node_display',
+            'id', 'receipt_number', 'node', 'node_display', 'node_code',
             'client', 'client_display', 'client_code', 'client_photo', 'client_current_debt',
             'facturier', 'facturier_display', 'livreur', 'livreur_display',
             'team', 'status', 'status_display', 'payment_type', 'payment_type_display',
@@ -54,7 +57,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'node_origin', 'is_synced', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'receipt_number', 'node_display', 'client_display',
+            'id', 'receipt_number', 'node_display', 'node_code', 'client_display',
             'client_code', 'client_photo', 'client_current_debt',
             'facturier_display', 'livreur_display', 'status_display', 'payment_type_display',
             'order_total', 'debt_after', 'invoice_date', 'delivered_at', 'total_loss',
@@ -120,7 +123,8 @@ class InvoiceLineInputSerializer(serializers.Serializer):
     )
 
 
-class InvoiceCreateSerializer(serializers.Serializer):
+class InvoiceCreateSerializer(AsciiDigitsMixin, serializers.Serializer):
+    ascii_digit_fields = ('payment_amount',)  # BUG-897
     """Create an invoice with its lines in a single request."""
     # `Node` a une clé entière (BigAutoField, core/migrations/0001_initial.py),
     # pas une clé UUID (contrairement à `Client`/`Invoice`, qui héritent de
@@ -174,7 +178,8 @@ class InvoiceCreateSerializer(serializers.Serializer):
         return value
 
 
-class InvoiceAdjustSerializer(serializers.Serializer):
+class InvoiceAdjustSerializer(AsciiDigitsMixin, serializers.Serializer):
+    ascii_digit_fields = ('payment_amount',)  # BUG-897
     """
     BUG-097 : corrige/annule une commande déjà enregistrée via une nouvelle
     facture liée (« grande trace »), jamais une mutation de l'originale.

@@ -33,7 +33,7 @@ from production.models import (
     ProductionSession, ProductionSessionLine, BreadDisposal,
     ConsumableMovement, ConsumableStock, BreadTransfer, BreadTransferLine,
 )
-from treasury.models import LocalExpense, FacturierReport, DisbursementVoucher, CashbookEntry
+from treasury.models import CashClosure, LocalExpense, FacturierReport, DisbursementVoucher, CashbookEntry
 
 
 def _node_client(node, raw_token):
@@ -481,13 +481,27 @@ class TreasuryExtensionSyncTests(TestCase):
                 }],
             },
         }, format='json')
+        # BUG-971 : adapte, confirmation par le comptable (simulee) puis rejeu
+        CashClosure.objects.filter(pk=closure_id).update(is_validated=True)
+        self.api.post('/api/sync/push/', {
+            'batch_id': str(uuid.uuid4()),
+            'records': {
+                'treasury.CashClosure': [{
+                    'id': closure_id, 'node': 'K1', 'date': today,
+                    'total_entries': '200000.00', 'total_expenses': '0.00',
+                    'node_origin': 'K1',
+                }],
+            },
+        }, format='json')
 
+        # BUG-789 : seul un jeton du nœud SIEGE peut pousser un bordereau.
+        siege_api = _issue_token(Node.objects.get(code='SIEGE'))
         voucher_id = str(uuid.uuid4())
         record = {
             'id': voucher_id, 'date': date.today().isoformat(), 'motif': 'Achat farine',
             'beneficiary': 'MIDEMA', 'bills_10000': 5, 'node_origin': 'CLOUD',
         }
-        resp1 = self.api.post('/api/sync/push/', {
+        resp1 = siege_api.post('/api/sync/push/', {
             'batch_id': str(uuid.uuid4()), 'records': {'treasury.DisbursementVoucher': [record]},
         }, format='json')
         self.assertEqual(resp1.data['results']['treasury.DisbursementVoucher'][0]['status'], 'ACCEPTED', resp1.data)
@@ -495,7 +509,7 @@ class TreasuryExtensionSyncTests(TestCase):
         voucher = DisbursementVoucher.objects.get(pk=voucher_id)
         self.assertEqual(voucher.cashbook_entries.count(), 1)
 
-        resp2 = self.api.post('/api/sync/push/', {
+        resp2 = siege_api.post('/api/sync/push/', {
             'batch_id': str(uuid.uuid4()), 'records': {'treasury.DisbursementVoucher': [record]},
         }, format='json')
         self.assertEqual(resp2.data['results']['treasury.DisbursementVoucher'][0]['status'], 'ACCEPTED')

@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -94,7 +95,8 @@ def _strict_int(value, label, minimum=0):
         n = int(value)
     elif isinstance(value, str):
         s = value.strip()
-        if s.lstrip('-').isdigit():
+        # BUG-654 : chiffres ASCII uniquement (« ٣ » arabe-indien refusé, comme _strict_pk).
+        if s.isascii() and s.lstrip('-').isdigit():
             # BUG-322 : chiffres Unicode / chaînes > 4300 chiffres -> ValueError.
             try:
                 n = int(s)
@@ -203,6 +205,8 @@ def _parse_consumables_used(raw, node):
             raise ValidationError({'detail': f"« consumables_used » invalide : consommable inconnu « {code} »."})
         raw_qty = item.get('quantity', 0)
         if isinstance(raw_qty, bool) or raw_qty is None or isinstance(raw_qty, (list, dict)):
+            raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
+        if isinstance(raw_qty, str) and not raw_qty.isascii():  # BUG-682
             raise ValidationError({'detail': f"« consumables_used » invalide : quantité non numérique pour {code}."})
         try:
             qty = Decimal(str(raw_qty).strip() or '0')
@@ -842,6 +846,10 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
 
         team = serializer.validated_data.get('team')
         date = serializer.validated_data.get('date')
+        # BUG-653 : une fournée ne peut pas être datée du futur (même règle que les ventes
+        # et la clôture de caisse, BUG-083) ; la saisie rétroactive reste permise.
+        if date is not None and date > work_date_for(node):
+            raise ValidationError({'detail': "La date de la fournée ne peut pas être dans le futur."})
         lines_data = serializer.validated_data.get('lines') or []
         flour_add = serializer.validated_data.get('flour_sacks_used')
 
@@ -998,6 +1006,10 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
             ).select_related('bread_price').all()
         }
         user = self.request.user
+        # BUG-681 : pas de date future non plus en modification (cf. BUG-653).
+        new_date = serializer.validated_data.get('date')
+        if new_date is not None and new_date > work_date_for(serializer.instance.node):
+            raise ValidationError({'detail': "La date de la fournée ne peut pas être dans le futur."})
         old_flour = Decimal(str(serializer.instance.flour_sacks_used or 0))
         if not user.can_access_all_nodes:
             # BUG-056 : un non-HQ ne peut jamais réaffecter une session
@@ -1697,7 +1709,12 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
 
     def perform_update(self, serializer):
         self._refuse_if_inventory_line(serializer.instance)
-        serializer.save()
+        # BUG-683 : toute modification est à renvoyer au Cloud et l'écart est recalculé.
+        physical = serializer.validated_data.get('physical_quantity', serializer.instance.physical_quantity)
+        serializer.save(
+            gap=physical - serializer.instance.system_quantity,
+            is_synced=False,
+        )
 
     def perform_destroy(self, instance):
         self._refuse_if_inventory_line(instance)
@@ -1734,6 +1751,7 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             counted_by=user,
             system_quantity=system_qty,
             gap=physical_qty - system_qty,
+            is_synced=False,  # BUG-626 : comptage hors inventaire, à remonter au Cloud
         )
 
 
@@ -1909,16 +1927,51 @@ class BreadTransferViewSet(DirectTransferMixin, NoNodeGuardMixin, viewsets.Model
                     {'detail': f"Transfert déjà au statut « {locked.get_transfer_status_display()} »."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # BUG-652 : chaque ligne du corps doit correspondre à une ligne de la demande
+            # (400 sinon, sans écriture), comme à la réception (BUG-620).
+            lines_by_bp = {l.bread_price_id: l for l in transfer.lines.select_related('bread_price')}
+            final_qty = {bp_pk: l.quantity_sent for bp_pk, l in lines_by_bp.items()}
+            # BUG-680 : deux lignes de même catégorie -> 400 (la dernière écrasait la première).
+            ids_seen = [b for b, _ in parsed if b is not None]
+            if len(ids_seen) != len(set(ids_seen)):
+                return Response({'detail': "Catégorie de pain en double dans la réponse."},
+                                status=status.HTTP_400_BAD_REQUEST)
             for bp_id, qty_send in parsed:
-                try:
-                    line = transfer.lines.get(bread_price_id=bp_id)
-                except (BreadTransferLine.DoesNotExist, ValueError, TypeError):
-                    continue
-                line.quantity_sent = qty_send  # B confirms/adjusts the quantity they'll send
-                line.save(update_fields=['quantity_sent'])
+                if bp_id not in lines_by_bp:
+                    return Response(
+                        {'detail': f"Catégorie de pain absente de cette demande ({bp_id})."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                final_qty[bp_id] = qty_send  # B confirms/adjusts the quantity they'll send
+            if not any(q > 0 for q in final_qty.values()):
+                return Response(
+                    {'detail': "Une réponse positive doit envoyer au moins un pain ; "
+                               "refusez la demande (approved=false) si rien n'est disponible."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # BUG-652 : même contrôle de stock que `send/`, sous verrou.
+            positive = [bp_pk for bp_pk, q in final_qty.items() if q > 0]
+            for bp_pk in sorted(positive):
+                BreadStock.objects.get_or_create(node=transfer.from_node, bread_price_id=bp_pk)
+            stocks = {
+                s.bread_price_id: s for s in BreadStock.objects.select_for_update()
+                .filter(node=transfer.from_node, bread_price_id__in=positive).order_by('bread_price_id')
+            }
+            for bp_pk in positive:
+                available = stocks[bp_pk].qty_available
+                if final_qty[bp_pk] > available:
+                    return Response({'detail': (
+                        f"Stock insuffisant pour {lines_by_bp[bp_pk].bread_price.label} : "
+                        f"{max(available, 0)} disponible(s) à {transfer.from_node.code}, "
+                        f"{final_qty[bp_pk]} demandé(s)."
+                    )}, status=status.HTTP_400_BAD_REQUEST)
+            for bp_pk, line in lines_by_bp.items():
+                if line.quantity_sent != final_qty[bp_pk]:
+                    line.quantity_sent = final_qty[bp_pk]
+                    line.save(update_fields=['quantity_sent'])
 
             # Deduct B's stock now that bread physically leaves
-            for line in transfer.lines.select_related('bread_price').all():
+            for bp_pk, line in lines_by_bp.items():
                 if line.quantity_sent > 0:
                     _adjust_bread_stock(transfer.from_node, line.bread_price, sent=line.quantity_sent)
 
@@ -2415,6 +2468,17 @@ class BreadDisposalViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, viewset
             qs = qs.filter(node=user.node)
         elif is_node_less_non_hq(user):
             qs = qs.none()  # compte sans boulangerie : rien (BUG-36x)
+        # BUG-674 : Journal des Sorties Non Valorisées consultable par jour :
+        # `?date=` (jour de la fournée) ou plage `?date_from=` / `?date_to=`.
+        params = self.request.query_params
+        for key, lookup in (('date', 'session__date'), ('date_from', 'session__date__gte'),
+                            ('date_to', 'session__date__lte')):
+            raw = params.get(key)
+            if raw:
+                parsed = _safe_parse_date(raw)
+                if parsed is None:
+                    raise ValidationError({'detail': _INVALID_DATE_DETAIL})
+                qs = qs.filter(**{lookup: parsed})
         return qs
 
     def perform_create(self, serializer):
@@ -2987,7 +3051,9 @@ def _build_daily_closure_report(node, report_date=None):
         # le registre, à ne pas confondre avec une omission silencieuse.
         mvm_interne_fc = _m(
             reste_du_jour_fc + reste_du_hier_fc
-            + appro_effectue_fc + appro_recu_fc
+            # BUG-675 (remarque.md, demande 4) : pains envoyés = vendus pour
+            # l'émettrice (+), pains reçus RETRANCHÉS du total de la réceptrice (-).
+            + appro_effectue_fc - appro_recu_fc
             - non_servi_fc + reg_fc  # BUG-177 : NS retranchée (signe du classeur)
             + soldee_fc  # VENTE CASH + VENTE SOLDE : un seul bucket existant (is_soldee)
             + _m(non_vendu_entry['fc']) + _m(declasses_entry['fc'])
@@ -3088,21 +3154,40 @@ def _build_daily_closure_report(node, report_date=None):
     # DECLARED, colonne « produit »). Le dénominateur est la somme de ces
     # mêmes quantités (et non `total_breads_produced`, qui inclut les lignes
     # CARRYOVER du stock de départ, BUG-142) : la répartition somme à 100 %.
-    declared_qty_total = sum(max(0, row['produit']['quantity'] or 0) for row in categories_payload)
-    for row in categories_payload:
-        qty = max(0, row['produit']['quantity'] or 0)
+    # BUG-676 : base de la répartition. Sur une journée « par sacs » non clôturée
+    # (ou sans production déclarée) `produit` est vide : tout affichait 0 %.
+    # Repli : pains vendus du jour (`vendu_jour`), puis pains facturés
+    # (normal + soldé). `repartition_base` indique la base retenue.
+    def _qty_of(row, base):
+        if base == 'produit':
+            return max(0, row['produit']['quantity'] or 0)
+        if base == 'vendu_jour':
+            return max(0, row['vendu_jour']['quantity'] or 0)
+        return max(0, (row['facture_jr']['quantity'] or 0) + (row['vente_cash_soldee']['quantity'] or 0))
+
+    repartition_base = 'produit'
+    for candidate in ('produit', 'vendu_jour', 'facture'):
+        repartition_base = candidate
+        if sum(_qty_of(r, candidate) for r in categories_payload) > 0:
+            break
+    qty_by_row = [_qty_of(r, repartition_base) for r in categories_payload]
+    declared_qty_total = sum(qty_by_row)
+    if repartition_base == 'produit':
+        value_by_row = [max(Decimal('0.00'), Decimal(r['produit']['fc'])) for r in categories_payload]
+    else:
+        value_by_row = [_m(Decimal(q) * Decimal(r['unit_price'])) for q, r in zip(qty_by_row, categories_payload)]
+    total_base_value_fc = sum(value_by_row, Decimal('0.00'))
+    for row, qty, value_fc in zip(categories_payload, qty_by_row, value_by_row):
         pct_qty = (
             (Decimal(qty) * Decimal('100') / Decimal(declared_qty_total))
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             if qty and declared_qty_total else Decimal('0.00')
         )
         repartition_pct_par_quantite.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_qty)})
-
-        value_fc = max(Decimal('0.00'), Decimal(row['produit']['fc']))
         pct_val = (
-            (value_fc * Decimal('100') / total_produced_value_fc)
+            (value_fc * Decimal('100') / total_base_value_fc)
             .quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            if value_fc and total_produced_value_fc else Decimal('0.00')
+            if value_fc and total_base_value_fc else Decimal('0.00')
         )
         repartition_pct_par_valeur.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_val)})
 
@@ -3135,6 +3220,7 @@ def _build_daily_closure_report(node, report_date=None):
             'non_servi_total_fc': str(_m(total_ns_status_fc + total_ns_code_fc)),
             'repartition_pct_par_quantite': repartition_pct_par_quantite,
             'repartition_pct_par_valeur': repartition_pct_par_valeur,
+            'repartition_base': repartition_base,
         },
     }
 
@@ -3737,6 +3823,12 @@ class DailyOpeningConfirmationView(APIView):
                     {'detail': "Date invalide — format attendu AAAA-MM-JJ."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if confirmation_date > work_date_for(node):
+                # BUG-687 : jamais de stock de départ confirmé pour une date future.
+                return Response(
+                    {'detail': "La date ne peut pas être dans le futur."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
             confirmation_date = work_date_for(node)
 
@@ -3789,6 +3881,9 @@ class DailyOpeningConfirmationView(APIView):
             raw_bp = entry.get('bread_price')
             try:
                 if isinstance(raw_bp, bool) or isinstance(raw_qty, bool):
+                    raise ValueError
+                # BUG-896 : ni chiffres non ASCII, ni notation exponentielle.
+                if isinstance(raw_qty, str) and not re.fullmatch(r'\s*-?[0-9]+(\.0+)?\s*', raw_qty):
                     raise ValueError
                 # BUG-6NN : id entier strict (pas 1.5 -> 1, pas de chaîne géante / 1_0).
                 try:

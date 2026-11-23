@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from core.mixins import AsciiDigitsMixin
 from .models import CommissionPeriod, ClientCommission
 
 
@@ -17,7 +18,8 @@ class CommissionPeriodSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_closed', 'closed_at', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
 
-class ClientCommissionSerializer(serializers.ModelSerializer):
+class ClientCommissionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-897
     client_display = serializers.StringRelatedField(source='client', read_only=True)
     period_display = serializers.StringRelatedField(source='period', read_only=True)
     node           = serializers.PrimaryKeyRelatedField(source='period.node', read_only=True)

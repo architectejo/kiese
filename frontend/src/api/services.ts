@@ -74,6 +74,20 @@ export interface BakeryNode {
   // BUG-161 (B1/B2) : heure de relève ("HH:MM:SS") et mode rotation de 24 h.
   handover_time: string;
   team_rotation_enabled: boolean;
+  /** BUG-973 : bloque les ventes après l'heure de clôture jusqu'à validation par la direction. */
+  block_sales_after_closure?: boolean;
+}
+
+// BUG-973 : `GET /api/treasury/closure-status/` — blocage des ventes après l'heure de clôture.
+export interface ClosureStatus {
+  /** « HH:MM » ou null (aucune boulangerie). */
+  closure_hour: string | null;
+  blocked: boolean;
+  reason: string;
+  /** Jour concerné (AAAA-MM-JJ) ou null. */
+  closure_date: string | null;
+  validated: boolean;
+  enabled: boolean;
 }
 
 // BUG-161 (B2) : équipe de service du jour — `GET/POST /api/production/team-assignment/`.
@@ -504,6 +518,8 @@ export interface DailyClosureTotals {
   reste_du_jour_jour_fc?: string | null;
   repartition_pct_par_quantite: DailyClosureRepartitionRow[];
   repartition_pct_par_valeur: DailyClosureRepartitionRow[];
+  /** BUG-676 : base de calcul des pourcentages. */
+  repartition_base?: 'produit' | 'vendu_jour' | 'facture';
 }
 
 export interface DailyClosureReport {
@@ -1058,8 +1074,12 @@ export interface ExpenseCategory {
   code: string;
   label: string;
   is_active: boolean;
+  /** BUG-677 : BOTH = tous, BAKERY = boulangeries, DIRECTION = direction. */
+  scope?: ExpenseCategoryScope;
   updated_at?: string;
 }
+
+export type ExpenseCategoryScope = 'BOTH' | 'BAKERY' | 'DIRECTION';
 
 export interface FinancialYear {
   id: string;
@@ -1758,6 +1778,11 @@ export const commissionsApi = {
 // ── Treasury API ─────────────────────────────────────────────────────────────
 
 export const treasuryApi = {
+  // BUG-973 : `node` réservé aux profils multi-boulangeries (403 sinon).
+  closureStatus: {
+    get: (params?: { node?: string }) =>
+      apiClient.get<ClosureStatus>('/api/treasury/closure-status/', { params }),
+  },
   reports: {
     list: (params?: Record<string, string>) =>
       getList<FacturierReport>('/api/treasury/reports/', params),

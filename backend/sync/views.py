@@ -25,7 +25,7 @@ from core.permissions import IsHeadquarters
 from .authentication import NodeTokenAuthentication
 from .exceptions import TransientSyncError
 from .permissions import IsValidNodeToken
-from .models import SyncBatchLog, SyncConflictLog
+from .models import NodeOpenTransfers, SyncBatchLog, SyncConflictLog
 from .serializers import SyncConflictLogSerializer
 from .services import process_push_batch
 
@@ -59,6 +59,24 @@ class HandshakeView(APIView):
             'server_time': timezone.now().isoformat(),
             'is_active': node.is_active,
         })
+
+
+_MAX_OPEN_TRANSFERS = 1000
+
+
+def _store_open_transfers(node, raw):
+    """BUG-980 : mémorise les ids (UUID valides, bornés) des transferts non terminaux du poste.
+    Champ absent (poste ancien) : rien n'est modifié ; valeur invalide : ignorée."""
+    if raw is None or not isinstance(raw, list):
+        return
+    ids = []
+    for item in raw[:_MAX_OPEN_TRANSFERS]:
+        if isinstance(item, str) and len(item) <= 40:
+            try:
+                ids.append(str(uuid.UUID(item)))
+            except (TypeError, ValueError):
+                continue
+    NodeOpenTransfers.objects.update_or_create(node=node, defaults={'transfer_ids': sorted(set(ids))})
 
 
 class PushView(APIView):
@@ -118,6 +136,10 @@ class PushView(APIView):
         except (TypeError, ValueError):
             return Response({'detail': "batch_id manquant ou invalide (UUID attendu)."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # BUG-980 : transferts non terminaux connus du poste (hors empreinte du lot ;
+        # mise à jour idempotente, y compris sur un lot rejoué).
+        _store_open_transfers(node, data.get('open_transfers'))
+
         records_by_model = data.get('records') or {}
         if not isinstance(records_by_model, dict):
             return Response({'detail': "'records' doit être un objet {modèle: [enregistrements]}."}, status=status.HTTP_400_BAD_REQUEST)
@@ -175,6 +197,10 @@ def _parse_cursor(request, param_name):
             parsed = timezone.make_aware(parsed)
         except (ValueError, OverflowError):
             raise ParseError(f"Paramètre « {param_name} » invalide : date/heure hors plage.")
+    # BUG-785 : curseur dans le futur (Cloud restauré, horloge déréglée) =
+    # traité comme absent (pull complet), jamais « 0 client à jamais ».
+    if parsed > timezone.now():
+        return None
     return parsed
 
 
@@ -230,11 +256,63 @@ class PullView(APIView):
             {
                 'id': str(c.id), 'code': c.code, 'current_debt': str(c.current_debt),
                 'credit_limit': str(c.credit_limit), 'category': c.category,
+                'first_name': c.first_name, 'last_name': c.last_name,
+                'phone': c.phone, 'address': c.address,
                 'updated_at': c.updated_at.isoformat(),
             }
             for c in client_qs
         ]
         payload['since_client_debt'] = now.isoformat()
+
+        # BUG-964 (SYNC.md §5.3) : les transferts dont ce poste est émettrice OU
+        # réceptrice (+ lignes) redescendent, pour que la réceptrice voie et valide
+        # un envoi d'une autre boulangerie. Les transferts terminés depuis plus de
+        # 30 jours ne sont plus renvoyés. Pas de curseur : lot petit, application idempotente.
+        from datetime import timedelta
+        from production.models import BreadTransfer
+        recent = now - timedelta(days=30)
+        # BUG-980 : un transfert terminé depuis > 30 jours reste descendu tant que le poste
+        # déclare (push `open_transfers`) en avoir encore une copie non terminale.
+        state = NodeOpenTransfers.objects.filter(node=node).first()
+        open_ids = list(state.transfer_ids) if state else []
+        terminal = ('CONFIRMED', 'CANCELLED')
+        transfers_qs = BreadTransfer.objects.filter(
+            Q(from_node=node) | Q(to_node=node)
+        ).exclude(
+            Q(transfer_status__in=terminal, updated_at__lt=recent) & ~Q(pk__in=open_ids),
+        ).select_related('from_node', 'to_node').prefetch_related('lines')
+        transfers, transfer_lines = [], []
+        for t in transfers_qs:
+            transfers.append({
+                'id': str(t.id), 'from_node': t.from_node.code, 'to_node': t.to_node.code,
+                'bread_price': t.bread_price_id, 'quantity_sent': t.quantity_sent,
+                'quantity_received': t.quantity_received, 'transfer_status': t.transfer_status,
+                'flow': t.flow, 'notes': t.notes, 'node_origin': t.node_origin,
+                'updated_at': t.updated_at.isoformat(),
+            })
+            for l in t.lines.all():
+                transfer_lines.append({
+                    'transfer': str(t.id), 'bread_price': l.bread_price_id,
+                    'quantity_sent': l.quantity_sent, 'quantity_received': l.quantity_received,
+                })
+        # BUG-983 : état des clôtures DU POSTE UNIQUEMENT (confirmée / infirmée + motif / versée),
+        # pour que le gérant sache qu'il doit recompter. Lecture seule : aucun montant.
+        from treasury.models import CashClosure
+        payload['closures'] = [
+            {'id': str(c.id), 'date': c.date.isoformat(), 'is_validated': c.is_validated,
+             'is_rejected': c.is_rejected, 'rejection_reason': c.rejection_reason,
+             'is_paid': c.cashbook_entries.exists()}
+            for c in CashClosure.objects.filter(node=node, date__gte=(now - timedelta(days=60)).date())
+        ]
+        payload['transfers'] = transfers
+        payload['transfer_lines'] = transfer_lines
+        # BUG-975/976 : identité du poste pour que l'application locale sache s'il est
+        # émettrice ou réceptrice (effets de stock miroir, alertes).
+        payload['node_code'] = node.code
+        delivered_terminal = {t['id'] for t in transfers if t['transfer_status'] in terminal}
+        if state and delivered_terminal & set(open_ids):
+            state.transfer_ids = sorted(set(open_ids) - delivered_terminal)
+            state.save(update_fields=['transfer_ids', 'updated_at'])
 
         Node.objects.filter(pk=node.pk).update(last_sync=now)
         return Response(payload)

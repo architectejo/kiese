@@ -177,6 +177,17 @@ class Node(models.Model):
             "par défaut (comportement historique)."
         )
     )
+    block_sales_after_closure = models.BooleanField(
+        default=False,
+        db_default=False,
+        verbose_name=_("Bloquer les ventes après l'heure de clôture"),
+        help_text=_(
+            "BUG-973 (remarque.md l.464/488) : si activé, la facturation de "
+            "cette boulangerie est bloquée à partir de `handover_time` (= heure "
+            "de clôture) jusqu'à la validation de la clôture du jour par la "
+            "direction. Désactivé par défaut."
+        )
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -652,6 +663,19 @@ class ExpenseCategory(models.Model):
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Actif")
+    )
+
+    class Scope(models.TextChoices):
+        BOTH = 'BOTH', _('Direction et boulangeries')
+        BAKERY = 'BAKERY', _('Boulangeries uniquement')
+        DIRECTION = 'DIRECTION', _('Direction uniquement')
+
+    # BUG-677 (remarque.md, demande 4) : catégories propres à la direction vs
+    # aux boulangeries, gérables depuis la Configuration. Défaut BOTH :
+    # comportement existant inchangé.
+    scope = models.CharField(
+        max_length=10, choices=Scope.choices, default=Scope.BOTH,
+        verbose_name=_("Portée"),
     )
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -187,7 +187,6 @@ class Bug621Neighbourhood(TBase):
         self.assertEqual(self.stock(self.k1, self.b3), 100)
         self.assertEqual(BreadTransfer.objects.get(pk=t).transfer_status, 'PENDING')
 
-    @expectedFailure  # BUG-652
     def test_BUG_652_respond_with_unknown_category_is_not_silently_ignored(self):
         """Reponse positive avec une categorie absente de la demande : ignoree en silence
         (`continue`) puis les quantites DEMANDEES sont deduites : l'emettrice croit avoir
@@ -197,7 +196,6 @@ class Bug621Neighbourhood(TBase):
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(self.stock(self.k1, self.b3), 100)
 
-    @expectedFailure  # BUG-652
     def test_BUG_652_respond_with_all_quantities_zero_is_not_a_positive_response(self):
         t = self.request([self.L(self.b3, 10)])
         r = self.respond(t, [self.L(self.b3, 0)])
@@ -426,7 +424,6 @@ class SessionCeilings(Base):
             r = cl(self.g1).post(self.URL, self.body(date=d), format='json')
             self.assertEqual(r.status_code, 400, (d, r.content))
 
-    @expectedFailure  # BUG-653
     def test_BUG_653_future_date_session_refused(self):
         r = cl(self.g1).post(self.URL, self.body(date=str(ddate.today() + timedelta(days=400))), format='json')
         self.assertEqual(r.status_code, 400, r.content)
@@ -479,7 +476,6 @@ class DisposalsA4(Base):
 
 
 class UnicodeDigits(TBase):
-    @expectedFailure  # BUG-654
     def test_BUG_654_unicode_digit_quantities_are_refused(self):
         """`_strict_int` accepte les chiffres Unicode (« ٣ » = 3) alors que `_strict_pk` les refuse
         (BUG-612) : incoherence ; saisie ambigue et non reproductible hors Python."""
@@ -490,7 +486,6 @@ class UnicodeDigits(TBase):
         r = cl(self.g1).post(T + 'send/', {'to_node': self.k2.pk, 'lines': [self.L(self.b3, '٣')]}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
 
-    @expectedFailure  # BUG-654
     def test_BUG_654_unicode_digit_flour_sacks_refused(self):
         r = cl(self.g1).post('/api/production/sessions/', {
             'team': 'A', 'date': '2026-01-05', 'flour_sacks_used': '٣', 'lines': []}, format='json')

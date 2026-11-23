@@ -4,12 +4,14 @@ Core serializers — User, Node, Config, BreadPrice.
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from .mixins import AsciiDigitsMixin
 from .models import Node, Config, BreadPrice, ExpenseCategory, ActivityLog, SystemNotification, ColisDistribution
 
 User = get_user_model()
 
 
-class NodeSerializer(serializers.ModelSerializer):
+class NodeSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('sac_value_fc', 'monthly_social_contribution', 'card_fee_fc')  # BUG-897
     display_name = serializers.CharField(source='__str__', read_only=True)
 
     class Meta:
@@ -19,7 +21,7 @@ class NodeSerializer(serializers.ModelSerializer):
             'last_sync', 'display_name',
             'team_a_start_time', 'team_a_end_time',
             'team_b_start_time', 'team_b_end_time',
-            'handover_time', 'team_rotation_enabled',
+            'handover_time', 'team_rotation_enabled', 'block_sales_after_closure',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -98,7 +100,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
-class ConfigSerializer(serializers.ModelSerializer):
+class ConfigSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('best_client_threshold', 'debt_ceiling', 'sac_value_fc', 'print_fee',
+                          'default_commission_rate', 'social_deduction_rate', 'annual_bonus_rate')
     class Meta:
         model = Config
         fields = [
@@ -119,7 +123,8 @@ class PublicConfigSerializer(serializers.ModelSerializer):
         read_only_fields = ['on_line']
 
 
-class BreadPriceSerializer(serializers.ModelSerializer):
+class BreadPriceSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = ('unit_price',)
     # BUG-039 : category est désormais un champ texte libre (plus de
     # TextChoices) — category_display n'a plus de get_category_display()
     # généré par Django ; on affiche simplement la catégorie elle-même,
@@ -138,7 +143,7 @@ class BreadPriceSerializer(serializers.ModelSerializer):
 class ExpenseCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ExpenseCategory
-        fields = ['id', 'code', 'label', 'is_active', 'updated_at']
+        fields = ['id', 'code', 'label', 'is_active', 'scope', 'updated_at']
         read_only_fields = ['updated_at']
 
 

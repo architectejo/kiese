@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { FiTruck, FiClock, FiCheckCircle } from 'react-icons/fi';
 import { salesApi, clientsApi, coreApi, Invoice, Client, BreadPrice, InvoiceAdjustPayload, ServedLinePayload } from '@/api/services';
-import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
+import { getErrorDetail, isTeamNotAssignedError, isSalesBlockedError } from '@/api/errors';
 import { useTeamAssignmentStore } from '@/store/teamAssignmentStore';
+import { useClosureStatusStore } from '@/store/closureStatusStore';
+import { ClosureBlockBanner } from '@/components/sales/ClosureBlockBanner';
 import { useAuthStore } from '@/store/authStore';
 import { useWorkDate } from '@/store/workDateStore';
 import { ThermalReceipt, ReceiptData, ReceiptLine } from '@/components/shared/ThermalReceipt';
@@ -18,6 +20,7 @@ import { StatModal } from '@/components/sales/StatModal';
 
 export const Sales: React.FC = () => {
   const requestTeamAssignment = useTeamAssignmentStore(s => s.requestAssignment);
+  const requestClosureRefresh = useClosureStatusStore(s => s.requestRefresh);
   const { user } = useAuthStore();
   // BUG-161 (F3) : jour calendaire fourni par le serveur (repli : date locale, jamais UTC).
   // Un changement de journée (relève) relance le chargement de la file du jour (`loadData`).
@@ -460,6 +463,8 @@ export const Sales: React.FC = () => {
         requestTeamAssignment();
         return;
       }
+      // BUG-973 : clôture du jour en attente de validation -> message du serveur + relecture du statut.
+      if (isSalesBlockedError(err)) requestClosureRefresh();
       // BUG-230 : `detail` d'abord, puis les erreurs par champ (helper commun).
       setFormError(getErrorDetail(err, 'Erreur lors de la facturation.'));
     } finally {
@@ -596,6 +601,9 @@ export const Sales: React.FC = () => {
           <FiTruck style={{ fontSize: '2rem', color: 'hsl(var(--accent-color))', opacity: 0.8 }} />
         </div>
       </div>
+
+      {/* BUG-973 : blocage des ventes après l'heure de clôture */}
+      <ClosureBlockBanner />
 
       {/* Stats */}
       <div className="kpi-grid" style={{ gap: '12px' }}>

@@ -2,6 +2,8 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import models, transaction
+from django.db.models import F
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -230,12 +232,19 @@ class Invoice(SyncableModel):
             self.delivered_at = delivered_at or timezone.now()
 
             if self.client_id:
-                client = self.client
-                client.total_breads_received += self.lines.aggregate(
-                    total=models.Sum('quantity')
-                )['total'] or 0
+                # BUG-667 : mise à jour atomique `F()` (jamais lecture-modification-écriture) ;
+                # BUG-666 : net des ajustements enregistrés tant que la facture était en attente.
+                delivered = self.lines.aggregate(total=models.Sum('quantity'))['total'] or 0
+                for adj in self.adjustments.filter(is_adjustment=True).prefetch_related('lines'):
+                    delivered += adj.adjustment_sign * sum(l.quantity for l in adj.lines.all())
+                if delivered:
+                    Client.objects.filter(pk=self.client_id).update(
+                        total_breads_received=Greatest(F('total_breads_received') + delivered, 0)
+                    )
+                client = Client.objects.select_for_update().get(pk=self.client_id)
                 client.refresh_category()
-                client.save(update_fields=['total_breads_received', 'category'])
+                client.save(update_fields=['category'])
+                self.client = client
             self.save()
 
 

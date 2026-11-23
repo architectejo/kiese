@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.mixins import get_json_object
 from .models import Conversation, Message, Participant
 from .serializers import MessageCreateSerializer, MessageSerializer
 
@@ -159,7 +160,7 @@ class DirectConversationView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        oid = _parse_uuid(request.data.get('user'))
+        oid = _parse_uuid(get_json_object(request).get('user'))  # BUG-886
         other = (User.objects.select_related('node').filter(pk=oid, is_active=True).first()
                  if oid else None)
         if other is None:

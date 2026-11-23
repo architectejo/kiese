@@ -81,6 +81,16 @@ export function isTeamNotAssignedError(err: unknown): boolean {
 }
 
 /**
+ * BUG-973 : vrai si l'API a refusé la création de facture parce que la clôture du jour
+ * attend la validation de la direction (403 « Ventes bloquées : clôture du jour… »).
+ */
+export function isSalesBlockedError(err: unknown): boolean {
+  if (!axios.isAxiosError(err) || err.response?.status !== 403) return false;
+  const data = err.response.data as { detail?: unknown } | undefined;
+  return typeof data?.detail === 'string' && data.detail.startsWith('Ventes bloquées');
+}
+
+/**
  * BUG-196 : vrai si l'API a refusé la désignation de l'équipe parce qu'une fournée d'une
  * journée précédente est encore ouverte (400 `{"detail": "...", "code": "PREVIOUS_WORKDAY_OPEN"}`).
  */

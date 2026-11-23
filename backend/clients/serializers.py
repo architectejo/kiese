@@ -1,6 +1,8 @@
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
+from core.mixins import AsciiDigitsMixin
 from .models import Client, SocialContribution, SocialDistribution, SocialDistributionLine
 
 
@@ -9,10 +11,11 @@ MAX_COMMISSION_RATE = Decimal('0.30')
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 
-class ClientBoundsMixin:
+class ClientBoundsMixin(AsciiDigitsMixin):
     """BUG-250/257/258 : bornes communes à la création et à la modification."""
     MAX_CREDIT_LIMIT = MAX_CREDIT_LIMIT
     MAX_COMMISSION_RATE = MAX_COMMISSION_RATE
+    ascii_digit_fields = ('credit_limit', 'commission_rate', 'cotisation_sociale')
 
     def validate_credit_limit(self, value):
         if value < 0 or value > self.MAX_CREDIT_LIMIT:
@@ -75,7 +78,8 @@ class ClientCreateSerializer(ClientBoundsMixin, serializers.ModelSerializer):
         extra_kwargs = {'node': {'required': False}}
 
 
-class SocialContributionSerializer(serializers.ModelSerializer):
+class SocialContributionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     client_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -93,6 +97,32 @@ class SocialContributionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Le montant ne peut pas être négatif.")
         return value
 
+    def validate_year(self, value):
+        # BUG-946 : mêmes bornes que le push de synchronisation (2000-2200).
+        if value < 2000 or value > 2200:
+            raise serializers.ValidationError("Année invalide : une année entre 2000 et 2200 est attendue.")
+        return value
+
+    def validate(self, attrs):
+        inst = self.instance
+        if inst is not None:
+            # BUG-948 : la boulangerie d'une cotisation est figée et son client doit en relever.
+            if 'node' in attrs and attrs['node'].pk != inst.node_id:
+                raise serializers.ValidationError(
+                    {'node': "La boulangerie d'une cotisation ne peut pas être modifiée."})
+            client = attrs.get('client', inst.client)
+            if client.node_id != inst.node_id:
+                raise serializers.ValidationError(
+                    {'client': "Ce client n'appartient pas à la boulangerie de la cotisation."})
+        # BUG-947 : date de paiement cohérente avec l'état « payé » (comme toggle_paid).
+        if 'is_paid' in attrs:
+            if attrs['is_paid']:
+                if inst is None or not inst.is_paid or inst.paid_at is None:
+                    attrs['paid_at'] = timezone.now()
+            else:
+                attrs['paid_at'] = None
+        return attrs
+
     def validate_client(self, client):
         # BUG-249 : un non-siège ne rattache que les clients de son nœud.
         request = self.context.get('request')
@@ -106,7 +136,8 @@ class SocialContributionSerializer(serializers.ModelSerializer):
         return f"[{obj.client.code}] {obj.client.full_name}"
 
 
-class SocialDistributionLineSerializer(serializers.ModelSerializer):
+class SocialDistributionLineSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     client_display = serializers.SerializerMethodField()
 
     class Meta:
@@ -165,7 +196,8 @@ class SocialDistributionLineSerializer(serializers.ModelSerializer):
         return f"[{obj.client.code}] {obj.client.full_name}"
 
 
-class SocialDistributionSerializer(serializers.ModelSerializer):
+class SocialDistributionSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
+    ascii_digit_fields = '__numeric__'  # BUG-915
     node_display = serializers.StringRelatedField(source='node', read_only=True)
     lines        = SocialDistributionLineSerializer(many=True, read_only=True)
 

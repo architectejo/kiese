@@ -136,6 +136,11 @@ class _Base(TestCase):
         }, format='json')
         self.assertEqual(c.status_code, 201, c.data)
         tid = c.data['id']
+        # BUG-652 : la réponse positive exige le stock (comme send/) ; on complète le déficit éventuel.
+        _bs = BreadStock.objects.filter(node=from_node, bread_price=bp).first()
+        _dispo = _bs.qty_available if _bs else 0
+        if _dispo < sent:
+            _adjust_bread_stock(from_node, bp, produced=sent - _dispo)
         r = from_api.post(f'/api/production/transfers/{tid}/respond_to_request/', {
             'approved': True, 'lines': [{'bread_price': bp.pk, 'quantity_sent': sent}],
         }, format='json')

@@ -149,7 +149,7 @@ class Command(BaseCommand):
         # redescendre que les clients modifiés depuis.
         from sync.desktop_client import load_pull_cursor, save_pull_cursor
         data_dir = getattr(settings, 'KIESE_DATA_DIR', None)
-        pull_params = load_pull_cursor(data_dir, cloud_url)
+        pull_params = load_pull_cursor(data_dir, cloud_url, node_code)
 
         try:
             pull_response, pull_attempts = _send_with_retry(
@@ -172,7 +172,7 @@ class Command(BaseCommand):
 
         pull_data = pull_response.json()
         apply_pull_response(pull_data)
-        save_pull_cursor(data_dir, cloud_url, pull_data)
+        save_pull_cursor(data_dir, cloud_url, pull_data, node_code)
         self.stdout.write(self.style.SUCCESS("Synchronisation terminée (push + pull)."))
 
 
@@ -183,6 +183,8 @@ def build_outbound_payload(node_code):
     simple (pas de pagination à 200 par lot ici — V2, voir SYNC.md §3.2) :
     la volumétrie d'une boulangerie entre deux cycles de 30 s est faible.
     """
+    from django.db.models import Q
+
     from clients.models import (
         Client, SocialContribution, SocialDistribution, SocialDistributionLine,
     )
@@ -191,7 +193,7 @@ def build_outbound_payload(node_code):
     from treasury.models import CashClosure, LocalExpense, FacturierReport, DisbursementVoucher
     from production.models import (
         ProductionSession, ProductionSessionLine, BreadDisposal,
-        ConsumableMovement, BreadTransfer, BreadTransferLine, ConsumableInventory,
+        ConsumableMovement, BreadTransfer, BreadTransferLine, ConsumableInventory, ConsumableCount,
     )
 
     def _dec(value):
@@ -204,6 +206,9 @@ def build_outbound_payload(node_code):
             'cotisation_sociale': _dec(c.cotisation_sociale), 'commission_rate': _dec(c.commission_rate),
             'credit_limit': _dec(c.credit_limit), 'client_type': c.client_type, 'notes': c.notes,
             'node_origin': c.node_origin,
+            # BUG-970 : versions pour la garde « dernier écrivain gagne » du push d'identité.
+            'updated_at': c.updated_at.isoformat() if c.updated_at else None,
+            'identity_updated_at': c.identity_updated_at.isoformat() if c.identity_updated_at else None,
         }
         for c in Client.objects.filter(node_origin=node_code, is_synced=False)
     ]
@@ -267,7 +272,8 @@ def build_outbound_payload(node_code):
         for s in sessions_qs
     ]
     session_lines = [
-        {'id': str(l.id), 'session': str(l.session_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity}
+        {'id': str(l.id), 'session': str(l.session_id), 'bread_price': l.bread_price_id, 'quantity': l.quantity,
+         'source': l.source}
         for s in sessions_qs for l in s.lines.all()
     ]
     disposals = [
@@ -310,12 +316,32 @@ def build_outbound_payload(node_code):
         }
         for i in inventories_qs for l in i.lines.select_related('node')
     ]
-    transfers_qs = BreadTransfer.objects.filter(node_origin=node_code, is_synced=False)
+    # BUG-626 : comptages historiques (sans inventaire) non encore synchronisés.
+    # `id` = clé locale entière, renvoyée telle quelle par le Cloud pour le marquage.
+    consumable_counts += [
+        {
+            'id': str(l.pk), 'node': l.node.code, 'inventory': None,
+            'consumable_type': l.consumable_type, 'count_date': l.count_date.isoformat(),
+            'system_quantity': _dec(l.system_quantity), 'physical_quantity': _dec(l.physical_quantity),
+            'gap': _dec(l.gap), 'notes': l.notes,
+        }
+        for l in ConsumableCount.objects.filter(
+            node__code=node_code, inventory__isnull=True, is_synced=False,
+        ).select_related('node')
+    ]
+    # BUG-965 : un poste exporte aussi les transferts dont il est émettrice OU réceptrice
+    # (sa validation/ses écarts doivent remonter), pas seulement ceux qu'il a créés.
+    # Les restrictions de rôle du push (BUG-874/888/891) restent appliquées côté cloud.
+    transfers_qs = BreadTransfer.objects.filter(
+        Q(node_origin=node_code) | Q(from_node__code=node_code) | Q(to_node__code=node_code),
+        is_synced=False,
+    ).select_related('from_node', 'to_node').distinct()
     transfers = [
         {
             'id': str(t.id), 'from_node': t.from_node.code, 'to_node': t.to_node.code,
             'bread_price': t.bread_price_id, 'quantity_sent': t.quantity_sent,
             'quantity_received': t.quantity_received, 'transfer_status': t.transfer_status,
+            'flow': t.flow,  # BUG-977
             'notes': t.notes, 'node_origin': t.node_origin,
         }
         for t in transfers_qs
@@ -348,6 +374,9 @@ def build_outbound_payload(node_code):
     facturier_reports = [
         {
             'id': str(r.id), 'node': r.node.code, 'team': r.team, 'date': r.date.isoformat(),
+            # BUG-959 : facturier exporté (deux facturiers possibles par équipe/jour) ;
+            # un cloud ancien l'ignore, un poste ancien sans la clé reste accepté.
+            'facturier': str(r.facturier_id) if r.facturier_id else None,
             'total_cash_sales': _dec(r.total_cash_sales), 'total_credit_sales': _dec(r.total_credit_sales),
             'theoretical_cash': _dec(r.theoretical_cash), 'is_validated': r.is_validated,
             'validated_at': r.validated_at.isoformat() if r.validated_at else None,
@@ -410,9 +439,17 @@ def build_outbound_payload(node_code):
         for l in SocialDistributionLine.objects.filter(node_origin=node_code, is_synced=False)
     ]
 
+    # BUG-980 : transferts non terminaux que ce poste connaît (rattrapage du cloud > 30 jours).
+    open_transfers = [
+        str(i) for i in BreadTransfer.objects.filter(
+            Q(from_node__code=node_code) | Q(to_node__code=node_code),
+        ).exclude(transfer_status__in=_TRANSFER_DONE).values_list('id', flat=True)[:1000]
+    ]
+
     return {
         'node_code': node_code,
         'batch_id': str(uuid.uuid4()),
+        'open_transfers': open_transfers,
         'records': {
             'clients.Client': clients,
             'sales.Invoice': invoices,
@@ -469,6 +506,17 @@ def apply_push_response(response_data):
             continue
         if not hasattr(model, 'is_synced'):
             continue
+        if model_label == 'production.ConsumableCount':
+            # BUG-626 : clé locale entière (comptages historiques sans inventaire).
+            int_ids = [
+                int(r['id']) for r in record_results
+                if isinstance(r, dict) and r.get('status') == 'ACCEPTED' and not r.get('inventory')
+                and isinstance(r.get('id'), str) and r['id'].isascii() and r['id'].isdigit()
+                and len(r['id']) <= 12
+            ]
+            if int_ids:
+                model.objects.filter(pk__in=int_ids, inventory__isnull=True).update(is_synced=True)
+            continue
         accepted_ids = []
         for r in record_results:
             if not isinstance(r, dict) or r.get('status') != 'ACCEPTED':
@@ -481,6 +529,189 @@ def apply_push_response(response_data):
             accepted_ids.append(rid)
         if accepted_ids:
             model.objects.filter(pk__in=accepted_ids).update(is_synced=True)
+
+
+_TRANSFER_RANK = {'PENDING': 0, 'RESPONDED': 1, 'DISPUTED': 2, 'CONFIRMED': 3, 'CANCELLED': 3}
+_TRANSFER_DONE = ('CONFIRMED', 'CANCELLED')
+
+
+def _local_node_code(payload):
+    """Code du poste : `node_code` de la réponse du cloud (identité du jeton), à défaut
+    `KIESE_NODE_CODE`. Sans code, aucun effet de stock ni alerte n'est appliqué."""
+    import os
+    code = payload.get('node_code') if isinstance(payload, dict) else None
+    if isinstance(code, str) and code:
+        return code
+    return os.environ.get('KIESE_NODE_CODE') or None
+
+
+def _apply_pulled_transfers(transfers, lines, local_code=None):
+    """BUG-964/975/976/978/979 : applique les transferts descendus du cloud (émetteur OU récepteur).
+
+    Contrat (SYNC.md §5.3) :
+    - Transfert inconnu localement : créé (`is_synced=True`, statut et `flow` du cloud), lignes
+      créées SANS mouvement de stock (copie d'un état ; un poste réinstallé ne rejoue pas
+      l'historique) ; alerte locale « Demande de Pains » (émettrice, PENDING) ou « Pains Envoyés »
+      (réceptrice, RESPONDED) régénérée ici car les `SystemNotification` ne sont pas synchronisées.
+    - Transfert connu : jamais de régression de statut ; jamais écrasé s'il a une modification
+      locale non poussée (`is_synced=False`) ni s'il est déjà terminé localement.
+      Les lignes sont appliquées dès que le statut cloud est >= au statut local (BUG-979 :
+      lignes manquantes créées, quantités reçues/envoyées mises à jour même à statut égal).
+    - Stock miroir (BUG-976) : appliqué par DELTA entre la ligne locale et la ligne cloud, dans la
+      même transaction que l'écriture de la ligne. La ligne locale est donc le marqueur
+      d'application : un second pull identique donne un delta nul (aucun double mouvement) ;
+      les actions REST locales, qui écrivent la ligne en même temps que le stock, restent cohérentes.
+        * réceptrice : `received += quantité_reçue_cloud - quantité_reçue_locale` ;
+        * émettrice : `sent += quantité_envoyée_cloud - quantité_envoyée_locale`, seulement si
+          la copie locale était déjà « envoyée » (RESPONDED/DISPUTED : stock déjà déduit).
+    Les entrées invalides sont ignorées silencieusement (BUG-781).
+    """
+    from django.db import transaction
+
+    from core.models import BreadPrice, Node
+    from core.utils import create_notification
+    from production.models import BreadTransfer, BreadTransferLine, _adjust_bread_stock
+    from sync.services import _strict_uuid, _sync_bounded_qty
+
+    if not isinstance(transfers, list):
+        return
+    rank = _TRANSFER_RANK
+    lines_by_transfer = {}
+    for ld in lines if isinstance(lines, list) else []:
+        if isinstance(ld, dict):
+            lines_by_transfer.setdefault(str(ld.get('transfer')), []).append(ld)
+    for td in transfers:
+        if not isinstance(td, dict):
+            continue
+        tid = _strict_uuid(td.get('id'))
+        status = td.get('transfer_status')
+        if tid is None or status not in rank:
+            continue
+        qsent = None if td.get('quantity_sent') is None else _sync_bounded_qty(td['quantity_sent'])
+        qrecv = None if td.get('quantity_received') is None else _sync_bounded_qty(td['quantity_received'])
+        with transaction.atomic():
+            local = BreadTransfer.objects.select_for_update().filter(pk=tid).first()
+            created = local is None
+            old_status = None
+            if created:
+                from_node = Node.objects.filter(code=td.get('from_node')).first()
+                to_node = Node.objects.filter(code=td.get('to_node')).first()
+                if from_node is None or to_node is None or from_node.pk == to_node.pk:
+                    continue
+                bp = td.get('bread_price')
+                local = BreadTransfer(
+                    id=tid, from_node=from_node, to_node=to_node,
+                    bread_price=BreadPrice.objects.filter(pk=bp).first() if isinstance(bp, int) else None,
+                    quantity_sent=qsent, quantity_received=qrecv, transfer_status=status,
+                    flow=td.get('flow') if td.get('flow') in BreadTransfer.Flow.values else BreadTransfer.Flow.REQUEST,
+                    notes=td.get('notes') if isinstance(td.get('notes'), str) else '',
+                    node_origin=td.get('node_origin') if isinstance(td.get('node_origin'), str) else from_node.code,
+                    is_synced=True,
+                )
+                local.save(_sync_bypass=True)
+            else:
+                if (not local.is_synced or local.transfer_status in _TRANSFER_DONE
+                        or rank[status] < rank[local.transfer_status]):
+                    continue
+                old_status = local.transfer_status
+                if rank[status] > rank[old_status]:
+                    local.transfer_status = status
+                    local.quantity_received = qrecv
+                    local.save(update_fields=['transfer_status', 'quantity_received', 'is_synced'],
+                               _sync_bypass=True)
+            is_to = bool(local_code) and local.to_node.code == local_code
+            is_from = bool(local_code) and local.from_node.code == local_code
+            sent_deducted = old_status in ('RESPONDED', 'DISPUTED')
+            for ld in lines_by_transfer.get(str(tid), []):
+                bp = ld.get('bread_price')
+                if not isinstance(bp, int) or isinstance(bp, bool):
+                    continue
+                price = BreadPrice.objects.filter(pk=bp).first()
+                ls, lr = _sync_bounded_qty(ld.get('quantity_sent')), (
+                    None if ld.get('quantity_received') is None else _sync_bounded_qty(ld['quantity_received']))
+                if price is None or ls is None:
+                    continue
+                line = BreadTransferLine.objects.select_for_update().filter(transfer=local, bread_price=price).first()
+                if line is None:
+                    BreadTransferLine.objects.create(
+                        transfer=local, bread_price=price, quantity_sent=ls, quantity_received=lr)
+                    d_sent, d_recv = ls, (lr or 0)
+                else:
+                    new_recv = line.quantity_received if lr is None else lr
+                    d_sent, d_recv = ls - line.quantity_sent, (new_recv or 0) - (line.quantity_received or 0)
+                    if d_sent or new_recv != line.quantity_received:
+                        line.quantity_sent, line.quantity_received = ls, new_recv
+                        line.save(update_fields=['quantity_sent', 'quantity_received'])
+                if created:
+                    continue  # copie d'un état : pas de mouvement de stock
+                if is_to and d_recv:
+                    _adjust_bread_stock(local.to_node, price, received=d_recv)
+                if is_from and sent_deducted and d_sent:
+                    _adjust_bread_stock(local.from_node, price, sent=d_sent)
+
+            # BUG-978 : alertes régénérées localement (une fois : la création ou l'avance de
+            # statut n'a lieu qu'une fois par poste ; un rejeu n'avance plus rien).
+            if local_code and (is_to or is_from) and (created or rank[status] > rank[old_status]):
+                lines_txt = ', '.join(
+                    f"{l.quantity_sent}×{l.bread_price.label}"
+                    for l in local.lines.select_related('bread_price')) or '—'
+                f_code, t_code = local.from_node.code, local.to_node.code
+                if is_from and status == 'PENDING' and created:
+                    create_notification(
+                        title=f"Demande de Pains — {f_code}",
+                        message=(f"La boulangerie {t_code} vous demande {lines_txt}. "
+                                 f"Veuillez répondre à cette demande (accepter ou refuser)."),
+                        severity='INFO', node_origin=f_code)
+                elif is_to and status == 'RESPONDED':
+                    create_notification(
+                        title=f"Pains Envoyés — {t_code}",
+                        message=(f"La boulangerie {f_code} vous envoie {lines_txt}. "
+                                 f"Veuillez confirmer la réception."),
+                        severity='INFO', node_origin=t_code)
+                elif is_from and status == 'DISPUTED':
+                    create_notification(
+                        title=f"Litige Transfert — {f_code}→{t_code}",
+                        message=f"Écart détecté à la réception. {lines_txt}.",
+                        severity='DANGER', node_origin=f_code)
+                elif status == 'CONFIRMED' and old_status == 'DISPUTED':
+                    create_notification(
+                        title=f"Litige Transfert résolu — {f_code}→{t_code}",
+                        message="Le litige a été résolu au siège ou par l'autre boulangerie.",
+                        severity='INFO', node_origin=local_code)
+                elif is_to and status == 'CANCELLED':
+                    create_notification(
+                        title=f"Demande Refusée — {t_code}",
+                        message=f"La boulangerie {f_code} n'a pas le stock disponible pour votre demande.",
+                        severity='WARNING', node_origin=t_code)
+
+
+def _apply_pulled_closures(closures, local_code):
+    """BUG-983 : applique l'état (confirmée / infirmée + motif) des clôtures de CE poste,
+    sans jamais toucher aux montants ni au billetage. Entrées invalides ignorées. Une
+    resoumission locale pas encore poussée n'est pas ré-infirmée par un pull plus ancien."""
+    from django.db import transaction
+
+    from sync.services import _strict_uuid
+    from treasury.models import CashClosure
+
+    if not isinstance(closures, list):
+        return
+    for item in closures:
+        if not isinstance(item, dict):
+            continue
+        cid = _strict_uuid(item.get('id'))
+        validated, rejected = item.get('is_validated'), item.get('is_rejected')
+        reason = item.get('rejection_reason', '')
+        if cid is None or not isinstance(validated, bool) or not isinstance(rejected, bool)                 or not isinstance(reason, str):
+            continue
+        with transaction.atomic():
+            local = CashClosure.objects.select_for_update().filter(pk=cid).first()
+            if local is None or (local_code and local.node.code != local_code):
+                continue
+            if not local.is_synced and not local.is_rejected and rejected and not validated:
+                continue  # resoumission locale en attente de push
+            CashClosure.objects.filter(pk=cid).update(
+                is_validated=validated, is_rejected=rejected, rejection_reason=reason[:2000])
 
 
 def apply_pull_response(payload):
@@ -500,6 +731,11 @@ def apply_pull_response(payload):
 
     # BUG-781 : une réponse tronquée ou hostile ne doit jamais lever
     # d'exception : entrées invalides ignorées, rien d'écrit à tort.
+    if isinstance(payload, dict):
+        _apply_pulled_transfers(payload.get('transfers'), payload.get('transfer_lines'),
+                                _local_node_code(payload))
+    if isinstance(payload, dict):
+        _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return
@@ -527,9 +763,50 @@ def apply_pull_response(payload):
             # (curseur `updated_at` du Cloud) la redescend.
             if DebtMovement.objects.filter(client_id=client_id, is_synced=False).exists():
                 continue
-            Client.objects.filter(pk=client_id).update(
-                current_debt=debt.quantize(Decimal('0.01')), category=category,
-            )
+            locked = Client.objects.select_for_update().filter(pk=client_id).first()
+            if locked is None:
+                continue
+            old_category = locked.category
+            locked.current_debt = debt.quantize(Decimal('0.01'))
+            fields = ['current_debt', 'category']
+            # BUG-952 : une édition locale d'identité/plafond pas encore poussée
+            # (is_synced=False et identity_updated_at renseigné) n'est jamais écrasée
+            # par le pull ; elle sera poussée ensuite (le propriétaire fait autorité,
+            # SYNC.md §5.1). La dette, elle, est toujours appliquée.
+            local_edit_pending = (not locked.is_synced) and locked.identity_updated_at is not None
+            # BUG-942 : plafond et identité du Cloud appliqués (valeurs invalides ignorées).
+            limit = client_data.get('credit_limit')
+            if local_edit_pending:
+                limit = None
+            elif limit is not None and not isinstance(limit, bool):
+                try:
+                    limit = Decimal(str(limit))
+                except InvalidOperation:
+                    limit = None
+                if limit is not None and limit.is_finite() and Decimal('0') <= limit <= Decimal('10000000'):
+                    locked.credit_limit = limit.quantize(Decimal('0.01'))
+                    fields.append('credit_limit')
+                else:
+                    limit = None
+            else:
+                limit = None
+            for name, max_len in (('first_name', 100), ('last_name', 100), ('phone', 25), ('address', None)):
+                val = None if local_edit_pending else client_data.get(name)
+                if isinstance(val, str) and (max_len is None or len(val) <= max_len) \
+                        and (name not in ('first_name', 'last_name') or val.strip()):
+                    setattr(locked, name, val)
+                    fields.append(name)
+            locked.category = category
+            if local_edit_pending:
+                locked.refresh_category()  # catégorie sur le plafond LOCAL conservé
+            elif limit is not None:
+                # La catégorie doit rester cohérente avec le plafond appliqué.
+                if locked.current_debt >= locked.credit_limit:
+                    locked.category = Client.Category.RISK
+                elif category == Client.Category.RISK:
+                    locked.refresh_category()
+            locked.save(update_fields=fields, _sync_bypass=True)
+            locked.notify_risk_transition(old_category)
     # `config`/`bread_prices` : appliqués par le futur backend desktop sur
     # ses propres tables `Config`/`BreadPrice` locales — non pertinent à
     # appliquer ici quand la commande est testée contre la même base que

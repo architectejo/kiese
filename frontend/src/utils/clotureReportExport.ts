@@ -24,6 +24,15 @@ const toNum = (v: string | number | null | undefined): number | null => {
   return Number.isNaN(n) ? null : n;
 };
 
+/** BUG-685 / BUG-675 : « Appro Reçu » est retranché, donc affiché en négatif (même règle que l'écran). */
+const approRecuQty = (q: number): number => (q > 0 ? -q : q);
+const approRecuFc = (v: string | number | null | undefined): number | null => {
+  const n = toNum(v);
+  return n !== null && n > 0 ? -n : n;
+};
+const approRecuQtyText = (q: number): string => (q > 0 ? `−${formatQty(q)}` : formatQty(q));
+const approRecuFcText = (v: string): string => (Number(v) > 0 ? `−${formatFC(v)}` : formatFC(v));
+
 const FC_FMT = '#,##0" FC"';
 const QTY_FMT = '#,##0';
 const PCT_FMT = '0.00"%"';
@@ -135,7 +144,7 @@ export function exportClotureToExcel(
       toNum(cat.commission_jr.fc),
       cat.reste_du_jour_jour ?? null, cat.reste_du_hier_jour ?? null,
       cat.appro_effectue.quantity, toNum(cat.appro_effectue.fc),
-      cat.appro_recu.quantity, toNum(cat.appro_recu.fc),
+      approRecuQty(cat.appro_recu.quantity), approRecuFc(cat.appro_recu.fc),
       nonServiCumul(cat).quantity, nonServiCumul(cat).fc,
       cat.regularisation.quantity, toNum(cat.regularisation.fc),
       cat.vente_cash_soldee.quantity, toNum(cat.vente_cash_soldee.fc), toNum(cat.vente_cash_soldee.perte_fc),
@@ -204,7 +213,7 @@ export function printClotureReport(
       <td style="text-align:right">${cat.reste_du_jour_jour == null ? '—' : formatQty(cat.reste_du_jour_jour)}</td>
       <td style="text-align:right">${formatQty(cat.reste_du_hier_jour)}</td>
       <td style="text-align:right">${formatQty(cat.appro_effectue.quantity)}<br/><small>${formatFC(cat.appro_effectue.fc)}</small></td>
-      <td style="text-align:right">${formatQty(cat.appro_recu.quantity)}<br/><small>${formatFC(cat.appro_recu.fc)}</small></td>
+      <td style="text-align:right">${approRecuQtyText(cat.appro_recu.quantity)}<br/><small>${approRecuFcText(cat.appro_recu.fc)}</small></td>
       <td style="text-align:right">${formatFC(nonServiCumul(cat).fc)}<br/><small>${formatQty(nonServiCumul(cat).quantity)} pain(s)<br/>retranché : ${formatFC(cat.non_servi.fc_signe)}</small></td>
       <td style="text-align:right">${formatQty(cat.regularisation.quantity)}<br/><small>${formatFC(cat.regularisation.fc)}</small></td>
       <td style="text-align:right">${formatQty(cat.vente_cash_soldee.quantity)}<br/><small>${formatFC(cat.vente_cash_soldee.fc)}</small></td>

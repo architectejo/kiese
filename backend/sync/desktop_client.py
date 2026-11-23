@@ -119,7 +119,7 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
         pending_total = sum(len(v) for v in payload['records'].values())
         if pending_total == 0:
             _STATE['pending_count'] = 0
-            _pull_only(logger, cloud_url, headers, data_dir)
+            _pull_only(logger, cloud_url, headers, data_dir, node_code)
             return
         _save_pending_batch(data_dir, payload)
 
@@ -170,7 +170,7 @@ def run_sync_cycle(logger: logging.Logger, data_dir: str, node_code: str, cloud_
     _STATE['last_error'] = None
     logger.info('Synchronisation : push accepté (batch %s).', response.json().get('batch_id'))
 
-    _pull_only(logger, cloud_url, headers, data_dir)
+    _pull_only(logger, cloud_url, headers, data_dir, node_code)
 
 
 _PULL_CURSOR_KEYS = ('since_config', 'since_client_debt')
@@ -183,43 +183,73 @@ def _cursor_path(data_dir: str) -> Path:
     return Path(data_dir) / 'sync_pull_cursor.json'
 
 
-def load_pull_cursor(data_dir, cloud_url: str) -> dict:
+def _default_node_code() -> str:
+    from django.conf import settings
+    return getattr(settings, 'KIESE_NODE_CODE', '') or ''
+
+
+def _valid_cursor_value(value) -> bool:
+    """BUG-785 : un curseur doit être une date ISO 8601 lisible et non future
+    (curseur futur = Cloud restauré / horloge déréglée : il masquerait tout)."""
+    from datetime import datetime, timedelta, timezone as _tz
+
+    if not isinstance(value, str) or not value or len(value) > 64:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_tz.utc)
+        return parsed <= datetime.now(_tz.utc) + timedelta(minutes=5)
+    except (ValueError, OverflowError, OSError):
+        return False
+
+
+def load_pull_cursor(data_dir, cloud_url: str, node_code=None) -> dict:
     """BUG-784 : curseur de pull (`since_config`, `since_client_debt`) du
     dernier pull appliqué, persisté sur disque pour survivre à un redémarrage.
-    Vide (pull complet) si absent, illisible ou émis pour un autre Cloud."""
-    cursor = _PULL_CURSORS.get(cloud_url)
-    if cursor is None and data_dir:
+    Vide (pull complet) si absent, illisible, émis pour un autre Cloud
+    (BUG-784) ou un autre nœud (BUG-786), ou si une valeur n'est pas une date
+    ISO valide non future (BUG-785)."""
+    node_code = _default_node_code() if node_code is None else node_code
+    entry = _PULL_CURSORS.get(cloud_url)
+    if entry is None and data_dir:
         try:
             data = json.loads(_cursor_path(data_dir).read_text(encoding='utf-8'))
         except (ValueError, OSError):
             data = None
         if isinstance(data, dict) and data.get('cloud_url') == cloud_url:
-            cursor = {k: data[k] for k in _PULL_CURSOR_KEYS if isinstance(data.get(k), str) and data[k]}
-    return dict(cursor or {})
+            entry = {'node_code': data.get('node_code') if isinstance(data.get('node_code'), str) else '',
+                     'cursor': {k: data[k] for k in _PULL_CURSOR_KEYS
+                                if isinstance(data.get(k), str) and data[k]}}
+    if not entry or entry['node_code'] != node_code:
+        return {}
+    return {k: v for k, v in entry['cursor'].items() if _valid_cursor_value(v)}
 
 
-def save_pull_cursor(data_dir, cloud_url: str, response_data) -> None:
+def save_pull_cursor(data_dir, cloud_url: str, response_data, node_code=None) -> None:
     if not isinstance(response_data, dict):
         return
+    node_code = _default_node_code() if node_code is None else node_code
     cursor = {k: response_data[k] for k in _PULL_CURSOR_KEYS
               if isinstance(response_data.get(k), str) and response_data[k]}
     if not cursor:
         return
-    _PULL_CURSORS[cloud_url] = cursor
+    _PULL_CURSORS[cloud_url] = {'node_code': node_code, 'cursor': cursor}
     if data_dir:
         try:
-            _cursor_path(data_dir).write_text(json.dumps({'cloud_url': cloud_url, **cursor}), encoding='utf-8')
+            _cursor_path(data_dir).write_text(
+                json.dumps({'cloud_url': cloud_url, 'node_code': node_code, **cursor}), encoding='utf-8')
         except OSError:
             pass  # curseur en mémoire conservé ; au pire un pull complet au redémarrage
 
 
-def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=None) -> None:
+def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=None, node_code=None) -> None:
     from sync.management.commands.sync_now import TRANSIENT_STATUS_CODES, apply_pull_response
 
     try:
         response = requests.get(
             f'{cloud_url}/api/sync/pull/', headers=headers, timeout=PULL_TIMEOUT,
-            params=load_pull_cursor(data_dir, cloud_url),
+            params=load_pull_cursor(data_dir, cloud_url, node_code),
         )
     except requests.RequestException as exc:
         logger.warning('Synchronisation : coupure réseau au pull (%s).', exc)
@@ -233,6 +263,16 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=N
         _STATE['last_error'] = 'Service cloud temporairement indisponible (503) au pull.'
         return
 
+    if response.status_code == 400 and 'Paramètre' in (getattr(response, 'text', '') or ''):
+        # BUG-785 : le Cloud refuse le curseur lui-même : on l'oublie, le
+        # prochain cycle fera un pull complet au lieu de rejouer le 400.
+        _PULL_CURSORS.pop(cloud_url, None)
+        if data_dir:
+            try:
+                _cursor_path(data_dir).unlink()
+            except OSError:
+                pass
+
     if response.status_code >= 400:
         logger.error('Synchronisation : pull refusé (%s).', response.status_code)
         _STATE['connection'] = 'SYNC_ERROR'
@@ -242,7 +282,7 @@ def _pull_only(logger: logging.Logger, cloud_url: str, headers: dict, data_dir=N
     data = response.json()
     apply_pull_response(data)
     # Le curseur n'avance qu'une fois la descente appliquée.
-    save_pull_cursor(data_dir, cloud_url, data)
+    save_pull_cursor(data_dir, cloud_url, data, node_code)
     _STATE['connection'] = 'ONLINE'
     _STATE['last_pull_at'] = time.time()
     _STATE['last_error'] = None

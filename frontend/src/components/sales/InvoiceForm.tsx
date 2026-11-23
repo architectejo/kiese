@@ -3,6 +3,7 @@ import type { Client, BreadPrice } from '@/api/services';
 import { FiPlusCircle, FiCheckCircle, FiAlertCircle, FiSearch, FiX, FiCreditCard } from 'react-icons/fi';
 import type { InvoiceMotif } from './MotifSelect';
 import { MotifSelect } from './MotifSelect';
+import { useSalesBlocked } from '@/store/closureStatusStore';
 
 export interface InvoiceFormProps {
   breadPrices: BreadPrice[];
@@ -59,6 +60,8 @@ export interface InvoiceFormProps {
 }
 
 export const InvoiceForm: React.FC<InvoiceFormProps> = ({ breadPrices, formError, isSubmitting, clientSearch, setClientSearch, isSearchingClients, clientSearchError, selectedClient, setSelectedClient, showSuggestions, setShowSuggestions, isOccasional, setIsOccasional, quantities, setQuantities, versement, setVersement, versementText, setVersementText, motif, setMotif, setRepaymentMotif, venteSoldee, setVenteSoldee, commissionExempt, setCommissionExempt, specialCode, setSpecialCode, showSpecialCode, setShowSpecialCode, nsPaymentType, setNsPaymentType, allowBackdatedSales, invoiceDate, setInvoiceDate, setIsRepaymentModalOpen, setRepaymentAmount, setRepaymentDate, setRepaymentError, workDate, searchRef, suggestions, selectClient, clearClient, effectiveUnitPrice, orderTotal, isNonServiForm, isRegularisationForm, isCashOnlySale, paymentType, handleSubmit }) => {
+  // BUG-973 : clôture du jour en attente de validation -> création de facture désactivée.
+  const { blocked: closureBlocked } = useSalesBlocked();
   return (
         <div className="glass-card" style={{ padding: '16px' }}>
           <h2 style={{ fontSize: '0.9rem', fontWeight: 800, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -433,9 +436,9 @@ export const InvoiceForm: React.FC<InvoiceFormProps> = ({ breadPrices, formError
               </div>
             )}
 
-            <button type="submit" disabled={isSubmitting} className="btn btn-primary" style={{ padding: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: isSubmitting ? 0.7 : 1 }}>
+            <button type="submit" disabled={isSubmitting || closureBlocked} className="btn btn-primary" style={{ padding: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: (isSubmitting || closureBlocked) ? 0.55 : 1 }}>
               <FiCheckCircle />
-              <span>{isSubmitting ? 'Enregistrement...' : isNonServiForm ? 'Enregistrer le non servi' : 'Facturer & Mettre en Attente'}</span>
+              <span>{closureBlocked ? 'Ventes bloquées — clôture en attente' : isSubmitting ? 'Enregistrement...' : isNonServiForm ? 'Enregistrer le non servi' : 'Facturer & Mettre en Attente'}</span>
             </button>
           </form>
         </div>

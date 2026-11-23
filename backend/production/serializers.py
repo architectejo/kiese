@@ -9,7 +9,28 @@ MAX_DISPOSAL_QTY = 1_000_000
 MAX_DISPOSAL_VALUE = 9_999_999_999  # DecimalField(max_digits=12, decimal_places=2)
 
 
+def _refuse_non_ascii_quantity(data):
+    """BUG-654/682 : la quantité brute doit être en chiffres ASCII (« ٣ » refusé)."""
+    if hasattr(data, 'get'):
+        raw = data.get('quantity')
+        if isinstance(raw, str) and not raw.isascii():
+            raise serializers.ValidationError({'detail': "Quantité invalide (chiffres 0-9 uniquement)."})
+
+
+def _refuse_non_ascii_fields(data, names):
+    """BUG-686 : champs numériques bruts en chiffres ASCII uniquement."""
+    if hasattr(data, 'get'):
+        for name in names:
+            raw = data.get(name)
+            if isinstance(raw, str) and not raw.isascii():
+                raise serializers.ValidationError({'detail': f"« {name} » invalide (chiffres 0-9 uniquement)."})
+
+
 class ProductionSessionLineSerializer(serializers.ModelSerializer):
+    def to_internal_value(self, data):
+        _refuse_non_ascii_quantity(data)
+        return super().to_internal_value(data)
+
     bread_price_display = serializers.StringRelatedField(source='bread_price', read_only=True)
     unit_price = serializers.IntegerField(source='bread_price.unit_price', read_only=True)
     line_fc = serializers.IntegerField(read_only=True)
@@ -109,6 +130,9 @@ class ProductionSessionSerializer(serializers.ModelSerializer):
             msg = None
             if raw is None or isinstance(raw, bool) or (isinstance(raw, str) and not raw.strip()):
                 msg = "« flour_sacks_used » : nombre de sacs invalide."
+            elif isinstance(raw, str) and not raw.isascii():
+                # BUG-654 : chiffres Unicode (« ٣ ») refusés, seuls 0-9 ASCII sont acceptés.
+                msg = "« flour_sacks_used » : nombre de sacs invalide (chiffres 0-9 uniquement)."
             else:
                 try:
                     val = Decimal(str(raw).strip())
@@ -306,6 +330,10 @@ class ConsumableMovementSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'node_origin', 'is_synced', 'created_at', 'updated_at']
 
+    def to_internal_value(self, data):
+        _refuse_non_ascii_fields(data, ('quantity', 'unit_price'))
+        return super().to_internal_value(data)
+
     def validate_stock(self, value):
         return _check_fk_in_user_node(self, value, 'Stock')
 
@@ -332,6 +360,35 @@ class ConsumableCountSerializer(serializers.ModelSerializer):
             'counted_by', 'counted_by_display', 'notes', 'created_at',
         ]
         read_only_fields = ['id', 'gap', 'system_quantity', 'counted_by', 'created_at']
+
+    def to_internal_value(self, data):
+        _refuse_non_ascii_fields(data, ('physical_quantity',))
+        return super().to_internal_value(data)
+
+    def validate_physical_quantity(self, value):
+        # BUG-688 : une quantité physique comptée ne peut pas être négative.
+        if value is not None and value < 0:
+            raise serializers.ValidationError("La quantité physique ne peut pas être négative.")
+        return value
+
+    def validate_count_date(self, value):
+        # BUG-687 : pas de comptage daté dans le futur (jour de travail du nœud).
+        from core.workday import work_date_for
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        node = self.instance.node if self.instance is not None else None
+        if node is None and user is not None and getattr(user, 'node', None) is not None:
+            node = user.node
+        if node is None:
+            raw = getattr(request, 'data', {}).get('node') if request is not None else None
+            if raw not in (None, ''):
+                try:
+                    node = Node.objects.filter(pk=int(raw)).first()
+                except (TypeError, ValueError):
+                    node = None
+        if node is not None and value is not None and value > work_date_for(node):
+            raise serializers.ValidationError("La date ne peut pas être dans le futur.")
+        return value
 
     def get_consumable_type_display(self, obj):
         return _consumable_type_label(obj.consumable_type)
@@ -416,6 +473,11 @@ class BreadDisposalSerializer(serializers.ModelSerializer):
 
     def validate_session(self, value):
         return _check_fk_in_user_node(self, value, 'Session')
+
+    def to_internal_value(self, data):
+        _refuse_non_ascii_quantity(data)
+        _refuse_non_ascii_fields(data, ('unit_price_sold',))
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         # BUG-158 : seule une ligne REMAINING (« reste du jour », reflet du

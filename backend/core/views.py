@@ -98,16 +98,27 @@ def me_view(request):
         return Response(UserSerializer(user).data)
 
     # PATCH — allow users to update their own basic info
+    from core.mixins import get_json_object
+    body = get_json_object(request)  # BUG-873 : corps non objet -> 400
     allowed = {'first_name', 'last_name', 'phone', 'email', 'username'}
-    data = {k: v for k, v in request.data.items() if k in allowed}
+    data = {k: v for k, v in body.items() if k in allowed}
+    raw_new = body.get('new_password', '')
+    raw_old = body.get('old_password', '')
+    if raw_new is None:
+        raw_new = ''
+    if raw_old is None:
+        raw_old = ''
+    if not isinstance(raw_new, str) or not isinstance(raw_old, str):
+        return Response({'detail': 'Les mots de passe doivent être des chaînes de caractères.'},
+                        status=status.HTTP_400_BAD_REQUEST)
     serializer = UserSerializer(user, data=data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
 
     # Password change (separate from profile fields)
-    new_password = request.data.get('new_password', '').strip()
+    new_password = raw_new.strip()
     if new_password:
-        error = _apply_password_change(user, request.data.get('old_password', ''), new_password)
+        error = _apply_password_change(user, raw_old, new_password)
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -420,6 +431,17 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.all()
     serializer_class = ExpenseCategorySerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        # BUG-677 : une boulangerie ne voit pas les catégories réservées à la direction.
+        if not user.can_access_all_nodes:
+            qs = qs.exclude(scope=ExpenseCategory.Scope.DIRECTION)
+        scope = self.request.query_params.get('scope')
+        if scope in ExpenseCategory.Scope.values:
+            qs = qs.filter(scope__in=[scope, ExpenseCategory.Scope.BOTH])
+        return qs
+
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]
@@ -575,8 +597,14 @@ def reset_data_view(request):
     if request.method == 'GET':
         return Response(reset_module.preview_counts())
 
-    confirm_phrase = (request.data.get('confirm_phrase') or '').strip()
-    password = request.data.get('password') or ''
+    from core.mixins import get_json_object
+    data = get_json_object(request)  # BUG-886
+    confirm_phrase = data.get('confirm_phrase') or ''
+    password = data.get('password') or ''
+    if not isinstance(confirm_phrase, str) or not isinstance(password, str):
+        return Response({'detail': "Champs invalides : texte attendu."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    confirm_phrase = confirm_phrase.strip()
 
     if confirm_phrase != reset_module.CONFIRMATION_PHRASE:
         return Response(
