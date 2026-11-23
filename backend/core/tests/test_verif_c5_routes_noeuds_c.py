@@ -579,7 +579,6 @@ class NewRoutesMatrix(Base5):
             'consumable_type': 'FLOUR', 'allocations': [{'node': n.pk, 'quantity': 1}]}, format='json')
         self.assertEqual(r.status_code, 400)
 
-    @expectedFailure  # BUG-562 : quantite '1e400' -> 500
     def test_BUG_562_dispatch_huge_exponent(self):
         r = api(self.u['DIRECTION']).post('/api/production/consumables/dispatch/', {
             'consumable_type': 'FLOUR', 'allocations': [{'node': self.k1.pk, 'quantity': '1e400'}]}, format='json')
@@ -870,7 +869,6 @@ class NewRoutesMatrix(Base5):
     def _dest_check(self, dest):
         pass
 
-    @expectedFailure  # BUG-540 (existant)
     def test_BUG_540_send_to_technical_or_inactive_node(self):
         """Un envoi vers SIEGE ou vers une boulangerie inactive : nobody pour valider -> stock perdu."""
         self._stock_bread(self.k1)

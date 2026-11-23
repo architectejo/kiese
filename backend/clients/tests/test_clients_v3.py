@@ -269,7 +269,6 @@ class CaisseV3Tests(Base):
         r = self.bulk(self.direction, node=self.k1.pk, month=5, year=2026, amount='1E999999999')
         self.assertEqual(r.status_code, 400, r.status_code)
 
-    @expectedFailure  # BUG-748
     def test_montant_zero_explicite_est_ignore_silencieusement(self):
         """amount='0' (cotisation nulle demandee) : l'API applique le tarif de la boulangerie."""
         r = self.bulk(self.direction, node=self.k1.pk, month=6, year=2026, amount='0')

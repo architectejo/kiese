@@ -408,16 +408,38 @@ class SyncAuth(B4):
 
 
 class SyncPull(B4):
+    # BUG-998/999 : un poste de boulangerie recoit les clients ACTIFS de toutes les boulangeries
+    # (CLAUDE.md 5.1) ; seules les colonnes client descendent, jamais factures/mouvements/commissions/
+    # jetons d'un autre noeud, et jamais un client INACTIF d'un autre noeud au pull initial.
+    CLIENT_KEYS = {'id', 'code', 'current_debt', 'credit_limit', 'category', 'first_name', 'last_name',
+                   'phone', 'address', 'updated_at', 'node', 'node_origin', 'commission_rate',
+                   'cotisation_sociale', 'client_type', 'notes', 'total_breads_received', 'is_active'}
+
+    def _inactive_foreign(self):
+        d2 = Client.objects.create(node=self.k2, node_origin='P2', first_name='Zed', last_name='Inactif',
+                                   is_active=False)
+        return d2
+
     def test_pull_only_own_clients_and_tokens_scoped(self):
+        d2 = self._inactive_foreign()
+        self.mk_invoice(self.k2, self.c2)
         r = self.node_client(self.raw1).get('/api/sync/pull/')
         self.assertEqual(r.status_code, 200)
-        ids = {c['id'] for c in r.json()['clients']}
+        body = r.json()
+        ids = {c['id'] for c in body['clients']}
         self.assertIn(str(self.c1.pk), ids)
-        self.assertNotIn(str(self.c2.pk), ids)
+        self.assertIn(str(self.c2.pk), ids)          # BUG-998 : client actif d'une autre boulangerie
+        self.assertNotIn(str(d2.pk), ids)            # inactif d'un autre noeud : jamais au pull initial
+        # aucune donnee d'un autre noeud hors colonnes client : ni factures, mouvements, commissions, jetons
+        for key in body:
+            self.assertFalse(any(w in key.lower() for w in ('invoice', 'debt_mov', 'commission_p', 'token')), key)
+        for c in body['clients']:
+            self.assertLessEqual(set(c), self.CLIENT_KEYS)
         r2 = self.node_client(self.raw2).get('/api/sync/pull/').json()
         ids2 = {c['id'] for c in r2['clients']}
         self.assertIn(str(self.c2.pk), ids2)
-        self.assertNotIn(str(self.c1.pk), ids2)
+        self.assertIn(str(self.c1.pk), ids2)
+        self.assertEqual(r2['node_code'], 'P2')
 
     def test_client_billed_by_node_comes_down_by_design(self):
         self.mk_invoice(self.k1, self.c2)   # K1 facture un client K2 (regle remarque.md)
@@ -426,7 +448,11 @@ class SyncPull(B4):
 
     def test_pull_payload_has_no_secrets_nor_foreign_identity(self):
         txt = self.node_client(self.raw1).get('/api/sync/pull/').content.decode()
-        for needle in ('password', 'token_hash', 'SECRET', 'phone', 'Bob', 'Deux'):
+        # jamais de secret ; l'identite des clients d'autres boulangeries descend par conception
+        # (BUG-998) mais jamais celle du personnel (comptes utilisateurs) d'un autre noeud.
+        needles = ['password', 'token_hash', 'SECRET', 'is_superuser']
+        needles += [u.username for u in self.u2.values()]
+        for needle in needles:
             self.assertNotIn(needle, txt, needle)
 
     def test_cursor_hostile_values_never_500_and_no_widening(self):
@@ -438,16 +464,21 @@ class SyncPull(B4):
             for p in ('since_config', 'since_client_debt'):
                 s = c.get('/api/sync/pull/', {p: v}).status_code
                 self.assertIn(s, (200, 400), (p, v, s))
-        # curseur dans le futur : aucun client renvoye
-        # curseur futur = pull complet (BUG-785), toujours borne au perimetre du noeud
+        # curseur futur = pull complet (BUG-785), toujours borne au perimetre du noeud (BUG-998 : actifs
+        # de toutes les boulangeries, jamais un inactif d'un autre noeud)
+        d2 = self._inactive_foreign()
         far = c.get('/api/sync/pull/', {'since_client_debt': '9999-12-31T23:59:59Z'})
         self.assertEqual(far.status_code, 200)
-        self.assertNotIn(str(self.c2.pk), {x['id'] for x in far.json()['clients']})
+        far_ids = {x['id'] for x in far.json()['clients']}
+        self.assertNotIn(str(d2.pk), far_ids)
+        base_ids = {x['id'] for x in c.get('/api/sync/pull/').json()['clients']}
+        self.assertEqual(far_ids, base_ids)
         # parametres repetes
         self.assertIn(c.get('/api/sync/pull/?since_config=a&since_config=b').status_code, (200, 400))
         # un `node=K2` force n'elargit rien
         ids = {x['id'] for x in c.get('/api/sync/pull/', {'node': self.k2.pk}).json()['clients']}
-        self.assertNotIn(str(self.c2.pk), ids)
+        self.assertEqual(ids, base_ids)
+        self.assertNotIn(str(d2.pk), ids)
 
     def test_pull_is_get_only(self):
         c = self.node_client(self.raw1)

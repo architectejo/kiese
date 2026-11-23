@@ -26,9 +26,12 @@ class MigrationReelleTests(TransactionTestCase):
         ex.migrate(target)
         return ex.loader.project_state(target).apps
 
-    def tearDown(self):
+    def _migrate_leaf(self):
         ex = MigrationExecutor(connection)
         ex.migrate(ex.loader.graph.leaf_nodes())
+
+    def tearDown(self):
+        self._migrate_leaf()
 
     def test_forward_real(self):
         apps = self._migrate(M21)
@@ -73,6 +76,7 @@ class MigrationReelleTests(TransactionTestCase):
         apps.get_model('core', 'Node').objects.create(
             code='G1', name='G1', monthly_social_contribution=D('0'), card_fee_fc=D('0'))
         self._migrate(M22)
+        self._migrate_leaf()  # les modeles courants exigent le schema complet
         node = Node.objects.get(code='G1')
         self.assertEqual(node.monthly_social_contribution, D('2000.00'))
         client = make_client(node)
@@ -84,6 +88,7 @@ class MigrationReelleTests(TransactionTestCase):
         before = ClientCommission.objects.values_list(*cols).get(pk=cm.pk)
         self._migrate(M21)
         self._migrate(M22)
+        self._migrate_leaf()
         after = ClientCommission.objects.values_list(*cols).get(pk=cm.pk)
         self.assertEqual(before, after)
         self.assertEqual(after[:2], (D('0.00'), D('0.00')))

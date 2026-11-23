@@ -1739,10 +1739,14 @@ def _push_bread_transfer(node, record):
                 return _record_result(
                     record_id, False,
                     "transition d'état réservée à l'autre boulangerie du transfert")
+            # Sans ligne (transfert historique), l'écart se juge sur l'entête : un litige dont
+            # reçu != envoyé (ou reçu absent) ne se lève pas par un simple push de statut.
+            dispute_lines = list(existing.lines.all())
             if (existing.transfer_status == TS.DISPUTED and new_status == TS.CONFIRMED
-                    and (existing.pk is None or any(
-                        l.quantity_received is None or l.quantity_received != l.quantity_sent
-                        for l in existing.lines.all()))):
+                    and (any(l.quantity_received is None or l.quantity_received != l.quantity_sent
+                             for l in dispute_lines)
+                         or (not dispute_lines
+                             and existing.quantity_received != existing.quantity_sent))):
                 # BUG-966 : le litige ne se lève que si les lignes ne présentent plus d'écart
                 # (recomptage égal à l'envoyé, ou lignes alignées par résolution).
                 return _record_result(
