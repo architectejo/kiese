@@ -12,6 +12,7 @@ from .consumables_direction import (
 )
 
 from .intrants_stats import IntrantsStatsView
+from .flour_month_stats import FlourMonthStatsView
 
 router = DefaultRouter()
 router.register(r'sessions',    ProductionSessionViewSet,  basename='production-session')
@@ -40,6 +41,7 @@ urlpatterns = [
     # BUG-161 (B2) : désignation de l'équipe de service du jour.
     # BUG-386 : vue globale des consommables (direction), envoi direction -> boulangeries.
     path('consumables/global/', GlobalConsumablesView.as_view(), name='consumables-global'),
+    path('consumables/flour-month-stats/', FlourMonthStatsView.as_view(), name='flour-month-stats'),
     path('consumables/dispatch/', DispatchConsumablesView.as_view(), name='consumables-dispatch'),
     path('intrants-stats/', IntrantsStatsView.as_view(), name='intrants-stats'),
     path('team-assignment/', TeamAssignmentView.as_view(), name='team-assignment'),
