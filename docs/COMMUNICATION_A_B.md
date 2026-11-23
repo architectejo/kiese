@@ -774,3 +774,22 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **Séries complètes** : à rejouer sur le code fusionné avant « partie B terminée ».
 
 **Statut :** INFO
+
+### #41-B — 2026-11-23 — B → A (copie C) — NOUVEAU FICHIER DU CLIENT pour les intrants : analyse faite, répartition proposée (à valider)
+
+**Le client a donné un nouveau fichier** : `docs/Intras/STATISQUES NOVEMBRE 2026 LOGICIEL.xlsx` (poussé avec ce message : il est dans le dépôt). C'est le tableau de statistiques des intrants que le client veut que le logiciel produise : une feuille par intrant (FARINE, Levure, HUILE, SEL) avec, **par jour et par boulangerie** (K1 à K6, B1, plus **D1 = stock direction** et une ligne TOTAUX) : stock initial, entrée, sortie, total avant production, consommation déclarée, solde comptable, **référence production** (sacs de farine du jour), **indice de consommation** (consommation ÷ sacs), inventaire physique (reste déclaré) et écart ; plus une feuille **ENTREE FARINE** de statistiques **mensuelles** (consommation de chaque boulangerie par jour, achats avec PU/PT, solde courant, total, écart et moyenne du mois).
+
+**Analyse complète** : `docs/ANALYSE_FICHIER_INTRANTS_2026-11-23.md` (contenu du fichier, ce que l'application fait déjà, ce qui manque, 7 questions à poser au client, répartition). À lire avant de répondre.
+
+**Constat** : les données existent dans l'application (`ConsumableMovement`, `ConsumableInventory`, `consumables_used`, `flour_sacks_used`, vue globale direction, `flour_history`) mais il n'existe **ni tableau consolidé par jour, ni indice de consommation, ni statistiques mensuelles de la farine, ni export Excel à ce format**.
+
+**Répartition que je propose** (tu valides ou tu changes : tu es propriétaire de `production/` et de l'onglet Intrants) :
+- **dev-a** : **I-1** endpoint de statistiques **journalières** par intrant (toutes boulangeries d'un jour + ligne D1 + TOTAUX + écart + **indice de consommation**) dans un nouveau module `production/intrants_stats.py` ; **I-2** onglet « Statistiques » dans Intrants (360 px compris).
+- **dev-b** : **I-3** statistiques **mensuelles de la farine** (feuille ENTREE FARINE, nouveau module `production/flour_month_stats.py` + composant, sans modifier `flour_history`) ; **I-4** **export Excel** au format du client (openpyxl) ; **I-5** disponibilité et exactitude **sur les postes locaux** (la synchronisation des données utilisées) et recoupement des calculs sur valeurs fictives.
+- Ordre : I-1 d'abord (I-3 et I-4 réutilisent son calcul de solde, d'indice et d'écart) ; je commence I-3 et I-5 tout de suite sur mes fichiers, I-4 quand I-1 est poussé. Nouveaux fichiers distincts : les seules lignes partagées sont `production/urls.py` et `IntrantsTab.tsx` (ajouts minimes).
+
+**À ne pas coder avant la réponse du client** : tout ce qui concerne le **sel** (unité : sacs, boîtes `Bte/U`, grammes ?), l'**huile** (la formule du tableur `initial + entrée × sortie` est sans doute une erreur), le **signe de l'écart** et la colonne « ok » du sel. Coder d'abord la farine et la levure. Questions détaillées au §4 de l'analyse : à ajouter dans `QUESTIONS_CLIENT_SIMPLIFIE.md` si tu tiens ce fichier (je ne le modifie pas).
+
+**Rappel** : BUG-1101 (historique des achats de farine côté direction) est lié : le client a-t-il voulu le garder dans l'onglet Intrants ? Réponse attendue avant de toucher `flour_history`.
+
+**Statut :** OUVERT
