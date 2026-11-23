@@ -74,6 +74,14 @@ class BoundedSearchFilter(filters.SearchFilter):
         return [t[:self.MAX_TERM_LENGTH] for t in terms[:self.MAX_TERMS]]
 
 
+def _lock_client(pk):
+    """BUG-640 : verrouille la ligne client (PostgreSQL) puis la relit. Même motif que le
+    verrou de `Node` dans `_make_receipt_number` : verrou sur une requête d'identifiants,
+    lecture ordinaire ensuite (le Meta.ordering de Client joint core_node)."""
+    list(Client.objects.select_for_update(of=('self',)).order_by().filter(pk=pk).values_list('pk', flat=True))
+    return Client.objects.get(pk=pk)
+
+
 def _effective_credit_limit(client, node, config):
     """
     Plafond de crédit effectivement opposable à ce client sur ce nœud.
@@ -537,7 +545,7 @@ class InvoiceViewSet(
             try:
                 # BUG-640 : ligne client verrouillée (lecture de `current_debt` pour le
                 # plafond, `debt_before`/`debt_after`) jusqu'à la fin de la transaction.
-                client = Client.objects.select_for_update().get(pk=client_id)
+                client = _lock_client(client_id)
             except Client.DoesNotExist as e:
                 return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -971,7 +979,7 @@ class InvoiceViewSet(
         # on ne restitue que le NET (originale + ajustements signés).
         adjustments = list(invoice.adjustments.filter(is_adjustment=True).prefetch_related('lines'))
         if invoice.client_id:
-            client = Client.objects.select_for_update().get(pk=invoice.client_id)
+            client = _lock_client(invoice.client_id)
             net_delta = invoice.debt_delta + sum((a.debt_delta for a in adjustments), Decimal('0.00'))
             Client.objects.filter(pk=client.pk).update(current_debt=F('current_debt') - net_delta)
             if net_delta != 0:
@@ -1154,7 +1162,7 @@ class InvoiceViewSet(
         with transaction.atomic():
             if client is not None:
                 # BUG-640 : `debt_before` lu sous verrou de la ligne client.
-                client = Client.objects.select_for_update().get(pk=client.pk)
+                client = _lock_client(client.pk)
             debt_before = client.current_debt if client is not None else 0
 
             adjustment = Invoice.objects.create(
