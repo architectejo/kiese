@@ -224,6 +224,9 @@ def build_outbound_payload(node_code):
     invoices = [
         {
             'id': str(i.id), 'node': i.node.code, 'client': str(i.client_id) if i.client_id else None,
+            # BUG-1112 : facturier / livreur exportés (additif ; un cloud ancien les ignore).
+            'facturier': str(i.facturier_id) if i.facturier_id else None,
+            'livreur': str(i.livreur_id) if i.livreur_id else None,
             'team': i.team, 'status': i.status, 'payment_type': i.payment_type,
             'debt_before': _dec(i.debt_before), 'order_total': _dec(i.order_total),
             'payment_amount': _dec(i.payment_amount), 'debt_after': _dec(i.debt_after),
@@ -302,6 +305,8 @@ def build_outbound_payload(node_code):
             'movement_type': m.movement_type, 'quantity': _dec(m.quantity),
             'unit_price': _dec(m.unit_price), 'supplier': m.supplier,
             'description': m.description, 'node_origin': m.node_origin,
+            # BUG-1111 : date d'origine du mouvement (statistiques par jour justes au cloud).
+            'created_at': m.created_at.isoformat() if m.created_at else None,
         }
         for m in ConsumableMovement.objects.filter(node_origin=node_code, is_synced=False).select_related('stock')
     ]
@@ -1013,6 +1018,66 @@ def _apply_pulled_node_settings(block, local_code):
     return True
 
 
+def _apply_pulled_consumable_movements(rows, local_code):
+    """BUG-1111 : applique les mouvements de consommables créés au cloud pour CE poste (envois de la
+    direction). Idempotent (UUID déjà connu = ignoré), jamais pour une autre boulangerie, jamais
+    re-poussé (`node_origin` != code local, `is_synced` par défaut). Stock mis à jour par
+    `ConsumableMovement.save()` (atomique, verrou). Ligne invalide ignorée seule."""
+    import re
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from django.db import transaction
+    from django.utils import timezone
+
+    from core.models import Node
+    from production.models import ConsumableMovement, ConsumableStock
+    from sync.services import _parse_aware_datetime, _prod_decimal, _strict_uuid
+
+    if not isinstance(rows, list) or not isinstance(local_code, str) or not local_code:
+        return 0
+    node = Node.objects.filter(code=local_code).first()
+    if node is None:
+        return 0
+    applied = 0
+    for row in rows[:5000]:
+        if not isinstance(row, dict):
+            continue
+        mid = _strict_uuid(row.get('id'))
+        ctype = row.get('consumable_type')
+        mtype = row.get('movement_type')
+        if (mid is None or row.get('node') != local_code or mtype not in ('ENTRY', 'EXIT')
+                or not isinstance(ctype, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,10}', ctype)):
+            continue
+        try:
+            qty = _prod_decimal(row.get('quantity'), 'quantity', 3, minimum=None, max_digits=10)
+            price = (_prod_decimal(row['unit_price'], 'unit_price', 4, minimum=Decimal('0'), max_digits=16)
+                     if row.get('unit_price') not in (None, '') else Decimal('0'))
+            moment = _parse_aware_datetime(row.get('created_at'))
+        except (ValueError, TypeError):
+            continue
+        if moment is not None and (moment.year < 2020 or moment > timezone.now() + timedelta(minutes=5)):
+            moment = None
+        origin = row.get('node_origin') if isinstance(row.get('node_origin'), str) else 'CLOUD'
+        if origin == local_code or not origin or len(origin) > 10:
+            origin = 'CLOUD'      # jamais re-poussé comme une saisie locale
+        unit = row.get('unit') if isinstance(row.get('unit'), str) else ''
+        description = row.get('description') if isinstance(row.get('description'), str) else ''
+        with transaction.atomic():
+            if ConsumableMovement.objects.filter(pk=mid).exists():
+                continue
+            stock, _ = ConsumableStock.objects.get_or_create(
+                node=node, consumable_type=ctype, defaults={'node_origin': 'CLOUD', 'unit': unit[:20]})
+            movement = ConsumableMovement(
+                id=mid, node=node, stock=stock, movement_type=mtype, quantity=qty, unit_price=price,
+                description=description[:255], node_origin=origin)
+            movement.save(_sync_bypass=True)
+            if moment is not None:
+                ConsumableMovement.objects.filter(pk=mid).update(created_at=moment)
+            applied += 1
+    return applied
+
+
 def apply_pull_response(payload):
     """
     Applique la descente Cloud → Local (SYNC.md §4) : configuration, prix,
@@ -1037,6 +1102,8 @@ def apply_pull_response(payload):
         _apply_pulled_closures(payload.get('closures'), _local_node_code(payload))
     if isinstance(payload, dict):
         _apply_pulled_node_settings(payload.get('node_settings'), _local_node_code(payload))
+    if isinstance(payload, dict):
+        _apply_pulled_consumable_movements(payload.get('consumable_movements'), _local_node_code(payload))
     clients = payload.get('clients') if isinstance(payload, dict) else None
     if not isinstance(clients, list):
         return

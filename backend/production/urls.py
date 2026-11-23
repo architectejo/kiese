@@ -12,6 +12,7 @@ from .consumables_direction import (
 )
 
 from .intrants_stats import IntrantsStatsView
+from .intrants_export import IntrantsExportView
 from .flour_month_stats import FlourMonthStatsView
 
 router = DefaultRouter()
@@ -44,6 +45,7 @@ urlpatterns = [
     path('consumables/flour-month-stats/', FlourMonthStatsView.as_view(), name='flour-month-stats'),
     path('consumables/dispatch/', DispatchConsumablesView.as_view(), name='consumables-dispatch'),
     path('intrants-stats/', IntrantsStatsView.as_view(), name='intrants-stats'),
+    path('intrants-export/', IntrantsExportView.as_view(), name='intrants-export'),
     path('team-assignment/', TeamAssignmentView.as_view(), name='team-assignment'),
     path('bread-stocks/by-date/', BreadStockByDateView.as_view(), name='bread-stock-by-date'),
     path('', include(router.urls)),

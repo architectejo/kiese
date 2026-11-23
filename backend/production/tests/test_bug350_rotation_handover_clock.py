@@ -356,11 +356,14 @@ class RolesAndIsolationTests(_Base):
                 self.assertEqual(self._post(api=api).status_code, 200, role)
                 self.assertFalse(self._get(api=api).data['needs_confirmation'], role)
 
-    def test_livreur_is_refused(self):
-        api = self._api('LIVREUR', self.node)
+    def test_livreur_same_rights_as_facturier(self):
+        # BUG-1050 (decision client Q-027) : le livreur a les memes ecrans et droits que le facturier ;
+        # l'ancien test exigeait un 403. Le livreur est maintenant traite exactement comme le facturier.
+        livreur = self._api('LIVREUR', self.node)
+        facturier = self._api('FACTURIER', self.node)
         with _now(12, 5):
-            self.assertEqual(self._get(api=api).status_code, 403)
-            self.assertEqual(self._post(api=api).status_code, 403)
+            self.assertEqual(self._get(api=livreur).status_code, self._get(api=facturier).status_code)
+            self.assertNotEqual(self._get(api=livreur).status_code, 403)
 
     def test_headquarters_must_name_the_node(self):
         # Côté API, le siège n'a pas de nœud propre : `node` est obligatoire

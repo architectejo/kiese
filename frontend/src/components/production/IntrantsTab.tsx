@@ -6,6 +6,7 @@ import { STOCK_ICONS, displayStock } from './productionHelpers';
 import { GlobalConsumablesSection } from './GlobalConsumablesSection';
 import { PhysicalInventoryForm } from './PhysicalInventoryForm';
 import { IntrantsStatsTab } from './IntrantsStatsTab';
+import { FlourMonthStats } from './FlourMonthStats';
 
 export interface IntrantsTabProps {
   stocks: ConsumableStock[];
@@ -37,8 +38,15 @@ export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, set
       <button role="tab" aria-selected={subTab === 'stats'} onClick={() => setSubTab('stats')} className={`btn ${subTab === 'stats' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 12px', fontSize: '0.72rem' }}>Statistiques</button>
     </div>
   );
+  // BUG-1110 (lot I-3) : statistiques mensuelles de la farine, section repliable (pas facturier/livreur).
+  const flourStatsSection = (
+    <details className="glass-card" style={{ padding: '14px', minWidth: 0, marginTop: '12px' }}>
+      <summary style={{ cursor: 'pointer', fontSize: '0.88rem', fontWeight: 800 }}>Statistiques du mois — Farine</summary>
+      <div style={{ marginTop: '10px' }}><FlourMonthStats canPickNode={isGlobalViewer} /></div>
+    </details>
+  );
   if (canSeeStats && subTab === 'stats') return <>{subTabBar}<IntrantsStatsTab canFilterNode={isGlobalViewer} /></>;
-  if (isGlobalViewer) return <>{subTabBar}<GlobalConsumablesSection role={role} /></>;
+  if (isGlobalViewer) return <>{subTabBar}<GlobalConsumablesSection role={role} />{flourStatsSection}</>;
   return (
     <>
       {subTabBar}
@@ -154,6 +162,7 @@ export const IntrantsTab: React.FC<IntrantsTabProps> = ({ stocks, isLoading, set
             </div>
           )}
         </div>
+        {isGerant && flourStatsSection}
     </>
   );
 };

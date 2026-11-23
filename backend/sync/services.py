@@ -535,6 +535,28 @@ def _parse_aware_datetime(value):
     return value
 
 
+_INVOICE_STAFF_ROLES = ('FACTURIER', 'LIVREUR', 'GERANT', 'COMPTABLE', 'DIRECTION', 'ADMIN')
+
+
+def _resolve_invoice_staff(raw, bakery_code):
+    """BUG-1112 : id de l'utilisateur (facturier ou livreur) d'une facture poussée, ou None.
+    Même règle que `FacturierReport.facturier` (BUG-929/935) : UUID strict, utilisateur existant,
+    rôle admis, même boulangerie (les rôles sans rattachement passent). Sinon None : la facture
+    n'est JAMAIS rejetée pour cette seule raison (défaut sûr = NULL, comme avant)."""
+    if raw in (None, '') or not isinstance(raw, str):
+        return None
+    uid = _strict_uuid(raw)
+    if uid is None:
+        return None
+    from django.contrib.auth import get_user_model
+    user = get_user_model().objects.filter(pk=uid).select_related('node').first()
+    if user is None or user.role not in _INVOICE_STAFF_ROLES:
+        return None
+    if not user.can_access_all_nodes and (user.node is None or user.node.code != bakery_code):
+        return None
+    return user.pk
+
+
 def _push_invoice(node, record):
     from clients.models import Client
     from sales.models import Invoice
@@ -598,6 +620,14 @@ def _push_invoice(node, record):
                     if record.get(fname) not in (None, ''):
                         setattr(existing, fname, _to_decimal(record[fname]))
                         changed_fields.append(fname)
+        # BUG-1112 : facturier / livreur connus plus tard (livraison confirmée après coup) : on ne
+        # renseigne qu'un champ encore vide, jamais d'écrasement.
+        for fname in ('facturier', 'livreur'):
+            if getattr(existing, f'{fname}_id') is None:
+                uid = _resolve_invoice_staff(record.get(fname), existing.node.code)
+                if uid is not None:
+                    setattr(existing, f'{fname}_id', uid)
+                    changed_fields.append(fname)
         if changed_fields:
             existing.save(update_fields=changed_fields, _sync_bypass=True)
             if 'status' in changed_fields and existing.status in ('DELIVERED', 'CANCELLED'):
@@ -621,6 +651,8 @@ def _push_invoice(node, record):
         id=record_id,
         node=bakery,
         client=client,
+        facturier_id=_resolve_invoice_staff(record.get('facturier'), bakery_code),  # BUG-1112
+        livreur_id=_resolve_invoice_staff(record.get('livreur'), bakery_code),
         team=record.get('team', ''),
         status=record.get('status', 'PENDING'),
         payment_type=record.get('payment_type', 'CASH'),
@@ -1338,6 +1370,7 @@ def _push_consumable_movement(node, record):
     )
     try:
         movement.save(_sync_bypass=True)
+        _stamp_movement_date(movement, record.get('created_at'))
     except ValidationError as exc:
         # BUG-143 (annule BUG-041, demande client directe 2026-11-10) :
         # `ConsumableMovement.save()` n'empêche plus une sortie de faire
@@ -1362,6 +1395,27 @@ def _push_consumable_movement(node, record):
     elif movement.movement_type == ConsumableMovement.MovementType.ENTRY:
         _restamp_orphan_exits(stock.pk)
     return _record_result(record_id, True)
+
+
+def _stamp_movement_date(movement, raw):
+    """BUG-1111 : `ConsumableMovement.created_at` (auto_now_add) est la DATE du mouvement pour les
+    statistiques journalières d'intrants. Sans cette étape, un mouvement saisi hors ligne le lundi et
+    poussé le mercredi serait daté du mercredi au cloud. On restitue la date d'origine du poste quand
+    elle est lisible, postérieure à 2020 et non future (tolérance 5 min) ; sinon on garde la date
+    d'arrivée (défaut sûr, poste ancien sans la clé)."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from production.models import ConsumableMovement
+    if raw in (None, ''):
+        return
+    try:
+        moment = _parse_aware_datetime(raw)
+    except ValueError:
+        return
+    if moment is None or moment.year < 2020 or moment > timezone.now() + timedelta(minutes=5):
+        return
+    ConsumableMovement.objects.filter(pk=movement.pk).update(created_at=moment)
 
 
 INVENTORY_DUPLICATE_CONFLICT = 'CONSUMABLE_INVENTORY_DUPLICATE'
@@ -1521,7 +1575,11 @@ def _push_consumable_count_inner(node, record):
         gap = _strict_decimal(record.get('gap'))
     except ValueError as exc:
         return _record_result(rid, False, str(exc))
-    if system_q < 0 or physical_q < 0:
+    # BUG-1111 : le stock « système » PEUT être négatif (sortie autorisée sans stock, BUG-143 ; poste qui
+    # n'a pas encore reçu un envoi de la direction) et l'API REST enregistre alors cette valeur telle
+    # quelle : l'inventaire physique du jour ne doit pas être rejeté pour cela (il resterait « en attente »
+    # à jamais et l'écart n'arriverait jamais au cloud). Seule la quantité PHYSIQUE doit être >= 0.
+    if physical_q < 0:
         return _record_result(rid, False, "quantité négative refusée")
     if gap != physical_q - system_q:
         return _record_result(rid, False, "écart incohérent (gap ≠ physique − système)")
