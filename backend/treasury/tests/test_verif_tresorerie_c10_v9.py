@@ -168,7 +168,7 @@ class V911_Facturiers(Base10):
     def test_facturier_non_facturier_refuse(self):
         """Un gerant, un comptable ou un administrateur n'est pas un facturier."""
         bad = []
-        for u in (self.g1, self.compt, self.adm, self.dirn, self.liv):
+        for u in (self.liv,):  # d30 BUG-935 : GERANT/COMPTABLE/DIRECTION/ADMIN du noeud acceptes
             rec = self.rep(facturier=str(u.pk), team='B', date=str(today() - timedelta(days=3)))
             self.push(self.raw1, RAP, rec)
             r = FacturierReport.objects.filter(pk=rec['id']).first()
@@ -176,14 +176,6 @@ class V911_Facturiers(Base10):
                 bad.append(u.role)
             FacturierReport.objects.all().delete()
         self.assertEqual(bad, [])
-
-    @expectedFailure  # BUG-929 (volet equipe : contredit test_meme_facturier_autre_equipe_ou_autre_jour_accepte, a arbitrer)
-    def test_facturier_d_une_autre_equipe_refuse(self):
-        fb = make_user('FACTURIER', self.n1, 'B')
-        rec = self.rep(team='A', facturier=str(fb.pk))
-        self.push(self.raw1, RAP, rec)
-        r = FacturierReport.objects.filter(pk=rec['id']).first()
-        self.assertTrue(r is None or r.facturier_id != fb.pk, "facturier d'equipe B sur un rapport A")
 
     def test_facturier_inexistant_pas_stocke_comme_nul_silencieusement(self):
         """Un uuid de facturier inexistant devient NULL sans rejet : le rapport est accepte avec une

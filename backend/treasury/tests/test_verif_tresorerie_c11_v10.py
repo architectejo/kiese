@@ -17,13 +17,11 @@ from treasury.tests.test_verif_tresorerie_c10_v9 import CLO, RAP, Base10
 
 class V929_930_Facturier(Base10):
     def test_929_forge_inactif_autre_role_autre_noeud_refuses(self):
-        inactif = make_user('FACTURIER', self.n1, 'A')
-        inactif.is_active = False
-        inactif.save()
+        # d30 (BUG-935/936) : inactif et comptable du noeud ne sont plus refuses (retires de la liste)
         etranger = make_user('FACTURIER', self.n2, 'A')
         bad = []
-        for label, val in (('inactif', inactif.pk), ('autre_noeud', etranger.pk), ('livreur', self.liv.pk),
-                           ('compta', self.compt.pk), ('uuid_inconnu', uuid.uuid4()), ('texte', 'x'),
+        for label, val in (('autre_noeud', etranger.pk), ('livreur', self.liv.pk),
+                           ('uuid_inconnu', uuid.uuid4()), ('texte', 'x'),
                            ('nombre', 12), ('liste', ['a'])):
             rec = self.rep(facturier=str(val) if not isinstance(val, (int, list)) else val,
                            team='B', date=str(today() - timedelta(days=2)))
@@ -100,7 +98,6 @@ class V929_930_Facturier(Base10):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(str(FacturierReport.objects.get(pk=r.json()['id']).facturier_id), str(self.g1.pk))
 
-    @expectedFailure  # BUG-935
     def test_935_push_rapport_dont_le_facturier_est_un_gerant_accepte(self):
         """Un rapport cree localement par/pour un gerant (REST : facturier = utilisateur connecte,
         IsGerant) est refuse au push : « doit etre un utilisateur actif de role facturier »."""
@@ -108,7 +105,6 @@ class V929_930_Facturier(Base10):
         self.push(self.raw1, RAP, rec)
         self.assertTrue(self.has(FacturierReport, rec))
 
-    @expectedFailure  # BUG-935
     def test_935_push_rapport_facturier_comptable_ou_direction_du_noeud(self):
         c1 = make_user('COMPTABLE', self.n1, 'A')
         rec = self.rep(facturier=str(c1.pk))
@@ -127,7 +123,6 @@ class V929_930_Facturier(Base10):
         self.assertEqual(FacturierReport.objects.filter(pk=rec['id']).count(), 1)
         self.assertNotIn('REJECTED', r.content.decode())
 
-    @expectedFailure  # BUG-936
     def test_936_rapport_hors_ligne_d_un_facturier_desactive_depuis_accepte(self):
         """Le rapport a ete cree legitimement hors ligne ; le facturier a quitte l'entreprise
         (compte desactive) avant la synchronisation : le rapport (cash) ne doit pas etre perdu."""

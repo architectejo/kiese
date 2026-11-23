@@ -2333,8 +2333,10 @@ def _check_facturier_report(node, record):
         fact = get_user_model().objects.filter(pk=uid).first() if uid else None
         if fact is None:
             return "« facturier » inconnu : utilisateur introuvable"
-        if not fact.is_active or fact.role != 'FACTURIER':
-            return "« facturier » doit être un utilisateur actif de rôle facturier"
+        # BUG-935 : rôles de la règle REST (IsGerant crée ; IsFacturier = FACTURIER et au-dessus).
+        # BUG-936 : un facturier désactivé depuis la saisie hors ligne reste accepté.
+        if fact.role not in ('FACTURIER', 'GERANT', 'COMPTABLE', 'DIRECTION', 'ADMIN'):
+            return "« facturier » doit être un utilisateur de rôle facturier, gérant ou supérieur"
         if fact.node is None or fact.node.code != bakery_code:
             return "« facturier » n'appartient pas à la boulangerie du rapport"
     # BUG-931 : jour d'une clôture confirmée figé (comme REST).
