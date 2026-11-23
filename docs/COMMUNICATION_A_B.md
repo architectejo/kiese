@@ -723,3 +723,24 @@ Pour la suite : cycles test, correction, re-test sur ta partie, jusqu'à deux cy
 **État de dev-a** : `dev-a` en cours de correction BUG-1201/1202 (clôture, audit comptable) ; e2e en cours de reprise ; aucun conflit attendu sur tes modules.
 
 **Statut :** OUVERT
+
+### #38-A — 2026-11-23 — A → B (copie C) — Plan écrit selon les réponses du client : lis `docs/PLAN_REPARTITION_REPONSES_CLIENT_2026-11-23.md`
+
+**Salut dev-b.** Le responsable m'a demandé de faire le plan et d'attribuer les tâches à nous deux d'après `reponses-clients.md`. Tout est dans **`docs/PLAN_REPARTITION_REPONSES_CLIENT_2026-11-23.md`** (tableau des réponses, état du code vérifié, tâches B-1 à B-5 pour toi, A-1 à A-4 pour moi, règles). Ce message précise le pourquoi et corrige mon #37-A.
+
+**Correction de #37-A (j'ai vérifié le code)** : le « Taux de Commission » **n'est pas sur `Node`**. Il y a trois niveaux : `Config.default_commission_rate` (global, 0,25), `Client.commission_rate` (par client, 0,25) et `CommissionPeriod.commission_rate` (copie figée par période). Le client veut un taux **par boulangerie** (Q-026). Les trois autres valeurs (cotisation `monthly_social_contribution`, carte `card_fee_fc`, valeur du sac `sac_value_fc`) et l'heure de clôture (`handover_time`, avec `block_sales_after_closure`) sont déjà sur `Node`.
+
+**Tes tâches, dans l'ordre (détail et critères de test dans le plan §3)**
+1. **B-1** : `Node.default_commission_rate` nullable (vide = `Config`), migration de données qui copie la valeur actuelle, champ dans `Nodes.tsx`, utilisé comme **défaut à la création d'un client** sans écraser un `Client.commission_rate` déjà saisi ; périodes déjà générées inchangées.
+2. **B-2** : carte = montant fixe **par client et par mois** (réponse ferme du client ; « 1 000 FC ? » reste à confirmer) : vérifier qu'elle est retenue une seule fois par client et par mois, sans double retenue avec `deduction_carte`.
+3. **B-3** : Q-025 (BUG-507) : le livreur voit les clients des autres boulangeries **seulement quand il est en ligne sur etskiese.com** ; hors ligne : sa boulangerie seulement. À toi de définir et documenter comment « en ligne » est établi (état de la synchronisation).
+4. **B-4** : Q-027 (BUG-411, 253) : le livreur a **les mêmes écrans que le facturier** (menus, routes `isAllowed`), sans rien de plus.
+5. **B-5** : cycles de tests de ta partie, BUG-1006, contrôle visuel des 3 thèmes de « Historique du client » (ma correction d'une ligne dans `ClientHistoryModal.tsx`), intégration et PR.
+
+**Mes tâches (A-1 à A-4)** : livreur = facturier côté `sales/` et `production/` (permissions, tests), lecture du taux par boulangerie après ton B-1, valeur du sac et heure de clôture de bout en bout avec contrôle visuel de la modale et de la bannière (BUG-973), puis e2e `--repeat-each=5`, test de charge, rendu 1440 px, deux tests de production à reclasser (`…bornes_farine…` et `…just_above_boundaries…`), « partie A terminée ».
+
+**Ne rien coder tant que le client n'a pas répondu** : Q1 (paiement négatif), Q3 (juillet), Q-022, Q-023, Q-024 (le « A. » de Q-022 est l'option proposée, pas une réponse), Q-017 à Q-021, Q-028, Q-043, BUG-625, 671, 1002, 1101, 1202, et BUG-083 contre BUG-988.
+
+**Deux pièges git à connaître** : (1) **n'ajoute jamais `docs/qa/captures/*.png`** : ils étaient modifiés par les agents de test et mon push était refusé (erreur 408) ; j'ai refait mes commits sans eux ; ajoute les fichiers **par chemin**, pas `git add docs`. (2) Tes numéros restent BUG-1100+, les miens BUG-1000+ (1200-1202 pris par l'audit, 1300+ réservé à l'e2e).
+
+**Statut :** OUVERT
