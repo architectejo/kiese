@@ -1556,9 +1556,18 @@ def _push_facturier_report(node, record):
     except Node.DoesNotExist:
         return _record_result(record_id, False, f"boulangerie inconnue : {bakery_code}")
 
+    # BUG-911 : la contrainte (node, facturier, team, date) ne protège pas quand
+    # `facturier` est NULL (rapport poussé) : une seule vacation (boulangerie,
+    # équipe, jour), sinon la clôture compterait les ventes en double.
+    report_date = _date.fromisoformat(record['date'])
+    if FacturierReport.objects.filter(node=bakery, team=record.get('team', ''), date=report_date).exists():
+        return _record_result(
+            record_id, False,
+            f"un rapport existe déjà pour {bakery.code}, équipe {record.get('team')}, à la date {report_date}")
+
     report = FacturierReport(
         id=record_id, node=bakery, team=record.get('team', ''),
-        date=_date.fromisoformat(record['date']),
+        date=report_date,
         total_cash_sales=_to_decimal(record.get('total_cash_sales')),
         total_credit_sales=_to_decimal(record.get('total_credit_sales')),
         theoretical_cash=_to_decimal(record.get('theoretical_cash')),
@@ -1599,52 +1608,61 @@ def _push_disbursement_voucher(node, record):
             record_id, False, "bordereau de versement réservé au siège : refusé pour une boulangerie")
 
     existing = DisbursementVoucher.objects.filter(pk=record_id).first()
-    if existing is None:
-        if not record.get('date') or not record.get('motif'):
-            return _record_result(record_id, False, "champs requis manquants (date/motif)")
-        voucher = DisbursementVoucher(
-            id=record_id, date=_date.fromisoformat(record['date']),
-            motif=record.get('motif', ''), beneficiary=record.get('beneficiary', ''),
-            bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
-            bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
-            bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
-            bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
-            piece_number=record.get('piece_number', ''),
-            node_origin=record.get('node_origin', node.code),
-        )
-        voucher.compute_physical_cash()
-        if not voucher.piece_number:
-            voucher.piece_number = f"BV-{voucher.date.strftime('%Y%m%d')}-{str(voucher.id)[:6].upper()}"
-        voucher.save(_sync_bypass=True)
-        existing = voucher
+    created = existing is None
+    if created and (not record.get('date') or not record.get('motif')):
+        return _record_result(record_id, False, "champs requis manquants (date/motif)")
 
-    if CashbookEntry.objects.filter(source_bordereau=existing).exists():
-        return _record_result(record_id, True)
-
-    siege = Node.objects.filter(code='SIEGE').first()
-    if siege is None:
-        return _record_result(record_id, False, "nœud SIEGE introuvable — exécutez les migrations avant de synchroniser un bordereau")
-
-    label = f"Bordereau de versement — {existing.motif}"
-    if existing.beneficiary:
-        label += f" ({existing.beneficiary})"
-
-    def _check_sufficient_balance(last_balance):
-        if existing.physical_cash_total > last_balance:
-            raise DRFValidationError(
-                f"Montant du bordereau ({existing.physical_cash_total:,.0f} FC) "
-                f"supérieur au solde disponible ({last_balance:,.0f} FC)."
+    # BUG-914 : bon + écriture au livre dans UNE transaction (comme REST) : un refus
+    # (solde insuffisant) ne laisse aucun bon orphelin en base.
+    with transaction.atomic():
+        if created:
+            voucher = DisbursementVoucher(
+                id=record_id, date=_date.fromisoformat(record['date']),
+                motif=record.get('motif', ''), beneficiary=record.get('beneficiary', ''),
+                bills_20000=record.get('bills_20000', 0), bills_10000=record.get('bills_10000', 0),
+                bills_5000=record.get('bills_5000', 0), bills_1000=record.get('bills_1000', 0),
+                bills_500=record.get('bills_500', 0), bills_200=record.get('bills_200', 0),
+                bills_100=record.get('bills_100', 0), bills_50=record.get('bills_50', 0),
+                piece_number=record.get('piece_number', ''),
+                node_origin=record.get('node_origin', node.code),
             )
+            voucher.compute_physical_cash()
+            if not voucher.piece_number:
+                voucher.piece_number = f"BV-{voucher.date.strftime('%Y%m%d')}-{str(voucher.id)[:6].upper()}"
+            voucher.save(_sync_bypass=True)
+            existing = voucher
 
-    try:
-        append_cashbook_entry(
-            validate_balance=_check_sufficient_balance,
-            node=siege, date=existing.date, piece_number=existing.piece_number,
-            imputation='SORTIE', label=label, exit_amount=existing.physical_cash_total,
-            source_bordereau=existing, node_origin='CLOUD',
-        )
-    except DRFValidationError as exc:
-        return _record_result(record_id, False, str(exc.detail[0]) if hasattr(exc, 'detail') else str(exc))
+        if CashbookEntry.objects.filter(source_bordereau=existing).exists():
+            return _record_result(record_id, True)
+
+        siege = Node.objects.filter(code='SIEGE').first()
+        if siege is None:
+            transaction.set_rollback(True)
+            return _record_result(record_id, False, "nœud SIEGE introuvable — exécutez les migrations avant de synchroniser un bordereau")
+
+        label = f"Bordereau de versement — {existing.motif}"
+        if existing.beneficiary:
+            label += f" ({existing.beneficiary})"
+
+        def _check_sufficient_balance(last_balance):
+            if existing.physical_cash_total > last_balance:
+                raise DRFValidationError(
+                    f"Montant du bordereau ({existing.physical_cash_total:,.0f} FC) "
+                    f"supérieur au solde disponible ({last_balance:,.0f} FC)."
+                )
+
+        try:
+            with transaction.atomic():
+                append_cashbook_entry(
+                    validate_balance=_check_sufficient_balance,
+                    node=siege, date=existing.date, piece_number=existing.piece_number,
+                    imputation='SORTIE', label=label, exit_amount=existing.physical_cash_total,
+                    source_bordereau=existing, node_origin='CLOUD',
+                )
+        except DRFValidationError as exc:
+            if created:
+                transaction.set_rollback(True)  # aucun bon sans écriture au livre
+            return _record_result(record_id, False, str(exc.detail[0]) if hasattr(exc, 'detail') else str(exc))
     return _record_result(record_id, True)
 
 
@@ -2096,7 +2114,89 @@ def _check_invoice(node, record):
     return None
 
 
+def _check_day(node, record, key='date'):
+    """Date AAAA-MM-JJ valide et non future (si présente). Renvoie un motif ou None."""
+    if record.get(key) in (None, ''):
+        return None
+    day = _strict_date(record[key])
+    if day is None:
+        return "« date » invalide (AAAA-MM-JJ attendu)"
+    try:
+        _sync_not_future_date(node, day, 'date')
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def _check_amounts(record, specs):
+    """specs : (champ, décimales, minimum, max_digits). Renvoie un motif ou None."""
+    for name, places, low, digits in specs:
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _sync_decimal(record[name], name, places, low, max_digits=digits)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+_BILL_FIELDS = ('bills_20000', 'bills_10000', 'bills_5000', 'bills_1000',
+                'bills_500', 'bills_200', 'bills_100', 'bills_50')
+
+
+def _check_bills(record):
+    for name in _BILL_FIELDS:
+        if record.get(name) in (None, ''):
+            continue
+        try:
+            _sync_int(record[name], name)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
+def _check_facturier_report(node, record):
+    # BUG-910 : montants >= 0, ASCII, 2 décimales (sacks_value_gap peut être négatif).
+    zero = Decimal('0')
+    reason = _check_amounts(record, (
+        ('total_cash_sales', 2, zero, 14), ('total_credit_sales', 2, zero, 14),
+        ('theoretical_cash', 2, zero, 14), ('sacks_consumed', 2, zero, 8),
+        ('sacks_value_gap', 2, None, 14),
+    ))
+    if reason:
+        return reason
+    # BUG-911 : équipes A et B uniquement (CLAUDE.md 5.2, REST BUG-812).
+    from treasury.models import FacturierReport
+    known = record.get('id') not in (None, '') and FacturierReport.objects.filter(pk=record['id']).exists()
+    if 'team' in record or not known:
+        if record.get('team') not in ('A', 'B'):
+            return "« team » invalide : équipe A ou B uniquement"
+    return _check_day(node, record)  # BUG-912
+
+
+def _check_cash_closure(node, record):
+    zero = Decimal('0')
+    reason = _check_amounts(record, (('total_entries', 2, zero, 14), ('total_expenses', 2, zero, 14)))
+    return reason or _check_bills(record) or _check_day(node, record)  # BUG-913 / 912
+
+
+def _check_disbursement_voucher(node, record):
+    reason = _check_bills(record) or _check_day(node, record)  # BUG-914 / 912
+    if reason:
+        return reason
+    from treasury.models import DisbursementVoucher
+    if record.get('id') not in (None, '') and DisbursementVoucher.objects.filter(pk=record['id']).exists():
+        return None  # rejeu : le handler reste idempotent
+    total = sum(int(_sync_int(record.get(n) or 0, n)) * int(n.split('_')[1]) for n in _BILL_FIELDS)
+    if total <= 0:
+        return "le bordereau doit comporter au moins un billet (montant supérieur à 0 FC)"
+    return None
+
+
 _STRICT_CHECKS = {
+    'treasury.FacturierReport': _check_facturier_report,
+    'treasury.CashClosure': _check_cash_closure,
+    'treasury.DisbursementVoucher': _check_disbursement_voucher,
     'production.ProductionSession': _check_production_session,
     'production.ProductionSessionLine': _check_production_session_line,
     'production.BreadDisposal': _check_bread_disposal,

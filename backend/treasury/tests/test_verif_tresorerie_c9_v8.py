@@ -8,7 +8,6 @@ Code applicatif non modifie.
 import uuid
 from datetime import timedelta
 from decimal import Decimal as Dc
-from unittest import expectedFailure
 
 from sync.models import NodeAuthToken
 from treasury.models import (
@@ -105,7 +104,6 @@ class PushRapport(PushBase):
         self.push(self.raw1, 'treasury.FacturierReport', rec)
         self.assertIsNone(self.stored(rec))
 
-    @expectedFailure  # BUG-910
     def test_rapport_montants_non_ascii_refuses(self):
         bad = []
         for f in ('total_cash_sales', 'total_credit_sales', 'theoretical_cash', 'sacks_value_gap'):
@@ -116,7 +114,6 @@ class PushRapport(PushBase):
                     bad.append((f, v))
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-910
     def test_rapport_montants_negatifs_refuses(self):
         bad = []
         for f in ('total_cash_sales', 'total_credit_sales', 'theoretical_cash'):
@@ -126,7 +123,6 @@ class PushRapport(PushBase):
                 bad.append(f)
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-911
     def test_rapport_equipe_hors_A_B_refusee(self):
         bad = []
         for team in ('Z', 'J', 'N', '1'):
@@ -142,7 +138,6 @@ class PushRapport(PushBase):
         r = self.stored(rec)
         self.assertTrue(r is None or r.total_cash_sales == Dc('10.00'))
 
-    @expectedFailure  # BUG-911
     def test_rapport_doublon_meme_vacation_autre_id(self):
         a, b = self.rep(), self.rep()
         self.push(self.raw1, 'treasury.FacturierReport', a)
@@ -150,7 +145,6 @@ class PushRapport(PushBase):
         n = FacturierReport.objects.filter(node=self.n1, team='A', date=today()).count()
         self.assertEqual(n, 1, "deux rapports pour la meme vacation (node, equipe, date)")
 
-    @expectedFailure  # BUG-912
     def test_rapport_date_future_refusee(self):
         rec = self.rep(date=str(today() + timedelta(days=30)))
         self.push(self.raw1, 'treasury.FacturierReport', rec)
@@ -191,7 +185,6 @@ class PushCloture(PushBase):
         self.assertIsNone(self.stored(b))
         self.assertEqual(r.status_code, 200)
 
-    @expectedFailure  # BUG-913
     def test_cloture_negatifs_et_non_ascii_refuses(self):
         bad = []
         for f, v in (('total_entries', '-1'), ('total_expenses', '-1'), ('total_entries', ARAB),
@@ -204,7 +197,6 @@ class PushCloture(PushBase):
             CashClosure.objects.all().delete()
         self.assertEqual(bad, [])
 
-    @expectedFailure  # BUG-912
     def test_cloture_date_future_refusee(self):
         rec = self.clo(date=str(today() + timedelta(days=10)))
         self.push(self.raw1, 'treasury.CashClosure', rec)
@@ -258,7 +250,6 @@ class PushBordereau(PushBase):
         self.assertEqual(last.running_balance, Dc('8000'))
         self.assertTrue(self.chain_ok())
 
-    @expectedFailure  # BUG-914
     def test_bordereau_superieur_au_solde_ne_laisse_pas_de_bon_orphelin(self):
         self.fund_livre('10000')
         rec = self.vou(bills_20000=1, bills_1000=0)
@@ -266,7 +257,6 @@ class PushBordereau(PushBase):
         self.assertEqual(CashbookEntry.objects.count(), 1)
         self.assertIsNone(self.stored(rec), "bon cree sans ecriture au livre (REST : aucun bon cree)")
 
-    @expectedFailure  # BUG-914
     def test_bordereau_zero_billet_refuse(self):
         rec = self.vou(bills_1000=0)
         self.push(self.raws, 'treasury.DisbursementVoucher', rec)
@@ -285,7 +275,6 @@ class PushBordereau(PushBase):
         self.assertEqual(CashbookEntry.objects.count(), 1)
         self.assertTrue(self.chain_ok())
 
-    @expectedFailure  # BUG-912
     def test_bordereau_date_future_refusee(self):
         self.fund_livre('10000')
         rec = self.vou(date=str(today() + timedelta(days=10)))
