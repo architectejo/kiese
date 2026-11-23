@@ -133,7 +133,6 @@ class Retenue737Tests(Base):
         self.generate(self.n3)
         self.assertEqual(self.total('deduction_debt', client=c), D('-4000.00'))
 
-    @expectedFailure  # BUG-783 (ouvert par testeur-charge, meme scenario)
     def test_suppression_de_la_ligne_qui_retient_puis_regeneration(self):
         """La ligne qui portait la BP est supprimee, puis la paie regeneree : la BP du client doit
         etre retenue quelque part (sinon elle disparait de toutes les paies du mois)."""

@@ -339,7 +339,11 @@ def _parse_cursor(request, param_name, allow_future=False):
     # vraie ligne, légèrement dans le futur en cas de décalage d'horloge (tolérance 1 h) : la rejeter
     # ferait reboucler sur la page 1. Un curseur très lointain reste traité comme absent.
     from datetime import timedelta
+    # BUG-1010 : `allow_future` peut etre un datetime plafond (plus grand updated_at reel des clients) :
+    # un curseur de page n'est jamais au-dela d'une ligne existante, meme si l'horloge Cloud derive de > 1 h.
     limit = timezone.now() + (timedelta(hours=1) if allow_future else timedelta(0))
+    if allow_future is not True and hasattr(allow_future, 'isoformat') and allow_future > limit:
+        limit = allow_future
     if parsed > limit:
         return None
     return parsed
@@ -371,8 +375,12 @@ class PullView(APIView):
         now = timezone.now()
 
         since_config = _parse_cursor(request, 'since_config')
-        since_client_debt = _parse_cursor(
-            request, 'since_client_debt', allow_future=bool(request.query_params.get('client_after_id')))
+        ceiling = bool(request.query_params.get('client_after_id'))
+        if ceiling:
+            from django.db.models import Max
+            from clients.models import Client as _C
+            ceiling = _C.objects.aggregate(m=Max('updated_at'))['m'] or True
+        since_client_debt = _parse_cursor(request, 'since_client_debt', allow_future=ceiling)
 
         payload = {'server_time': now.isoformat()}
 

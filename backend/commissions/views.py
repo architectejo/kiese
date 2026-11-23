@@ -284,6 +284,35 @@ class CommissionPeriodViewSet(NodeImmutableForNonHQMixin, viewsets.ModelViewSet)
                     commission.total_breads     = agg['total_breads']
                     commission.order_value      = agg['order_value']
                     commission.commission_rate  = client.commission_rate
+                    # BUG-1011 : si la ligne porteuse de la retenue a ete supprimee et qu'AUCUNE ligne du
+                    # mois (payee ou non) ne la porte, la plus ancienne ligne NON payee (created_at, pk)
+                    # la reporte : jamais perdue, jamais doublee, jamais sur une ligne payee.
+                    carried = ClientCommission.objects.filter(
+                        client_id=client_id, period__month=month, period__year=year,
+                    ).filter(~Q(deduction_debt=0) | ~Q(deduction_social=0)).exists()
+                    # Seulement si une boulangerie facturee ce mois n'a plus de ligne (porteuse supprimee) :
+                    # sinon un zero manuel de la comptabilite serait ecrase (test_commissions_v5).
+                    if not carried:
+                        nodes_inv = set(Invoice.objects.filter(
+                            client_id=client_id, status=Invoice.Status.DELIVERED,
+                            invoice_date__month=month, invoice_date__year=year,
+                            is_soldee=False, commission_exempt=False, is_debt_repayment=False,
+                        ).values_list('node_id', flat=True))
+                        # Boulangerie dont la periode existe deja mais sans ligne pour ce client = ligne supprimee.
+                        nodes_with_period = set(CommissionPeriod.objects.filter(
+                            month=month, year=year, node_id__in=nodes_inv,
+                        ).values_list('node_id', flat=True))
+                        nodes_rows = set(ClientCommission.objects.filter(
+                            client_id=client_id, period__month=month, period__year=year,
+                        ).values_list('period__node_id', flat=True))
+                        carried = not (nodes_with_period - nodes_rows)
+                    if not carried:
+                        first = ClientCommission.objects.filter(
+                            client_id=client_id, period__month=month, period__year=year, is_paid=False,
+                        ).order_by('created_at', 'pk').first()
+                        if first is not None and first.pk == commission.pk:
+                            commission.deduction_debt = Decimal(str(client.current_debt))
+                            commission.deduction_social = cotisation
                 commission.compute(float(config.annual_bonus_rate))
                 commission.save()
 

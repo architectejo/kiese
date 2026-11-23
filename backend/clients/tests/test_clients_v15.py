@@ -3,7 +3,6 @@ Ronde b19 (testeur clients/commissions, 2026-11-23) : verification independante 
 les pages d'un pull a curseur, tolerance 1 h du curseur de page). Donnees FICTIVES. Code applicatif non modifie.
 """
 from datetime import timedelta
-from unittest import expectedFailure
 
 from django.utils import timezone
 
@@ -92,7 +91,6 @@ class Curseur1h(Base14):
         self.assertEqual(set(ids) & set(seen), set(ids))
         self.assertEqual(len(seen), len(set(seen)))
 
-    @expectedFailure  # BUG-1010
     def test_marche_avec_lignes_datees_futur_3h_ne_boucle_pas(self):
         """Horloge Cloud derivee de 3 h : le curseur de page est rejete (> 1 h) -> retour page 1 ?"""
         self.mk_many(5, node=self.k3)

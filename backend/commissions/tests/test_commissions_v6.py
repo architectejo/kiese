@@ -4,7 +4,6 @@ balayage suppression / regeneration / paiement multi-boulangeries. Valeurs calcu
 carte 700, dette 10 000, 100 pains x 500 FC x 0,25 = 12 500 de CM par boulangerie). Donnees FICTIVES.
 """
 from decimal import Decimal as D
-from unittest import expectedFailure
 
 from commissions.models import ClientCommission
 from commissions.tests.test_commissions_v5 import COMM, Base5, api
@@ -81,7 +80,6 @@ class Multi(Base5):
             self.assertIn(r.status_code, (400, 403, 409))
             self.assertTrue(ClientCommission.objects.filter(pk=c.pk).exists())
 
-    @expectedFailure  # BUG-1011
     def test_regeneration_seules_lignes_restantes_sans_recreer_la_supprimee(self):
         """Limite annoncee BUG-1009 : la ligne supprimee n'est pas regeneree, les autres restent a 0.
         La dette BP est alors retenue nulle part et l'API ne le signale pas (aucune alerte, 201)."""
