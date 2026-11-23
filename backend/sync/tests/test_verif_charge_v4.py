@@ -74,10 +74,10 @@ class CurseurVerif(TestCase):
         self.addCleanup(desktop_client._PULL_CURSORS.clear)
         make_client(self.k1)
 
-    def _pull(self, data_dir=None, url=CLOUD, api=None):
+    def _pull(self, data_dir=None, url=CLOUD, api=None, node_code=None):
         fake, calls = _bridge(api or self.api)
         with patch.object(desktop_client.requests, 'get', fake):
-            desktop_client._pull_only(LOG, url, {}, data_dir or self.tmp)
+            desktop_client._pull_only(LOG, url, {}, data_dir or self.tmp, node_code)
         return calls
 
     def test_curseur_persiste_sur_disque_survit_au_redemarrage(self):
@@ -145,15 +145,15 @@ class CurseurVerif(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.json()['clients']), 1, "client jamais livre : curseur futur accepte tel quel")
 
-    @expectedFailure  # BUG-786
     def test_curseur_lie_au_noeud_pas_seulement_a_l_url(self):
         """Poste reconfigure pour une autre boulangerie, meme URL Cloud : curseur de K1 reutilise par K2."""
-        self._pull()  # curseur K1 enregistre
+        self._pull(node_code='K1')  # curseur K1 enregistre
+        self.assertIn('since_client_debt', self._pull(node_code='K1')[0])  # K1 le reutilise
         k2 = make_node(code='K2')
         api2, _ = _api(k2)
         make_client(k2)  # client K2 modifie AVANT le curseur K1
         Client.objects.filter(node=k2).update(updated_at='2020-01-01T00:00:00Z')
-        calls = self._pull(api=api2)
+        calls = self._pull(api=api2, node_code='K2')
         self.assertEqual(calls[0], {}, "K2 envoie le curseur de K1 : ses clients anciens ne descendront jamais")
 
 
@@ -396,9 +396,15 @@ class PorteeVerif(TestCase):
     def test_bordereau_superieur_au_solde_rejete(self):
         self._siege_funded(D('1000'))
         v = {'id': str(uuid.uuid4()), 'date': '2026-11-21', 'motif': 'Fictif', 'bills_10000': 5,
-             'node_origin': 'K1'}
-        r = _push(self.a1, {'treasury.DisbursementVoucher': [v]})
-        self.assertEqual(r.data['results']['treasury.DisbursementVoucher'][0]['status'], 'REJECTED')
+             'node_origin': 'CLOUD'}
+        # Jeton SIEGE (sinon le rejet viendrait de BUG-789, pas du solde insuffisant).
+        siege_api, _ = _api(Node.objects.get(code='SIEGE'))
+        before = CashbookEntry.objects.count()
+        r = _push(siege_api, {'treasury.DisbursementVoucher': [v]})
+        res = r.data['results']['treasury.DisbursementVoucher'][0]
+        self.assertEqual(res['status'], 'REJECTED', res)
+        self.assertIn('solde', str(res).lower(), res)
+        self.assertEqual(CashbookEntry.objects.count(), before)
 
     def test_bordereau_node_origin_d_un_autre_noeud_rejete(self):
         v = {'id': str(uuid.uuid4()), 'date': '2026-11-21', 'motif': 'Fictif', 'bills_10000': 1,
