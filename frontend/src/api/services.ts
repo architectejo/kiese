@@ -1739,6 +1739,31 @@ export const productionApi = {
     get: (params: { month: string; node?: string }) =>
       apiClient.get<FlourMonthStats>('/api/production/consumables/flour-month-stats/', { params }),
   },
+  // BUG-1113 (I-4) : export Excel des statistiques d'intrants (.xlsx en pièce jointe).
+  intrantsExport: {
+    download: async (params: { date: string; month?: string; node?: string }): Promise<{ blob: Blob; filename: string }> => {
+      try {
+        const res = await apiClient.get<Blob>('/api/production/intrants-export/', { params, responseType: 'blob' });
+        const disposition = String(res.headers['content-disposition'] ?? '');
+        const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+        const filename = match ? decodeURIComponent(match[1]) : `statistiques-intrants-${params.date}.xlsx`;
+        return { blob: res.data, filename };
+      } catch (err: unknown) {
+        // En erreur, le corps JSON arrive sous forme de Blob : on en extrait `detail`.
+        const body: unknown = (err as { response?: { data?: unknown } } | null)?.response?.data;
+        if (body instanceof Blob) {
+          try {
+            const parsed: unknown = JSON.parse(await body.text());
+            const detail = (parsed as { detail?: unknown } | null)?.detail;
+            if (typeof detail === 'string' && detail.trim() !== '') throw new Error(detail);
+          } catch (inner: unknown) {
+            if (inner instanceof Error && !(inner instanceof SyntaxError)) throw inner;
+          }
+        }
+        throw err;
+      }
+    },
+  },
   inventories: {
     today: () => apiClient.get<InventoryToday>('/api/production/inventories/today/'),
     create: (data: InventoryCreatePayload) =>

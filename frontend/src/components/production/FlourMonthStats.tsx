@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { productionApi } from '@/api/services';
 import type { FlourMonthStats as FlourMonthStatsData } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
+import { localIsoDate } from '@/store/workDateStore';
+import { useIntrantsExport } from './useIntrantsExport';
 
 /** Statistiques du mois — Farine (BUG-1110, lot I-3). */
 const fmtSacks = (v: string | undefined | null): string =>
@@ -46,6 +48,14 @@ export const FlourMonthStats: React.FC<{ canPickNode: boolean }> = ({ canPickNod
     return () => { cancelled = true; };
   }, [month, node, canPickNode]);
 
+  const { exporting, error: exportError, exportIntrants } = useIntrantsExport();
+  const onExport = () => {
+    const [y, m] = month.split('-').map(Number);
+    // Mois courant : aujourd'hui ; sinon dernier jour du mois affiché (dates locales).
+    const date = month === currentMonth() ? localIsoDate() : localIsoDate(new Date(y, m, 0));
+    void exportIntrants({ date, month, ...(canPickNode && node ? { node } : {}) });
+  };
+
   const dir = data?.direction_visible === true;
   const bakeries = data?.bakeries ?? [];
 
@@ -67,9 +77,14 @@ export const FlourMonthStats: React.FC<{ canPickNode: boolean }> = ({ canPickNod
             </select>
           </label>
         )}
+        <button type="button" className="btn btn-secondary" disabled={exporting || !/^\d{4}-\d{2}$/.test(month)}
+          onClick={onExport} style={{ height: '28px', fontSize: '0.72rem', padding: '0 10px' }}>
+          {exporting ? 'Export…' : 'Exporter Excel'}
+        </button>
       </div>
+      {exportError && <div role="alert" style={{ color: 'hsl(var(--color-danger))', fontSize: '0.72rem', marginBottom: '8px' }}>{exportError}</div>}
 
-      {loading && <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.72rem' }}>Chargement...</div>}
+      {loading &&<div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.72rem' }}>Chargement...</div>}
       {error && !loading && <div role="alert" style={{ color: 'hsl(var(--color-danger))', fontSize: '0.72rem', padding: '8px 0' }}>{error}</div>}
       {!loading && !error && data && data.rows.length === 0 && (
         <div style={{ textAlign: 'center', padding: '12px', color: 'hsl(var(--text-muted))', fontSize: '0.72rem' }}>Aucune donnée pour ce mois.</div>
