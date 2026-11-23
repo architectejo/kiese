@@ -2,6 +2,8 @@
 Core serializers — User, Node, Config, BreadPrice.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .mixins import AsciiDigitsMixin
@@ -11,13 +13,13 @@ User = get_user_model()
 
 
 class NodeSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
-    ascii_digit_fields = ('sac_value_fc', 'monthly_social_contribution', 'card_fee_fc')  # BUG-897
+    ascii_digit_fields = '__numeric__'  # BUG-897 / Q-026 (default_commission_rate)
     display_name = serializers.CharField(source='__str__', read_only=True)
 
     class Meta:
         model = Node
         fields = [
-            'id', 'code', 'name', 'address', 'sac_value_fc', 'monthly_social_contribution', 'card_fee_fc', 'is_active',
+            'id', 'code', 'name', 'address', 'sac_value_fc', 'monthly_social_contribution', 'card_fee_fc', 'default_commission_rate', 'is_active',
             'last_sync', 'display_name',
             'team_a_start_time', 'team_a_end_time',
             'team_b_start_time', 'team_b_end_time',
@@ -36,6 +38,12 @@ class NodeSerializer(AsciiDigitsMixin, serializers.ModelSerializer):
         # BUG-417 : montant FC de la carte, jamais négatif.
         if value is not None and value < 0:
             raise serializers.ValidationError("Le montant de la carte ne peut pas être négatif.")
+        return value
+
+    def validate_default_commission_rate(self, value):
+        # Q-026 : mêmes bornes que le taux client (0 à 0,30) ; vide = taux global de Config.
+        if value is not None and (value < 0 or value > Decimal('0.30')):
+            raise serializers.ValidationError("Le taux de commission doit être compris entre 0 et 0,30.")
         return value
 
     def validate_sac_value_fc(self, value):
