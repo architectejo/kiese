@@ -1,56 +1,60 @@
-# Brouillon de Pull Request — `dev-c` → `main`
+# Brouillon de Pull Request — `dev-b` → `main`
 
-> Brouillon préparé par le Dev C le 2026-11-22. **À ne pas ouvrir avant l'ordre du responsable** et avant la vérification indépendante finale (voir « Avant de fusionner »). Sur GitHub, le corps de la PR se termine par la mention « Generated with Claude Code ».
+> Brouillon mis à jour par dev-b le 2026-11-24 (remplace la version `dev-c` du 2026-11-22). **À ne pas ouvrir avant l'ordre du responsable.** `dev-b` contient tout le travail de dev-a (fusion `a2bd282`) et de dev-c. Sur GitHub, le corps de la PR se termine par la mention « Generated with Claude Code ».
 
 ## Résumé
 
-`dev-c` réunit le travail des trois développeurs (A, B, C) depuis `main` (v1.0.0) : 93 commits, environ 400 fichiers. Contenu :
+313 commits depuis `main` (v1.0.0), environ 860 fichiers, 22 migrations. Contenu par thème :
 
-- **Isolation entre boulangeries** : fuites corrigées dans trésorerie, production, clients (BUG-503, 504, 505, 506, 521, 522, 362) ; comptes sans boulangerie refusés ; paramètres invalides → 400 au lieu de 500 (BUG-526 à 529).
-- **Production** : envoi direct de pains (BUG-380, 382), CUMP borné sur stock négatif (BUG-402), commande `recompute_cump` (BUG-357, 364, 501, 524), auto-création du stock de consommable (BUG-147), fournées cumulées (BUG-502).
-- **Ventes** : prix plein figé sur la ligne (BUG-508), numéros de reçu rétroactifs (BUG-197).
-- **Trésorerie / Caisse** : page « Caisse » séparée de la « Clôture Journalière » (BUG-383), « Versement » visible de la direction en lecture (BUG-381), rapports rétroactifs hors totaux du jour (BUG-175).
-- **Blockchain** : alertes de falsification et snapshots protégés contre la suppression d'un nœud (BUG-516).
-- **Plateforme (B)** : sync, pagination `page_size` (BUG-333), commissions par mois/année (BUG-412, 511), suppression d'un nœud protégée (BUG-414), découpage de `Clients.tsx` et `Settings.tsx` (BUG-011), colonne Actions à 360 px (BUG-415).
-- **Python 3.14** : `Pillow>=10.4,<14.0`. **Waitress** est le seul serveur WSGI. **`desktop/` est gelé** (aucune modification de ce dossier dans cette PR hors travaux de B antérieurs au gel).
+- **Isolation entre boulangeries et permissions** : fuites corrigées (trésorerie, production, clients), comptes sans boulangerie refusés, paramètres invalides → 400. **Livreur = facturier** (Q-027, BUG-1050) : mêmes droits, il peut créer clients et factures dans sa boulangerie ; il ne voit les clients des autres boulangeries qu'en ligne (`sync/connectivity.py`). Gardes de routes du frontend alignées sur le menu (BUG-1115, 1203).
+- **Synchronisation poste local ↔ cloud** : push/pull par lots, strictes vérifications d'identité, horloge, transferts (miroirs, états), conflits tracés (`SyncConflictLog`), blocs de pull `node_settings`, `consumable_types`, `closures`, `mirrors`, pagination, commande `sync_now`.
+- **Clients / commissions** : taux de commission par boulangerie (`Node.default_commission_rate`, BUG-1103), carte retenue une seule fois par client et par mois (BUG-1104), retenue unique sur la ligne la plus ancienne (BUG-737/1013), cotisation 2 000 FC et carte 1 000 FC par boulangerie, nouveau client jamais « SUSPENDU » (BUG-1116), plafond 0 / dette 0 non « à risque » (BUG-742).
+- **Clôture et blocage des ventes** (BUG-973) : heure de clôture et interrupteur par boulangerie, bannière et modale de clôture, `/api/treasury/closure-status/`, compteur de re-soumissions (BUG-996).
+- **Production / intrants** : statistiques journalières par intrant (farine, levure, huile, sel ; BUG-1060/1061), farine du mois, **export Excel au format du client** (`/api/production/intrants-export/`), sel : 1 sac = 20 kg = 204 boîtes (stock en grammes), stock de départ, envoyés/reçus par transfert (A-1/A-3), restes par journée et clôture automatique (A-4).
+- **Trésorerie, blockchain, finance** : chaîne de hash unique, alertes protégées, états N / N-1 (voir registre).
+- **Interface** : 360 px (en-tête, tableaux de clôture), trois thèmes contrôlés dans Chrome pour l'historique du client.
+- **Python 3.14** : `Pillow>=10.4,<14.0`. **Waitress** est le seul serveur WSGI. `desktop/` est gelé et la documentation de livraison est hors périmètre (ordre du 2026-11-23).
 
 ## Migrations à appliquer, dans l'ordre
 
-| Migration | Contenu | Risque |
+| App | Migrations | Remarque |
 |---|---|---|
-| `core/0021_node_card_fee_fc` | frais de carte par boulangerie en FC (BUG-417, ligne 468 de `remarque.md`) | à relire par B : ne doit pas écraser une valeur déjà saisie (défauts 2 000 FC cotisation et 1 000 FC carte seulement pour les boulangeries sans valeur propre) |
-| `blockchain/0002_node_protect` | `TamperAlert.node` et `BlockchainSnapshot.node` en `PROTECT` | aucun (réversible, aucune donnée modifiée) |
-| `production/0027_bug380_transfer_flow` | `BreadTransfer.flow` (`REQUEST` par défaut) | aucun (AddField, réversible) |
-| `sales/0011_bug508_full_unit_price` | `InvoiceLine.full_unit_price` nullable | aucun (AddField nullable) |
-| `sales/0012_bug508_backfill_full_unit_price` | rétro-remplissage, `atomic = False`, par lots | **à mesurer sur PostgreSQL** (voir ci-dessous) |
+| `core` | 0021 (carte par boulangerie), 0022 (défauts 2 000 / 1 000 : ne remplace que 0), 0023 (portée des catégories de dépenses), 0024 (blocage après clôture), 0025 (taux de commission par boulangerie, copie du taux global) | 0022 : une valeur propre déjà saisie n'est pas écrasée |
+| `clients` | 0011 (`identity_updated_at`) | **pousser d'abord les clients en attente de synchronisation** sur les postes, sinon une édition locale non envoyée peut être écrasée |
+| `commissions` | 0006 (`deduction_manual`), 0007 (`card_applied`) | additives |
+| `production` | 0027 (flux de transfert), 0028 (inventaires de consommables), 0029 (prix 4 décimales), 0030 (`ConsumableCount.is_synced`), 0031 (conversion sac/boîtes) | additives |
+| `sales` | 0011 (prix plein), 0012 (rétro-remplissage, par lots, `atomic = False`) | 0012 non mesurée sur gros volume : à chronométrer sur une copie de la base cloud |
+| `sync` | 0002 à 0006 | additives |
+| `treasury` | 0018 (`resubmit_count`) | additive |
+| `blockchain` | 0002 (`PROTECT` sur le nœud) | réversible |
 
-**`sales/0012` sur PostgreSQL** : un seul `UPDATE` pour les ventes normales (verrou de lignes, plus de verrou de table), puis les ventes soldées par lots de 500. Non testé sur PostgreSQL. Mesure à faire sur une copie de la base cloud : `EXPLAIN (ANALYZE, BUFFERS)` de l'`UPDATE` dans une transaction annulée ; chronométrer `migrate sales` ; écritures de facture concurrentes pendant l'exécution (relever `pg_locks`) ; comparer `pg_relation_size` avant et après. Au-delà d'environ 10^6 lignes, découper aussi l'`UPDATE` par plages de pk.
+Base conservée : **SQLite** (décision du 2026-11-22). Les verrous `select_for_update` sont seulement simulés ; PostgreSQL non testé.
 
-## Commandes de gestion livrées (ne rien lancer sans sauvegarde)
+## Commandes de gestion (ne rien lancer sans sauvegarde)
 
-- `check_users_sans_noeud` : lecture seule, liste les comptes de boulangerie sans boulangerie (BUG-506). À lancer sur la base réelle.
-- `recompute_cump` : simulation par défaut, `--apply`, `--node`, `--force`. **Réécrit des valorisations de sorties passées** : sauvegarde et lecture de la simulation avant tout `--apply`. Jamais lancée sur une base réelle.
-- `fix_mojibake_names` : simulation par défaut (prénoms au double encodage, 8 lignes dont l'adresse du nœud K3). `--apply` seulement par la personne qui détient la base réelle, après sauvegarde.
+- `check_users_sans_noeud` : lecture seule.
+- `recompute_cump` : simulation par défaut ; `--apply` réécrit des valorisations passées.
+- `fix_mojibake_names` : simulation par défaut.
+- `auto_close_sessions` : clôture automatique des fournées (actif seulement où l'heure de clôture est activée).
+- `sync_now` : synchronisation d'un poste avec le cloud.
 
 ## Changements de comportement d'API
 
-- Paramètres de requête invalides (`?node=ZZZ`, `?month=abc`, dates illisibles) : **400** `{"detail": ...}` au lieu de 500.
-- `PATCH`/`PUT` d'un transfert qui change un nœud, l'auteur ou une quantité d'en-tête : 400 (BUG-522).
-- Création d'un compte GERANT/FACTURIER/LIVREUR sans boulangerie : 400 (BUG-506) ; suppression d'un nœud ayant des comptes actifs, des alertes ou des preuves : 400 (BUG-414, 516).
-- `deficit_report` : réservé au gérant et au-dessus, borné à sa boulangerie (BUG-521). `?page_size=` honoré, plafond 500 (BUG-333).
-- Nouveaux endpoints : `POST /api/production/transfers/send/`, `GET /api/treasury/closures/versements/`.
+- Paramètres invalides (`?node=ZZZ`, `?month=abc`) : 400 `{"detail": ...}`.
+- Nombres : chiffres ASCII uniquement (`core/numeric.py`), exposants, NaN, bool et NBSP refusés.
+- Livreur : mêmes routes que le facturier (clients create, factures, remboursements) ; ne modifie ni ne supprime de clients.
+- Nouveaux endpoints : `closure-status`, `consumables/flour-month-stats`, `intrants-stats`, `intrants-export`, blocs de pull `node_settings` et `consumable_types`.
 
 ## Avant de fusionner
 
-1. **Vérification indépendante** (testeurs, sur l'ordre du responsable) des tickets encore à `CORRIGÉ` : BUG-380, 381, 382, 383, 526 à 529, ainsi que ceux de B livrés le 2026-11-22 (BUG-417 : ligne 468 de `remarque.md`, cotisation et carte en FC ; BUG-530, 531, 532) et ceux de B encore à livrer (BUG-523, 517, 519) ; rejeu de la matrice rôles × routes.
-2. **Suite complète** `manage.py test` verte (dernière série complète du 2026-11-22 sur 4182648 : 2740 tests, 1 échec (matrice : routes `inventories` du BUG-386 à ajouter aux exceptions, corrigé), 6 ignorés, 5 échecs attendus ; tsc OK), `makemigrations --check` propre, `tsc --noEmit` et `npm run build` OK.
-3. **E2E** : cinq specs lisent la clôture sur `/treasury` (désormais `/cloture-journaliere`) : `06`, `18`, `21`, `22`, `24` à adapter par B ; `05-production` et la spec 32 à rejouer sur un poste avec navigateur (BUG-148 reste `CORRIGÉ`).
-4. **Décisions du client en attente** : Q-022 à Q-028 (commissions, livreur, valeurs par boulangerie, tarif figé) ; BUG-513, 518, 520, 161, 278, 356 b, 253, 266 à 268, 507, 411 restent ouverts ou à clarifier. La ligne 468 de `remarque.md` (cotisation et carte en FC, défauts 2 000 et 1 000) est livrée par B (BUG-417, `CORRIGÉ`) et reste à `[]` jusqu'à la vérification indépendante.
-5. **Sauvegarde de la base réelle** avant toute migration ou commande ci-dessus.
+1. **Séries complètes** sur le code final : `core clients commissions sync chat` ; `production` ; `sales treasury finance blockchain` (résultats de la série finale du 2026-11-24 dans `docs/COMMUNICATION_A_B.md`), `makemigrations --check` (propre), `npx tsc --noEmit` (propre), `npm run build` (OK).
+2. **Décisions du client en attente** (aucun code tant qu'elles ne sont pas tranchées) : rotation de 24 h (Q-017 à Q-021), Q-028 (BUG-513/518/520), Q-043, Q-044 à Q-054 (intrants, taux global, stock de départ, clôture automatique, date d'une réception hors ligne), BUG-625/671/684/937/953/986/1002/1029/1101, cinq points de BUG-973, montant de la carte, stock négatif de consommable (BUG-1020/216).
+3. **E2E Playwright** : à rejouer sur un poste avec navigateur (`e2e/`).
+4. **Sauvegarde de la base réelle** avant toute migration ou commande ci-dessus.
 
 ## Points connus, non bloquants
 
-- Les tickets `CORRIGÉ` sans vérification indépendante l'ont été sur décision du responsable (testeurs à la fin).
-- `Clients.tsx` (1 117 lignes) et `ClotureOperations.tsx` (environ 1 340 lignes) restent volumineux ; `Treasury.tsx` est passé de 2 895 à environ 1 370 lignes.
-- Concurrence réelle (`select_for_update()`) non testable sous SQLite : couverte par séquence et espion de verrou.
-- Rendu navigateur (thèmes clair/sombre/café, 360 px) non contrôlé pour les écrans modifiés ce jour ; vérification manuelle décrite dans les rapports `docs/qa/rapports/dev-frontend-2026-11-22-*.md`.
+- Les tickets ont été vérifiés par vérification croisée dev-a / dev-b (relecture, rejeu des tests, contrôle Chrome sur instance jetable), selon `docs/PLAN_FIN_PROJET_A_B_2026-11-24.md`, et non par les agents testeurs.
+- Concurrence réelle non testable sous SQLite.
+- Matériel (imprimante thermique, POS Android) : exécution physique par un humain.
+- Plusieurs pages restent volumineuses (`ClotureOperations.tsx`, `Clients.tsx`).
