@@ -889,3 +889,25 @@ Même règle que tes quatre premiers : la vente antidatée est créée **avant**
 **Rappel `[c]`** : j'ai coché 472, 475, 483. Je ne coche pas 510/512/514/516 avant ta vérification croisée.
 
 **Statut :** OUVERT
+
+### #46-A — 2026-11-24 — A → B (copie C) — PASSATION : dev-a s'arrête à ce push ; dev-b reprend ses tâches et CONTINUE SANS S'ARRÊTER jusqu'à la fin du projet
+
+**Ordre du responsable** : à ce push, dev-a ne fait plus rien ; **dev-b reprend toutes les tâches de dev-a, en plus des siennes, et poursuit sans s'arrêter jusqu'à la fin du projet, en travaillant UNIQUEMENT avec les agents `dev-backend` et `dev-frontend`** (donc pas de `testeur-*`, `auditeur-comptable`, `relecteur-code`, `testeur-e2e`) et **sans le desktop ni la documentation de livraison**. Tu ne t'arrêtes pas avant d'avoir : vérifié (vérification croisée) tout ce que dev-a a livré, coché `[c]` ce qui est conforme, fini I-3 / I-4 / I-5, passé la série finale verte, et écrit « partie A terminée » et « partie B terminée » ici.
+
+**Lis dans cet ordre** : (1) **`docs/PASSATION_DEV_A_VERS_B_2026-11-24.md`** (état de dev-a, liste exacte des tâches qui passent à toi, pièges git/processus/navigateur, questions client en attente) ; (2) `docs/PLAN_FIN_PROJET_A_B_2026-11-24.md` (règles §0, critères de fin §5) ; (3) mes messages #44-A et #45-A.
+
+**Résumé de ce qui t'est transmis (détail dans la passation §2)**
+1. **Vérification croisée de mes livraisons** : BUG-1050, 1051, 1060, 1061, 1070, 1071, 1072, 1073, 1074, 1076 (+ BUG-1202 tranché) ; puis `VÉRIFIÉ (vérification croisée dev-b)` et **cocher `[c]` les lignes 510, 512, 514 et 516 de `remarque.md`** (j'ai coché 472, 475, 483 ; BUG-655/656 vérifiés).
+2. **Contrôles visuels dans Chrome** des écrans A (Stock Pains du Jour, badge d'écart, onglet Statistiques avec données, modale de clôture et bannière BUG-973, création de client l.508, historique du client 3 thèmes l.504).
+3. **Ta modale de clôture** : appeler `shift-end-status` ; demander le reste de la JOURNÉE (pas de l'équipe).
+4. **I-3, I-4, I-5** (intrants : farine mensuelle, export Excel avec « reste/sac » et « reste/boîte » du sel, synchro).
+5. **Série finale en une fois, SANS traverser minuit** (des tests dépendent de la date du jour) ; un seul processus lourd à la fois ; rejouer seuls les tests de concurrence SQLite avant de conclure ; `Start-Process` PowerShell plutôt que `nohup`.
+6. **Mise à jour de `docs/PR_dev-c_vers_main.md`** ; PR vers `main` seulement sur ordre du responsable.
+
+**État poussé** : lot ventes terminé : les 4 échecs de la dernière série (3 tests périmés par la décision « livreur comme facturier » et le pic du matin sous SQLite) sont tous verts (20 tests ciblés OK) ; `check`, `makemigrations --check`, `tsc`, `build` OK. **Je n'ai pas relancé la suite `sales` complète après ce correctif** : à faire dans ta série finale.
+
+**À poser au client (ne rien coder avant)** : liste complète §3 de la passation.
+
+**Bon courage, dev-b : continue sans t'arrêter.**
+
+**Statut :** OUVERT

@@ -366,12 +366,16 @@ class RolesEtIsolation(Base):
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(Invoice.objects.get(pk=r.data['id']).node_id, self.n1.pk)
 
-    def test_livreur_ne_cree_ni_annule_ni_ajuste(self):
+    def test_livreur_comme_facturier_cree_annule_mais_n_ajuste_pas(self):
+        # changement de specification voulu (client, Q-027 / BUG-1050) : le livreur a les memes
+        # ecrans que le facturier : il cree et annule (avant : 403) ; l'ajustement reste refuse.
         r = self.post()
         iid = r.data['id']
         a = _api(self.lv1)
-        self.assertEqual(self.post(user=self.lv1).status_code, 403)
-        self.assertEqual(a.post(f'{INV}{iid}/cancel/', {}, format='json').status_code, 403)
+        rl = self.post(user=self.lv1)
+        self.assertEqual(rl.status_code, 201, rl.data)
+        self.assertEqual(a.post(f'{INV}{rl.data["id"]}/cancel/', {}, format='json').status_code, 200)
+        self.assertEqual(Invoice.objects.get(pk=rl.data['id']).status, 'CANCELLED')
         self.assertEqual(a.post(f'{INV}{iid}/adjust/', {}, format='json').status_code, 403)
         self.assertEqual(a.post(f'{INV}cleanup_expired/', {}, format='json').status_code, 403)
         self.assertEqual(a.patch(f'{INV}{iid}/', {'commission_exempt': True}, format='json').status_code, 403)

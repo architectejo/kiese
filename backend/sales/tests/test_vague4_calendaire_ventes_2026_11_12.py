@@ -156,8 +156,11 @@ class BlocageEquipeTests(Base):
                 self.assertEqual(r.status_code, 403, r.data)
                 self.assertEqual(r.data['code'], 'TEAM_NOT_ASSIGNED')
             self.assertEqual(Invoice.objects.count(), 0)
-            # un livreur ne designe pas l'equipe
-            self.assertEqual(_api(self.lv).post(TA, {'team': 'A'}, format='json').status_code, 403)
+            # changement de specification voulu (client, Q-027 / BUG-1050) : le livreur a les memes
+            # ecrans que le facturier, il peut donc designer l'equipe (avant : 403).
+            r = _api(self.lv).post(TA, {'team': 'A'}, format='json')
+            self.assertIn(r.status_code, (200, 201), r.data)
+            # l'equipe etant designee, la facturation est debloquee ; on la remet a B comme avant.
             r = _api(self.fa).post(TA, {'team': 'B'}, format='json')
             self.assertIn(r.status_code, (200, 201), r.data)
             r = self.sale(user=self.fa)

@@ -208,12 +208,21 @@ class PushFactureFacturierLivreur(TestCase):
             self.assertIn(status, ('ACCEPTED', 'REJECTED'), (f, reason))
 
     def test_facturier_pousse_est_aujourd_hui_ignore_observation(self):
-        """Observation (pas un defaut propre au livreur) : `_push_invoice` ne lit pas `facturier` : la facture
-        poussee est creee avec facturier NULL, qu'il s'agisse d'un facturier ou d'un livreur."""
+        """Changement voulu (BUG-1112, sync/services.py::_resolve_invoice_staff) : l'observation « `_push_invoice`
+        ne lit pas `facturier` » est perimee. Le facturier / livreur pousse est desormais conserve s'il est valide
+        (UUID strict, utilisateur existant, role admis, MEME boulangerie que le jeton de noeud) ; sinon NULL, sans
+        rejet. Un facturier d'une autre boulangerie ne peut donc pas etre attribue (pas de regression de securite)."""
         fa = make_user('FACTURIER', node=self.k1)
         rec_f = self.inv(facturier=str(fa.pk))
         rec_l = self.inv(facturier=str(self.li.pk))
         self.push(rec_f)
         self.push(rec_l)
-        self.assertEqual(Invoice.objects.get(pk=rec_f['id']).facturier_id,
-                         Invoice.objects.get(pk=rec_l['id']).facturier_id)
+        self.assertEqual(Invoice.objects.get(pk=rec_f['id']).facturier_id, fa.pk)
+        self.assertEqual(Invoice.objects.get(pk=rec_l['id']).facturier_id, self.li.pk)
+        # facturier d'une autre boulangerie : ignore (NULL), la facture reste acceptee
+        k2 = make_node(code='K2')
+        other = make_user('FACTURIER', node=k2)
+        rec_o = self.inv(facturier=str(other.pk))
+        status, reason = self.push(rec_o)
+        self.assertEqual(status, 'ACCEPTED', reason)
+        self.assertIsNone(Invoice.objects.get(pk=rec_o['id']).facturier_id)

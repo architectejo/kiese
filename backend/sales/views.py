@@ -1,9 +1,11 @@
+import contextlib
 import random
+import threading
 import time
 from datetime import date as _date_cls
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db import IntegrityError, OperationalError, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import F, Q, Sum, Count
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -43,6 +45,20 @@ from .serializers import InvoiceSerializer, InvoiceCreateSerializer, InvoiceAdju
 # généreux est nécessaire pour absorber un pic réaliste (plusieurs
 # facturiers par boulangerie, plusieurs boulangeries à la fois).
 _INVOICE_CREATE_MAX_RETRIES = 200
+
+# BUG-1076 : sous SQLite (nœud desktop, ou base de test en cache partagé) les verrous sont
+# par TABLE : N créations simultanées dans le même processus se bloquent mutuellement
+# (lecteurs de `clients_client` / `sales_invoice` contre l'écrivain) et peuvent épuiser les
+# retentatives (« database table is locked » -> 500). Une facture n'ayant de toute façon
+# qu'un seul écrivain à la fois sous SQLite, les créations d'un même processus sont
+# sérialisées par ce verrou (jamais tenu pendant la pause de retentative). Inactif sur
+# PostgreSQL (verrous de lignes : `_lock_client`, BUG-640) ; la retentative reste le filet
+# pour plusieurs processus.
+_SQLITE_CREATE_GATE = threading.Lock()
+
+
+def _create_gate():
+    return _SQLITE_CREATE_GATE if connection.vendor == 'sqlite' else contextlib.nullcontext()
 
 
 # BUG-650 : retentative bornée sur « database is locked / table is locked »
@@ -405,7 +421,8 @@ class InvoiceViewSet(
         last_exc = None
         for _attempt in range(_INVOICE_CREATE_MAX_RETRIES):
             try:
-                return self._create_once(request, *args, **kwargs)
+                with _create_gate():
+                    return self._create_once(request, *args, **kwargs)
             except OperationalError as exc:
                 if 'locked' not in str(exc).lower():
                     raise
