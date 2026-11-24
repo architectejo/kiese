@@ -1,6 +1,7 @@
 import React from 'react';
 import type { ProductionSession } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { GapBadge } from './GapBadge';
 
 export interface AllSessionsModalProps {
   showAllSessionsModal: boolean;
@@ -25,7 +26,6 @@ export const AllSessionsModal: React.FC<AllSessionsModalProps> = ({ showAllSessi
                 const tFC  = sess.total_fc_produced || 0;
                 const thFC = sess.theoretical_yield || 0;
                 const rPct = thFC > 0 ? (tFC / thFC) * 100 : 0;
-                const gap  = sess.yield_gap || 0;
                 const rColor = rPct >= 90 ? 'hsl(var(--color-success))' : rPct >= 75 ? 'hsl(var(--color-warning))' : 'hsl(var(--color-danger))';
                 return (
                   <div
@@ -46,9 +46,7 @@ export const AllSessionsModal: React.FC<AllSessionsModalProps> = ({ showAllSessi
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 800, fontSize: '0.72rem', color: rColor }}>{rPct.toFixed(0)}%</div>
-                      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: gap >= 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                        {gap >= 0 ? '+' : ''}{gap.toLocaleString('fr-FR')} FC
-                      </div>
+                      <GapBadge session={sess} />
                     </div>
                   </div>
                 );

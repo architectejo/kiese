@@ -14,6 +14,15 @@ import { useWorkDate } from '@/store/workDateStore';
 
 const formatFC = (n: number) => n.toLocaleString('fr-FR') + ' FC';
 
+const fmtN = (n: number) => n.toLocaleString('fr-FR');
+/** Stock de départ : « — » si non confirmé (null/undefined/NaN), jamais 0 par défaut. */
+const fmtOpening = (n: number | null | undefined): string =>
+  typeof n === 'number' && Number.isFinite(n) ? fmtN(n) : '—';
+
+const TIP_OPENING = 'Stock de départ confirmé en début de journée (— = pas de confirmation ce jour)';
+const TIP_SENT = 'Pains envoyés à une autre boulangerie par transfert';
+const TIP_RECEIVED = "Pains reçus d'une autre boulangerie par transfert";
+
 const formatDateLong = (iso: string): string => {
   const [y, m, d] = iso.split('-').map(Number);
   const date = new Date(y, (m || 1) - 1, d || 1);
@@ -48,8 +57,6 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
   const isToday = selectedDate === workDate;
 
   // BUG-319 : colonnes affichées selon les données ; avant clôture seul « Vendu » (+ transferts).
-  const hasReceived = liveBreadStocks.some(bs => bs.qty_received > 0);
-  const hasSent = liveBreadStocks.some(bs => bs.qty_sent > 0);
   const anyClosed = liveBreadStocks.some(bs => bs.closed);
   const [ecartFc, setEcartFc] = useState<number | null>(null);
   const reportNode = nodeFilter || liveBreadStocks[0]?.node;
@@ -133,9 +140,10 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
               <thead>
                 <tr style={{ fontSize: '0.58rem', textTransform: 'uppercase' }}>
                   <th>Catégorie</th>
+                  <th style={{ textAlign: 'right' }} title={TIP_OPENING}>Stock de départ</th>
                   <th style={{ textAlign: 'right' }}>Vendu</th>
-                  {hasReceived && <th style={{ textAlign: 'right' }}>Reçus</th>}
-                  {hasSent && <th style={{ textAlign: 'right' }}>Envoyés</th>}
+                  <th style={{ textAlign: 'right' }} title={TIP_SENT}>Envoyés</th>
+                  <th style={{ textAlign: 'right' }} title={TIP_RECEIVED}>Reçu</th>
                   {anyClosed && <th style={{ textAlign: 'right' }}>Restes déclarés</th>}
                   {anyClosed && <th style={{ textAlign: 'right' }}>Total produit</th>}
                 </tr>
@@ -146,9 +154,10 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
                   return (
                     <tr key={bs.id}>
                       <td style={{ fontWeight: 800 }}>{bs.bread_price_display}</td>
+                      <td style={{ textAlign: 'right' }} title={TIP_OPENING}>{fmtOpening(bs.qty_opening)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 800 }}>{(bs.sold_qty ?? 0).toLocaleString('fr-FR')}</td>
-                      {hasReceived && <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }}>{bs.qty_received}</td>}
-                      {hasSent && <td style={{ textAlign: 'right' }}>{bs.qty_sent}</td>}
+                      <td style={{ textAlign: 'right' }} title={TIP_SENT}>{fmtN(bs.qty_transfer_sent ?? 0)}</td>
+                      <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }} title={TIP_RECEIVED}>{fmtN(bs.qty_transfer_received ?? 0)}</td>
                       {anyClosed && (
                         <td style={{ textAlign: 'right' }}>
                           {bs.closed && bs.remaining_qty != null ? bs.remaining_qty.toLocaleString('fr-FR') : '—'}
@@ -167,6 +176,18 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
                     </tr>
                   );
                 })}
+                <tr style={{ fontWeight: 800, borderTop: '2px solid hsl(var(--border-color))' }}>
+                  <td>TOTAL</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {liveBreadStocks.some(b => b.qty_opening != null)
+                      ? fmtN(liveBreadStocks.reduce((a, b) => a + (b.qty_opening ?? 0), 0)) : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>{fmtN(liveBreadStocks.reduce((a, b) => a + (b.sold_qty ?? 0), 0))}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtN(liveBreadStocks.reduce((a, b) => a + (b.qty_transfer_sent ?? 0), 0))}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtN(liveBreadStocks.reduce((a, b) => a + (b.qty_transfer_received ?? 0), 0))}</td>
+                  {anyClosed && <td style={{ textAlign: 'right' }}>{fmtN(liveBreadStocks.reduce((a, b) => a + (b.remaining_qty ?? 0), 0))}</td>}
+                  {anyClosed && <td style={{ textAlign: 'right' }}>{fmtN(liveBreadStocks.reduce((a, b) => a + (b.produced_total ?? 0), 0))}</td>}
+                </tr>
               </tbody>
             </table>
             {anyClosed && ecartFc !== null && (
@@ -187,23 +208,44 @@ export const StockDuJourSection: React.FC<StockDuJourSectionProps> = ({
           Aucun stock de pains enregistré ce jour-là.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          {snapshot.categories.map(cat => (
-            <div
-              key={cat.bread_price}
-              style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid hsl(var(--border-color))', fontSize: '0.68rem' }}
-            >
-              <span style={{ fontWeight: 800 }}>{cat.bread_price_display}</span>
-              <div style={{ textAlign: 'right' }}>
-                <span style={{ fontWeight: 800, fontSize: '0.75rem', color: cat.qty_available > 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
-                  {cat.qty_available} dispo
-                </span>
-                <span style={{ display: 'block', fontSize: '0.55rem', color: 'hsl(var(--text-muted))' }}>
-                  {formatFC(cat.qty_available * cat.unit_price)}
-                </span>
-              </div>
-            </div>
-          ))}
+        <div style={{ overflowX: 'auto' }}>
+          <table className="premium-table" style={{ width: '100%', fontSize: '0.68rem' }}>
+            <thead>
+              <tr style={{ fontSize: '0.58rem', textTransform: 'uppercase' }}>
+                <th>Catégorie</th>
+                <th style={{ textAlign: 'right' }} title={TIP_OPENING}>Stock de départ</th>
+                <th style={{ textAlign: 'right' }} title={TIP_SENT}>Envoyés</th>
+                <th style={{ textAlign: 'right' }} title={TIP_RECEIVED}>Reçu</th>
+                <th style={{ textAlign: 'right' }}>Disponible</th>
+                <th style={{ textAlign: 'right' }}>Valeur</th>
+              </tr>
+            </thead>
+            <tbody>
+              {snapshot.categories.map(cat => (
+                <tr key={cat.bread_price}>
+                  <td style={{ fontWeight: 800 }}>{cat.bread_price_display}</td>
+                  <td style={{ textAlign: 'right' }} title={TIP_OPENING}>{fmtOpening(cat.qty_opening)}</td>
+                  <td style={{ textAlign: 'right' }} title={TIP_SENT}>{fmtN(cat.qty_transfer_sent ?? 0)}</td>
+                  <td style={{ textAlign: 'right', color: 'hsl(var(--color-info))' }} title={TIP_RECEIVED}>{fmtN(cat.qty_transfer_received ?? 0)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 800, color: cat.qty_available > 0 ? 'hsl(var(--color-success))' : 'hsl(var(--color-danger))' }}>
+                    {fmtN(cat.qty_available)}
+                  </td>
+                  <td style={{ textAlign: 'right', color: 'hsl(var(--text-muted))' }}>{formatFC(cat.qty_available * cat.unit_price)}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 800, borderTop: '2px solid hsl(var(--border-color))' }}>
+                <td>TOTAL</td>
+                <td style={{ textAlign: 'right' }}>
+                  {snapshot.categories.some(c => c.qty_opening != null)
+                    ? fmtN(snapshot.categories.reduce((a, c) => a + (c.qty_opening ?? 0), 0)) : '—'}
+                </td>
+                <td style={{ textAlign: 'right' }}>{fmtN(snapshot.categories.reduce((a, c) => a + (c.qty_transfer_sent ?? 0), 0))}</td>
+                <td style={{ textAlign: 'right' }}>{fmtN(snapshot.categories.reduce((a, c) => a + (c.qty_transfer_received ?? 0), 0))}</td>
+                <td style={{ textAlign: 'right' }}>{fmtN(snapshot.categories.reduce((a, c) => a + c.qty_available, 0))}</td>
+                <td style={{ textAlign: 'right' }}>{formatFC(snapshot.categories.reduce((a, c) => a + c.qty_available * c.unit_price, 0))}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
 

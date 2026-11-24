@@ -146,7 +146,8 @@ class ClotureDeuxEquipesMemeJour(TBase):
     """Hors rotation, deux equipes clotures le meme jour : le reste du jour est celui du DERNIER instantane
     (le tas de pains est partage). BUG-1202 : la somme par equipe double le compte dans FACTURE MVM INTERNE."""
 
-    @expectedFailure
+    # BUG-1202 tranche par le client (2026-11-24, remarque.md l.516) : les restes sont des
+    # valeurs de JOURNEE, independantes de l'equipe. Corrige (BUG-1073) : plus d'@expectedFailure.
     def test_reste_du_jour_deux_equipes(self):
         yest = TODAY - timedelta(days=1)
         for team, q in (('A', 10), ('B', 3)):   # B cloture en dernier la veille

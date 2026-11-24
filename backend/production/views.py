@@ -329,11 +329,13 @@ def _build_reconciliation_querysets(user, node_id=None, date=None, date_from=Non
     disposals_qs = BreadDisposal.objects.exclude(disposal_type=BreadDisposal.DisposalType.REMAINING)
     invoices_qs = Invoice.objects.filter(status=Invoice.Status.DELIVERED)
 
-    if not user.can_access_all_nodes and user.node_id:
+    # BUG-1074 : `user=None` = clôture automatique par le système (périmètre
+    # = `node_id`, comme un utilisateur siège).
+    if user is not None and not user.can_access_all_nodes and user.node_id:
         sessions_qs  = sessions_qs.filter(node=user.node)
         disposals_qs = disposals_qs.filter(node=user.node)
         invoices_qs  = invoices_qs.filter(node=user.node)
-    elif is_node_less_non_hq(user):
+    elif user is not None and is_node_less_non_hq(user):
         sessions_qs, disposals_qs, invoices_qs = (
             sessions_qs.none(), disposals_qs.none(), invoices_qs.none())
     elif node_id:
@@ -534,7 +536,7 @@ def _close_leftover_session(session, user):
     return True
 
 
-def _close_production_session(session, remaining_entries, request_user, record_snapshot=True):
+def _close_production_session(session, remaining_entries, request_user, record_snapshot=True, snapshot_exclude=None):
     """
     BUG-093/BUG-152/BUG-155 : cœur de la clôture d'une fournée, factorisé
     pour être partagé À L'IDENTIQUE par l'action `close()` (clôture
@@ -588,7 +590,7 @@ def _close_production_session(session, remaining_entries, request_user, record_s
         # (désignation corrigée en rotation) : aucun second reste, donc rien
         # de perdu ni de compté deux fois.
         if record_snapshot:
-            DailyBreadStockSnapshot.record_snapshot(session)
+            DailyBreadStockSnapshot.record_snapshot(session, exclude_bread_prices=snapshot_exclude)
 
         # BUG-319 : fournée par sacs -> « produit » dérivé (vendus + restes ...)
         # et écart sacs x valeur_sac calculé à la clôture, AVANT le recoupement
@@ -1296,6 +1298,13 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
                     {'detail': f"Boulangerie « {node_param} » introuvable."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
+        # BUG-1074 (remarque.md l.516) : clôture automatique des fournées à
+        # l'heure de clôture de la boulangerie (si activée), au premier accès
+        # lecture, sans service d'arrière-plan. Idempotent ; sans effet pour
+        # une boulangerie qui n'a pas activé l'heure de clôture.
+        from .services import auto_close_due_days
+        auto_close_due_days(node)
 
         now = timezone.localtime()
         today = now.date()
@@ -2410,12 +2419,23 @@ class BreadStockByDateView(APIView):
                     'unit_price': bp.unit_price, 'qty_available': 0,
                 })
             categories.sort(key=lambda c: c['unit_price'])
+        from .services import day_stock_movements
+        opening_m, sent_m, recv_m = day_stock_movements(node, requested_date)
+        for bp_id in set(opening_m) | set(sent_m) | set(recv_m):
+            if bp_id not in {c['bread_price'] for c in categories}:
+                bp = BreadPrice.objects.get(pk=bp_id)
+                categories.append({'bread_price': bp.pk, 'bread_price_display': str(bp),
+                                   'unit_price': bp.unit_price, 'qty_available': 0})
+        categories.sort(key=lambda c: c['unit_price'])
         for c in categories:
             row = day['by_bp'].get(c['bread_price'])
             c['sold_qty'] = row['sold'] if row else 0
             c['closed'] = day['closed']
             c['remaining_qty'] = (row['remaining'] if row else 0) if day['closed'] else None
             c['produced_total'] = (row['produced'] if row else 0) if day['closed'] else None
+            c['qty_opening'] = opening_m.get(c['bread_price'])
+            c['qty_transfer_sent'] = sent_m.get(c['bread_price'], 0)
+            c['qty_transfer_received'] = recv_m.get(c['bread_price'], 0)
 
         return Response({
             'node': node.pk,
@@ -2980,8 +3000,26 @@ def _build_daily_closure_report(node, report_date=None):
             reste_du_jour_fc = _m(Decimal(reste_du_jour_fin or 0) * catalog_price)
         else:
             reste_du_jour_fin = None
-            reste_du_jour_fc = _m(sum(Decimal(v or 0) for v in reste_du_jour_by_team.values()) * catalog_price)
-        reste_du_hier_fc = _m(sum(Decimal(v or 0) for v in reste_du_hier_by_team.values()) * catalog_price)
+            # BUG-1073 / BUG-1202 (client, 2026-11-24, remarque.md l.516) :
+            # « Reste d'hier » et « Reste du jour » sont des valeurs de JOURNÉE
+            # pour la boulangerie, indépendantes de l'équipe : un seul reste par
+            # journée (le dernier déclaré, quelle que soit l'équipe), plus de
+            # somme par équipe. Les dicts par équipe restent exposés (contrat),
+            # mais ne servent plus aux montants. Même valeur que le produit dérivé.
+            day_last_snap = (
+                DailyBreadStockSnapshot.objects
+                .filter(node=node, bread_price=bp, date=report_date)
+                .order_by('-updated_at', '-pk').first()
+            )
+            reste_du_jour_fc = _m(Decimal(day_last_snap.qty_at_close if day_last_snap else 0) * catalog_price)
+        if rotation:
+            reste_du_hier_fc = _m(sum(Decimal(v or 0) for v in reste_du_hier_by_team.values()) * catalog_price)
+        else:
+            if bp_id in day_start_confirmed_by_bp:
+                _hier_jour = -day_start_confirmed_by_bp[bp_id][1]
+            else:
+                _hier_jour = DailyBreadStockSnapshot.reste_du_hier_chained(node, bp, report_date)
+            reste_du_hier_fc = _m(Decimal(_hier_jour or 0) * catalog_price)
 
         # BUG-304 (remarque.md 2026-11-19) : « le reste d'hier et le reste du
         # jour ne dépendent pas des équipes, ils sont pris pour le jour ».

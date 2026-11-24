@@ -4,6 +4,7 @@ import { productionApi, ProductionSession, ServiceTeam } from '@/api/services';
 import { getErrorDetail, isTeamNotAssignedError } from '@/api/errors';
 import { useTeamAssignmentStore, TEAM_NOT_ASSIGNED_MESSAGE } from '@/store/teamAssignmentStore';
 import { mergeSessionLines } from '@/components/production/mergeSessionLines';
+import { GapBadge } from '@/components/production/GapBadge';
 import {
   parseSacksAddition, sacksToCents, centsToApi, centsToLabel, sacksWord,
 } from '@/components/production/sacksIncrement';
@@ -237,6 +238,10 @@ export const BatchInProgressPanel: React.FC<Props> = ({
             <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', color: 'hsl(var(--text-secondary))' }}>Montant à atteindre</div>
             <div style={{ fontSize: '1.5rem', fontWeight: 900, margin: '2px 0 10px' }} data-testid="batch-objective">{fc(objective)}</div>
             <ProgressBar pct={pct} valueFc={progressValue} objectiveFc={objective} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '8px', fontSize: '0.75rem' }}>
+              <span style={{ fontWeight: 700, color: 'hsl(var(--text-secondary))' }}>Écart (calculé à la clôture)</span>
+              <GapBadge ecart={null} fontSize="0.8rem" />
+            </div>
           </div>
 
           <div>

@@ -162,9 +162,17 @@ class RichScenarioClosureTests(TestCase):
         self.assertEqual(c5['produit']['quantity'], 50)
 
         # --- FACTURE MVM INTERNE (classeur : somme signée des rubriques)
+        # CHANGEMENT DE SPECIFICATION VOULU (client, 2026-11-24, remarque.md l.516,
+        # BUG-1073 / BUG-1202) : le reste du jour est UNE valeur de journee (le dernier
+        # declare, quelle que soit l'equipe), plus la somme par equipe. B cloture apres A :
+        # 300 FC -> 10 (et non 20 + 10 = 30) ; 500 FC -> 3 (et non -5 + 3 = -2). Le detail
+        # par equipe (assertions `reste_du_jour` / `reste_du_hier` plus haut) est inchange,
+        # ainsi que toutes les autres rubriques ci-dessous.
+        self.assertEqual(c3['reste_du_jour_jour'], 10)
+        self.assertEqual(c5['reste_du_jour_jour'], 3)
         # BUG-675 : appro recu (-D(15)*300) retranche
-        mvm3 = (D(30) * 300 + D(-15 + 0) * 300 + 0 - D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
-        mvm5 = (D(-2) * 500 + D(-8) * 500 + D(12) * 500 + 0 - D(1000) + D(2500) + D(1500) + D(1200) + 0)
+        mvm3 = (D(10) * 300 + D(-15 + 0) * 300 + 0 - D(15) * 300 - D(1800) + D(-600) + D(2250) + 0 + D(1000))
+        mvm5 = (D(3) * 500 + D(-8) * 500 + D(12) * 500 + 0 - D(1000) + D(2500) + D(1500) + D(1200) + 0)
         self.assertEqual(c3['facture_mvm_interne']['fc'], f'{mvm3:.2f}')
         self.assertEqual(c5['facture_mvm_interne']['fc'], f'{mvm5:.2f}')
         t = r.data['totals']

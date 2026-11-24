@@ -172,6 +172,45 @@ def transfers_by_bread_price(node, work_date):
     )
 
 
+def day_stock_movements(node, work_date):
+    """
+    BUG-1070 / BUG-1071 : colonnes AFFICHAGE de « Stock Pains du Jour », par
+    catégorie, indépendantes de la clôture (aucun effet sur `compute_day_production`) :
+      - `opening`  : stock de départ CONFIRMÉ par le gérant ce jour (le plus tôt
+        de la journée) ; absent si aucune confirmation ;
+      - `sent`     : pains ENVOYÉS par transfert par ce nœud (envoi direct et
+        réponse à une demande ; statuts RESPONDED, CONFIRMED, DISPUTED : le stock
+        a réellement quitté la boulangerie) — rien d'autre (ni ventes, ni
+        soldés, ni ajustements) ;
+      - `received` : pains REÇUS par transfert confirmé ou en litige (quantité reçue, stock crédité).
+    Le jour d'un transfert est la date locale de sa dernière mise à jour.
+    Retourne `(opening, sent, received)` : trois dicts `{bread_price_id: int}`.
+    """
+    opening = {}
+    for conf in (
+        DailyOpeningConfirmation.objects.filter(node=node, date=work_date)
+        .order_by('confirmed_at').prefetch_related('lines')
+    ):
+        for line in conf.lines.all():
+            opening.setdefault(line.bread_price_id, line.qty_confirmed)
+    day = delivered_on_work_date_filter(node, work_date, 'transfer__updated_at')
+    T = BreadTransfer.TransferStatus
+    sent = {
+        r['bread_price_id']: r['qty'] or 0
+        for r in BreadTransferLine.objects.filter(
+            transfer__from_node=node,
+            transfer__transfer_status__in=[T.RESPONDED, T.CONFIRMED, T.DISPUTED], **day,
+        ).values('bread_price_id').annotate(qty=Sum('quantity_sent'))
+    }
+    received = {
+        r['bread_price_id']: r['qty'] or 0
+        for r in BreadTransferLine.objects.filter(
+            transfer__to_node=node, transfer__transfer_status__in=[T.CONFIRMED, T.DISPUTED], **day,
+        ).values('bread_price_id').annotate(qty=Sum('quantity_received'))
+    }
+    return opening, sent, received
+
+
 def compute_day_production(node, work_date, assume_closed=False):
     """
     BUG-319 : synthèse du jour par catégorie. Retourne
@@ -286,3 +325,180 @@ def finalize_derived_production(session):
     data['produced_qty'] = produced_qty
     data['produced_fc'] = produced_fc
     return data
+
+
+# ---------------------------------------------------------------------------
+# BUG-1074 (remarque.md l.516, plan A-4) : clôture automatique de la fournée
+# ---------------------------------------------------------------------------
+
+def _auto_close_notify(node, day, title_prefix, message, severity):
+    """Notification dédupliquée : une seule par boulangerie, jour et motif tant qu'elle n'est pas lue."""
+    from core.models import SystemNotification
+    from core.utils import create_notification
+
+    title = f"{title_prefix} — {node.code} {day}"
+    if SystemNotification.objects.filter(title=title, node_origin=node.code, is_read=False).exists():
+        return None
+    return create_notification(title=title, message=message, severity=severity, node_origin=node.code)
+
+
+def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_switch=True):
+    """
+    BUG-1074 : clôture automatique des fournées encore ouvertes de la journée
+    `day` de `node`, une fois l'heure de clôture (`Node.handover_time`) passée.
+    IDEMPOTENTE (une session close n'est jamais retouchée, les notifications sont
+    dédupliquées). Aucun service d'arrière-plan : appelée paresseusement
+    (`shift-end-status`) et par la commande `auto_close_sessions`.
+
+    Même effet que l'action `close` (`_close_production_session`) sans saisie :
+      - le reste du jour de chaque catégorie = stock physique courant, comme la
+        clôture forcée de fin de créneau (BUG-155/158 ; plafonné à 0 pour une
+        fournée par sacs) ; AUCUN prix n'est saisi ni inventé ;
+      - AUCUNE saisie du gérant n'est écrasée : un reste (`REMAINING`) déjà
+        saisi sur la session, ou déjà déclaré ce jour par une autre équipe
+        (instantané du jour), est conservé tel quel ;
+      - la réconciliation (NV, déclassés, sorties gratuites) saisie par le gérant
+        reste en base (`BreadDisposal`) et s'affiche dans la clôture journalière ;
+        une notification demande de la compléter si elle est vide.
+    Hypothèses prudentes (documentées, à valider par le client, Q-053) :
+      - délai de grâce `SHIFT_END_GRACE_MINUTES` (30 min) après l'heure de
+        clôture, pour laisser la modale du gérant s'afficher (BUG-156) ;
+      - ne pas clôturer une fournée dont la journée n'a AUCUNE livraison, ni une
+        fournée à ZÉRO sac (par sacs) / sans production déclarée : signalées par
+        notification, laissées ouvertes ;
+      - active seulement si la boulangerie a activé le mécanisme d'heure de
+        clôture (`block_sales_after_closure`, l'interrupteur par boulangerie de
+        BUG-973), sinon l'heure de relève par défaut (12:00) clôturerait des
+        boulangeries qui ne l'ont pas configurée (`require_switch=False` pour passer outre) ;
+      - jour courant : seules les fournées créées avant l'heure de clôture sont
+        concernées (une fournée de l'équipe entrante après la relève ne l'est pas).
+    Retourne `{'due': bool, 'closed': [pk], 'skipped': [{'session','team','reason'}]}`.
+    """
+    from datetime import timedelta
+    from sales.models import Invoice
+    from core.utils import log_activity
+    from core.workday import _at, _local_instant
+    from .views import (  # import local : views importe ce module
+        SHIFT_END_GRACE_MINUTES, _close_production_session, _current_bread_stocks, _suggested_qty,
+    )
+
+    result = {'due': False, 'closed': [], 'skipped': []}
+    if node is None or getattr(node, 'code', None) == 'SIEGE':
+        return result
+    if require_switch and not node.block_sales_after_closure:
+        return result
+    local_now = _local_instant(now)
+    if day > local_now.date():
+        return result
+    closure_at = _at(day, node.handover_time)
+    grace = SHIFT_END_GRACE_MINUTES if grace_minutes is None else grace_minutes
+    if local_now < closure_at + timedelta(minutes=grace):
+        return result
+    result['due'] = True
+
+    candidates = list(
+        ProductionSession.objects.filter(node=node, date=day, is_closed=False).order_by('team', 'created_at')
+    )
+    if day == local_now.date():
+        candidates = [s for s in candidates if s.created_at <= closure_at]
+    if not candidates:
+        return result
+
+    has_delivery = Invoice.objects.filter(
+        node=node, status=Invoice.Status.DELIVERED, is_debt_repayment=False,
+        **delivered_on_work_date_filter(node, day),
+    ).exists()
+
+    closed_sessions = []
+    for session in candidates:
+        if not has_delivery:
+            reason = "aucune livraison ce jour"
+        elif session.auto_track and not session.flour_sacks_used:
+            reason = "fournée à zéro sac"
+        elif not session.auto_track and not session.lines.exists():
+            reason = "aucune production déclarée"
+        else:
+            reason = None
+        if reason:
+            result['skipped'].append({'session': session.pk, 'team': session.team, 'reason': reason})
+            continue
+
+        with transaction.atomic():
+            locked = ProductionSession.objects.select_for_update().get(pk=session.pk)
+            if locked.is_closed:
+                continue  # clôturée entre-temps (gérant ou requête concurrente)
+            # Restes déjà déclarés ce jour par une AUTRE session : jamais écrasés.
+            other_declared = set(
+                DailyBreadStockSnapshot.objects.filter(node=node, date=day)
+                .exclude(team=locked.team).values_list('bread_price_id', flat=True)
+            ) | set(
+                BreadDisposal.objects.filter(
+                    node=node, session__date=day, disposal_type=BreadDisposal.DisposalType.REMAINING,
+                ).exclude(session=locked).values_list('bread_price_id', flat=True)
+            )
+            own_declared = set(
+                locked.disposals.filter(disposal_type=BreadDisposal.DisposalType.REMAINING)
+                .values_list('bread_price_id', flat=True)
+            )
+            stocks = _current_bread_stocks(node)
+            entries = [
+                (bs.bread_price_id, _suggested_qty(bs, locked)) for bs in stocks
+                if bs.bread_price_id not in other_declared and bs.bread_price_id not in own_declared
+            ]
+            entry_ids = {e[0] for e in entries}
+            negatives = [
+                bs for bs in stocks
+                if bs.bread_price_id in entry_ids and _suggested_qty(bs, locked) < 0
+            ]
+            _close_production_session(
+                locked, entries, user, record_snapshot=True, snapshot_exclude=other_declared,
+            )
+            log_activity(
+                user, "Clôture automatique de la fournée",
+                f"{node.code} Éq.{locked.team} {day} : fournée clôturée automatiquement à "
+                f"l'heure de clôture ({node.handover_time.strftime('%H:%M')}).",
+                node_origin=node.code,
+            )
+            if negatives:
+                _auto_close_notify(
+                    node, day, "Stock de pain négatif à la clôture automatique",
+                    "Reste du jour enregistré avec une valeur négative pour "
+                    + ", ".join(f"{bs.bread_price} ({bs.qty_available})" for bs in negatives)
+                    + " ; le stock n'a pas été corrigé, écart à investiguer.",
+                    'WARNING',
+                )
+        result['closed'].append(locked.pk)
+        closed_sessions.append(locked)
+
+    if closed_sessions:
+        reconciled = BreadDisposal.objects.filter(node=node, session__date=day).exclude(
+            disposal_type=BreadDisposal.DisposalType.REMAINING,
+        ).exists()
+        _auto_close_notify(
+            node, day, "Fournée clôturée automatiquement",
+            f"{len(closed_sessions)} fournée(s) du {day} clôturée(s) automatiquement à l'heure de "
+            f"clôture." + ("" if reconciled else
+                " La réconciliation des pains (Non vendu, Déclassés, Sorties gratuites) n'est pas "
+                "renseignée : le gérant doit la compléter pour la Clôture journalière."),
+            'INFO' if reconciled else 'WARNING',
+        )
+    if result['skipped']:
+        details = "; ".join(f"Éq.{s['team']} : {s['reason']}" for s in result['skipped'])
+        _auto_close_notify(
+            node, day, "Fournée non clôturée automatiquement",
+            f"Fournée(s) du {day} laissée(s) ouverte(s) ({details}) : à vérifier et clôturer par le gérant.",
+            'WARNING',
+        )
+    return result
+
+
+def auto_close_due_days(node, now=None, user=None, **kwargs):
+    """Applique `auto_close_day` à chaque jour (<= aujourd'hui) ayant encore une fournée ouverte."""
+    from core.workday import _local_instant
+
+    today = _local_instant(now).date()
+    days = sorted(set(
+        ProductionSession.objects.filter(node=node, is_closed=False, date__lte=today)
+        .values_list('date', flat=True)
+    ))
+    return {d: auto_close_day(node, d, now=now, user=user, **kwargs) for d in days}
