@@ -509,8 +509,8 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [] Les "Stock de Depart" ne s'inscrivent pas dans le "Stock Pains du Jour", ils doivent s'inscrir et doivent être compter comme des pains vendu aujourd'hui
 
-[] La fournée doit afficher clairement le terme des écarts (Excedent, Equilibre et Manquant)
+[c] La fournée doit afficher clairement le terme des écarts (Excedent, Equilibre et Manquant) — traité sous BUG-1072 ; vérifié par vérification croisée dev-b (tests + Chrome : badge Manquant · 390 800 FC)
 
-[] Dans "Production & Stocks" la section "Stock Pains du Jour..."  la colone "Envoyés" ne doit afficher que le nombre des pains envoyés lors du transfert (par catégorie) Ajoute aussi la colone des "Reçu"
+[c] Dans "Production & Stocks" la section "Stock Pains du Jour..."  la colone "Envoyés" ne doit afficher que le nombre des pains envoyés lors du transfert (par catégorie) Ajoute aussi la colone des "Reçu" — traité sous BUG-1071 ; vérifié par vérification croisée dev-b (tests + Chrome : colonnes Envoyés et Reçu)
 
 [] Lors de la "Clôture Journalière" automatique la "Clôturer la Fournée" doit aussi se fait automatiquement et la réconsciliation des pains doivent être renseignez (Non Vendu (NV), Déclassés, Sorties Gratuites) et être afficher dans la "Clôture Journalière", les "Reste d'Hier" comme les "Reste du Jour" sont pour toute la journé et de dependent pas des équipes (peu importe l'équipe en place)
