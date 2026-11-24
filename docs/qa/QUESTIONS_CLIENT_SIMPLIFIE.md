@@ -160,3 +160,12 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 **Situation.** L'écart est calculé « reste déclaré − solde comptable ». Quand le reste n'est pas déclaré, votre tableau affiche l'opposé du solde (ex. −26,8) ; l'application laisse l'écart **vide**. Les statistiques sont visibles aujourd'hui par la direction, le comptable et l'administrateur (toutes les boulangeries) et par le gérant (la sienne seulement).
 
 *Questions : (1) le signe et l'écart vide sont-ils corrects ? (2) le gérant doit-il voir les statistiques de sa boulangerie ? (3) la direction seule voit-elle D1 ?*
+
+### Q-052 (remarque.md, ligne 506) — « Taux de commission par défaut » : à garder ou à supprimer ?
+
+**Situation.** Vous avez demandé qu'il n'y ait pas de « Taux de commission par défaut » dans l'écran Commissions CM, avec seulement la cotisation sociale (2 000 FC) et la carte propres à la boulangerie. Cet écran n'a pas ce champ. Mais vous avez aussi répondu (Q-026) que le « Taux de Commission » est **propre à chaque boulangerie** : il se règle dans la fiche de la boulangerie. Il reste un taux **global** dans les Paramètres (§2.3), utilisé seulement quand une boulangerie n'a pas son propre taux.
+
+- **A.** Garder le taux global comme valeur de secours (aucun changement visible pour vous).
+- **B.** Supprimer le taux global : chaque boulangerie doit alors avoir son taux renseigné.
+
+*Recommandation : A.*
