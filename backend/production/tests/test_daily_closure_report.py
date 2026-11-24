@@ -247,7 +247,14 @@ class DailyClosureReportTests(TestCase):
         # NON SERVI + RÉGULARISATION + VENTE CASH/SOLDE + NON VENDU +
         # DÉCLASSÉS (EXCÉDENT/MANQUANT par catégorie non modélisés → 0),
         # recalculée à la main pour la catégorie 300 FC :
-        #   reste_du_jour_fc  = (20 + 10) × 300 =  9 000
+        # CHANGEMENT DE SPECIFICATION VOULU (client, 2026-11-24, remarque.md
+        # l.516, BUG-1073 / BUG-1202) : reste d'hier et reste du jour sont des
+        # valeurs de JOURNEE, independantes de l'equipe. Un seul reste du jour par
+        # categorie : le DERNIER declare de la journee (equipe B clot apres A :
+        # 10 pains 300 FC, et non A 20 + B 10 = 30). Le detail par equipe
+        # (assertions `reste_du_jour` plus haut) est conserve inchange. Seules les
+        # lignes reste_du_jour_fc, mvm_300_fc, total_du_jour changent ci-dessous.
+        #   reste_du_jour_fc  = 10 × 300      =  3 000
         #   reste_du_hier_fc  = (-15 + 0) × 300 = -4 500
         #   appro_effectue_fc = 0 × 300         =      0
         #   appro_recu_fc     = 15 × 300        =  4 500
@@ -256,9 +263,12 @@ class DailyClosureReportTests(TestCase):
         #   vente_cash_soldee_fc =               =  2 250
         #   non_vendu_nv_fc + declasses_fc      =      0
         # BUG-675 (remarque.md demande 4) : APPRO RECU est desormais RETRANCHE (-4 500).
-        mvm_300_fc = Decimal('9000') - Decimal('4500') + Decimal('0') - Decimal('4500') \
+        mvm_300_fc = Decimal('3000') - Decimal('4500') + Decimal('0') - Decimal('4500') \
             + Decimal('0') + Decimal('3000') + Decimal('2250') + Decimal('0') + Decimal('0')
-        self.assertEqual(mvm_300_fc, Decimal('5250'))
+        self.assertEqual(mvm_300_fc, Decimal('-750'))
+        # Meme valeur de journee que les champs additifs (une seule source).
+        self.assertEqual(row300['reste_du_jour_jour'], 10)
+        self.assertEqual(row300['reste_du_hier_jour'], -15)
         self.assertEqual(row300['facture_mvm_interne'], {'fc': str(_q2(mvm_300_fc))})
 
         # Catégorie 500 FC : seul RESTE DU JOUR est non nul (10 × 500).
@@ -278,7 +288,7 @@ class DailyClosureReportTests(TestCase):
         total_mvm_interne_fc = mvm_300_fc + mvm_500_fc
         total_du_jour_fc = total_facture_fc + total_mvm_interne_fc
         self.assertEqual(totals['total_du_jour_fc'], str(_q2(total_du_jour_fc)))
-        self.assertEqual(total_du_jour_fc, Decimal('29250'))
+        self.assertEqual(total_du_jour_fc, Decimal('23250'))  # 19 000 + (-750 + 5 000) ; etait 29 250 avec la somme par equipe
 
         # ECART/FACTURE (Q-007.1, réponse client) = valeur commandée du jour
         # (toutes factures livrées ce jour) − paiements reçus sur ces

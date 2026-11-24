@@ -374,7 +374,7 @@ class DailyBreadStockSnapshot(models.Model):
         return -previous.qty_at_close
 
     @classmethod
-    def record_snapshot(cls, session):
+    def record_snapshot(cls, session, exclude_bread_prices=None):
         """
         Capture (upsert) le solde DÉCLARÉ par l'équipe de `session` (une
         `ProductionSession`), pour chaque catégorie de pain concernée par
@@ -419,6 +419,9 @@ class DailyBreadStockSnapshot(models.Model):
                 ).values_list('bread_price_id', flat=True)
             )
 
+        # BUG-1074 : catégories à ne pas toucher (reste déjà déclaré ce jour par
+        # une autre équipe : la clôture automatique n'écrase aucune saisie).
+        bread_price_ids -= set(exclude_bread_prices or ())
         for bread_price_id in bread_price_ids:
             cls.objects.update_or_create(
                 node=session.node, bread_price_id=bread_price_id,

@@ -170,3 +170,13 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 - Lecture 2 : le stock de départ compte comme une vente : ventes du jour = **120 + 40 = 160**.
 
 *Question : quelle lecture est la bonne ? Si c'est la lecture 2, quelle valeur de ventes (en FC) doit apparaître dans le rapport du jour ?*
+
+### Q-053 (clôture automatique de la fournée) — Que faire quand l'heure de clôture arrive ?
+
+**Situation.** Vous avez demandé que, à l'heure de clôture de la boulangerie, la fournée se clôture toute seule et que les pains non vendus, déclassés et sorties gratuites figurent dans la Clôture journalière. L'application le fait maintenant, avec des choix **prudents** que nous voulons faire confirmer :
+- elle attend **30 minutes** après l'heure de clôture avant de clôturer, pour laisser le gérant compléter sa fenêtre de confirmation ;
+- le **reste du jour** de chaque catégorie est pris sur le **stock réel en ce moment** (rien n'est inventé) ; ce que le gérant a déjà saisi n'est **jamais** modifié ;
+- une fournée **sans aucune livraison** dans la journée, ou **à zéro sac**, n'est **pas** clôturée : le gérant est alerté et la clôture reste à faire à la main ;
+- ce mécanisme n'est actif que pour les boulangeries où l'heure de clôture a été activée (le même réglage que le blocage des ventes), car l'heure de relève par défaut (12 h) clôturerait sinon des boulangeries qui ne l'ont pas voulu.
+
+*Questions : (1) 30 minutes de délai, c'est bien ? (2) Pour une fournée sans livraison ou à zéro sac, faut-il la clôturer quand même (à zéro) ou la laisser ouverte comme aujourd'hui ? (3) Si le gérant n'a pas rempli Non vendu / Déclassés / Sorties gratuites, la clôture automatique est-elle acceptée telle quelle (avec une alerte) ou doit-elle attendre sa saisie ? (4) Faut-il un réglage « clôture automatique » séparé du blocage des ventes ?*

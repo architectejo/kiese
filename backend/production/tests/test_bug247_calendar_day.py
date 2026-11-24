@@ -116,6 +116,14 @@ class OneReportPerCalendarDayTests(_Base):
         self.assertEqual(row['reste_du_hier'], {'A': -9, 'B': 0})
 
     def test_node_without_rotation_keeps_per_team_sum(self):
+        # CHANGEMENT DE SPECIFICATION VOULU (client, 2026-11-24, remarque.md
+        # l.516, BUG-1073 / BUG-1202) : « les Reste d'Hier comme les Reste du
+        # Jour sont pour toute la journee et ne dependent pas des equipes ».
+        # Hors rotation, deux equipes ayant cloture le meme jour donnent UN SEUL
+        # reste de journee (le dernier declare, ici l'equipe B = 4), et non plus
+        # la somme par equipe (A3 + B4 = 3 500 FC). Le detail par equipe reste
+        # expose (assertion inchangee) ; seul le montant FACTURE MVM INTERNE
+        # change : 4 x 500 = 2 000 FC. Nom du test conserve pour la tracabilite.
         plain = make_node(code='K9')
         DailyBreadStockSnapshot.objects.create(node=plain, bread_price=self.bp, date=D, team='A', qty_at_close=3)
         DailyBreadStockSnapshot.objects.create(node=plain, bread_price=self.bp, date=D, team='B', qty_at_close=4)
@@ -123,7 +131,8 @@ class OneReportPerCalendarDayTests(_Base):
         row = next(c for c in report['categories'] if c['bread_price'] == self.bp.pk)
         self.assertNotIn('reste_du_jour_fin_journee', row)
         self.assertEqual(row['reste_du_jour'], {'A': 3, 'B': 4})
-        self.assertEqual(row['facture_mvm_interne']['fc'], '3500.00')  # (3 + 4) x 500
+        self.assertEqual(row['reste_du_jour_jour'], 4)
+        self.assertEqual(row['facture_mvm_interne']['fc'], '2000.00')  # dernier reste de la journee : 4 x 500
 
 
 class CalendarDatingTests(_Base):
