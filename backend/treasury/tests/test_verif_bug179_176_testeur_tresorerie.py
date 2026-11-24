@@ -201,8 +201,33 @@ class Bug179NoForgeryTests(Base):
         self.assertEqual(inv.special_code, '')
 
     def test_livreur_cannot_create_invoice(self):
-        r = _api(self.livreur).post('/api/sales/invoices/', self._payload('RG'), format='json')
-        self.assertEqual(r.status_code, 403, r.content)
+        """Changement de spécification voulu (client Q-027, BUG-1050) : le livreur a
+        les mêmes écrans que le facturier et peut donc créer une facture (201).
+        Les contrôles anti-forge restent entiers : il ne peut pas se faire passer
+        pour un autre facturier ni forger `facturier` / `node_origin`, et un
+        utilisateur non autorisé reste refusé."""
+        payload = self._payload('RG')
+        payload['facturier'] = str(self.facB.pk)   # tentative d'usurpation
+        payload['node_origin'] = 'B2'              # tentative de forge
+        r = _api(self.livreur).post('/api/sales/invoices/', payload, format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        inv = Invoice.objects.get(pk=r.data['id'])
+        self.assertEqual(inv.facturier_id, self.livreur.pk)
+        self.assertNotEqual(inv.facturier_id, self.facB.pk)
+        self.assertEqual(inv.node_origin, self.node.code)
+        self.assertEqual(inv.node_id, self.node.pk)
+
+    def test_unauthorized_users_still_cannot_create_invoice(self):
+        """Compte sans boulangerie, rôle interdit et anonyme restent refusés."""
+        count = Invoice.objects.count()
+        r = _api(self.comptable).post('/api/sales/invoices/', self._payload('RG'), format='json')
+        self.assertIn(r.status_code, (400, 403), r.content)
+        orphan = make_user(role='LIVREUR', node=None, team='A', username='l179_orphan')
+        r = _api(orphan).post('/api/sales/invoices/', self._payload('RG'), format='json')
+        self.assertIn(r.status_code, (400, 403), r.content)
+        r = APIClient().post('/api/sales/invoices/', self._payload('RG'), format='json')
+        self.assertIn(r.status_code, (401, 403), r.content)
+        self.assertEqual(Invoice.objects.count(), count)
 
     def test_invalid_special_code_rejected(self):
         r = _api(self.facA).post('/api/sales/invoices/', self._payload('XX'), format='json')

@@ -107,8 +107,14 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         self.api_fact = _api_for(self.facA)
         self.day = date.today() - timedelta(days=25)
 
-    def _lock_day(self):
+    def _lock_day(self, pending_qtys=()):
+        """Changement de spécification voulu : BUG-988. Une NOUVELLE vente antidatée
+        sur une clôture déjà confirmée est refusée (403). Les factures antidatées
+        sont donc créées EN ATTENTE avant la confirmation de la clôture (sans effet
+        sur les totaux) ; seule leur LIVRAISON tardive tombe ensuite sur la
+        clôture verrouillée — ce que BUG-083 protège."""
         _deliver_same_day(self.node, self.facA, self.client_obj, self.bread, 5, self.day)
+        self.pending_ids = [self._create_pending_invoice(q) for q in pending_qtys]
         gen = self.api_gerant.post('/api/treasury/reports/generate/', {'date': str(self.day)}, format='json')
         self.assertEqual(gen.status_code, 200, gen.content)
         create = self.api_gerant.post('/api/treasury/closures/', {
@@ -123,7 +129,7 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         closure.refresh_from_db()
         return closure
 
-    def _add_retroactive_invoice(self, qty):
+    def _create_pending_invoice(self, qty):
         create = self.api_fact.post('/api/sales/invoices/', {
             'client': str(self.client_obj.pk),
             'payment_type': 'CASH',
@@ -132,7 +138,9 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
             'lines': [{'bread_price': self.bread.pk, 'quantity': qty}],
         }, format='json')
         self.assertEqual(create.status_code, 201, create.content)
-        invoice_id = create.data['id']
+        return create.data['id']
+
+    def _deliver_retroactively(self, invoice_id):
         deliver = self.api_fact.post(
             f'/api/sales/invoices/{invoice_id}/deliver/', {'delivered_at': str(self.day)}, format='json'
         )
@@ -140,13 +148,15 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         return Invoice.objects.get(pk=invoice_id)
 
     def test_second_correction_never_mutates_the_first_correction_or_the_original(self):
-        closure = self._lock_day()
+        # Changement de spécification voulu : BUG-988 (factures créées avant la confirmation).
+        closure = self._lock_day(pending_qtys=(2, 3))
+        first_id, second_id = self.pending_ids
         original_entry = CashbookEntry.objects.get(source_closure=closure, is_correction=False)
 
         # Empreinte EN BASE (refresh_from_db) avant toute correction.
         original_before = _full_db_snapshot(original_entry)
 
-        self._add_retroactive_invoice(qty=2)  # +600 FC — première correction.
+        self._deliver_retroactively(first_id)  # +600 FC — première correction.
         self.assertEqual(CashbookEntry.objects.filter(is_correction=True).count(), 1)
         first_correction = CashbookEntry.objects.get(is_correction=True)
         first_correction_before = _full_db_snapshot(first_correction)
@@ -155,7 +165,7 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         # première correction (déjà couvert ailleurs, revérifié ici en base).
         self.assertEqual(original_before, _full_db_snapshot(original_entry))
 
-        self._add_retroactive_invoice(qty=3)  # +900 FC — deuxième correction.
+        self._deliver_retroactively(second_id)  # +900 FC — deuxième correction.
 
         self.assertEqual(
             CashbookEntry.objects.count(), 3,
