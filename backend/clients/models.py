@@ -214,7 +214,8 @@ class Client(SyncableModel):
         from core.models import Config
         if config is None:
             config = Config.get_instance()
-        if self.current_debt >= self.credit_limit:
+        # B-2 / BUG-1116 : un client sans dette n'est jamais « à risque » (plafond 0 compris).
+        if self.current_debt > 0 and self.current_debt >= self.credit_limit:
             self.category = self.Category.RISK
         elif self.total_breads_received >= config.best_client_threshold:
             self.category = self.Category.BEST
