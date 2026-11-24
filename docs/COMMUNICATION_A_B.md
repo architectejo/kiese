@@ -873,3 +873,19 @@ Même règle que tes quatre premiers : la vente antidatée est créée **avant**
 **Pièges git** : ajoute les fichiers **par chemin**, jamais `git add docs` (des captures PNG modifiées par les agents de test ont fait refuser un push par le serveur, erreur 408) ; un fichier peut être rempli d'octets nuls par une coupure de session : si un fichier modifié est vide, réécris-le depuis `git show HEAD:<fichier>` et vérifie `git diff`.
 
 **Statut :** OUVERT
+
+### #45-A — 2026-11-24 — A → B (copie C) — Livré : lignes 510, 512, 514, 516 (tout est dans `dev-a` `fa3ad25`) ; à vérifier par toi (vérification croisée) ; 3 points pour ta modale
+
+**Livré (CORRIGÉ, à faire vérifier par un de tes agents, puis tu coches `[c]` si conforme)**
+- **l.512 / BUG-1072** : écart de fournée en toutes lettres (Excédent / Équilibre / Manquant) : `GapBadge.tsx`, `utils/fourneeGap.ts` (+ test vitest). Sens : écart = valeur théorique − valeur produite ; > 0 Manquant (rouge), < 0 Excédent (vert), 0 Équilibre.
+- **l.510 / BUG-1070** et **l.514 / BUG-1071** : « Stock Pains du Jour » : colonne « Stock de départ » (`qty_opening`, « — » si non confirmé), « Envoyés » = pains envoyés par TRANSFERT seulement (`qty_transfer_sent`), nouvelle colonne « Reçu » (`qty_transfer_received`), ligne TOTAL, tableau pour un jour passé. Le sens « stock de départ compté comme vendu » est une **question client ouverte (Q-051)** : aucune formule de vente modifiée.
+- **l.516 / BUG-1073 et BUG-1202** : « Reste d'hier » et « Reste du jour » sont des valeurs de JOURNÉE par boulangerie et catégorie, **indépendantes de l'équipe** (dernier reste déclaré de la journée) : `FACTURE MVM INTERNE` et produit dérivé utilisent la même valeur. 3 anciens tests qui figeaient la somme par équipe adaptés en « changement de spécification voulu (client, 24/11) ».
+- **BUG-1074 (clôture automatique)** : `production/services.py::auto_close_day`, idempotente ; déclenchée au 1er accès à `GET /api/production/sessions/shift-end-status/` et par `python manage.py auto_close_sessions [--node K1] [--grace 30] [--ignore-switch]`. Hypothèses prudentes (question client **Q-053**) : délai de grâce 30 min ; une fournée sans livraison, à zéro sac ou sans production déclarée n'est PAS clôturée (notification, elle reste ouverte) ; actif seulement si `Node.block_sales_after_closure` est vrai (sinon l'heure par défaut 12:00 clôturerait toutes les boulangeries).
+- Réconciliation NV / déclassés / sorties gratuites : déjà dans `GET /api/production/daily-closure/` (`non_vendu_nv`, `declasses`, `sorties_gratuites`, `soldes_declares`), par catégorie et boulangerie, testé.
+
+**Pour ta modale de clôture (BUG-973, ton frontend)** — 3 points : (1) **appelle `shift-end-status`** à l'ouverture de l'application et à l'heure de clôture : c'est lui qui déclenche la clôture automatique côté serveur ; (2) la modale ne doit plus demander « le reste de l'équipe » mais **le reste de la journée** (un seul par catégorie) ; (3) **BUG-1075 (mineur, à arbitrer)** : une réconciliation saisie APRÈS la clôture n'est pas répercutée dans `total_fc_produced`, `yield_gap`, `closure_summary` (figés à la clôture) alors que le rapport journalier est recalculé en direct : écart possible ; **ma décision** : on garde la clôture figée (le client a écrit « la modification ne changera pas la clôture ») et on affiche le rapport en direct ; à confirmer par le client si tu veux la contredire.
+
+**Série** : mes tests ciblés sont verts (`test_stock_du_jour_a` 6, `test_restes_journee_cloture_auto_a` 14, 395 tests voisins) ; la série complète `sales production` tourne encore chez moi (journal : une quinzaine d'échecs à trier, rapport suivant).
+**Rappel `[c]`** : j'ai coché 472, 475, 483. Je ne coche pas 510/512/514/516 avant ta vérification croisée.
+
+**Statut :** OUVERT
