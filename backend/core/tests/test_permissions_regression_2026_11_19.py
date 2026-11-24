@@ -87,8 +87,9 @@ class Base(TestCase):
 class Matrix(Base):
     def routes(self):
         return [
-            # sales : creation = FACTURIER+ ; lecture = tout authentifie
-            ('post', '/api/sales/invoices/', FACT_UP,
+            # sales : creation = FACTURIER+ et LIVREUR (Q-027/BUG-1050 : memes droits que le
+            # facturier) ; lecture = tout authentifie
+            ('post', '/api/sales/invoices/', FACT_UP | {'LIVREUR'},
              {'client': str(self.c1.pk), 'payment_type': 'CASH', 'payment_amount': '-500',
               'motif': 'EMPRUNT_BOULANGER', 'is_debt_repayment': True, 'lines': []}),
             ('get', '/api/sales/invoices/', ALL, None),
@@ -179,12 +180,23 @@ class SalesIsolation(Base):
         self.assertFalse(Invoice.objects.filter(node=self.k2).exists(), r.content)
 
     def test_livreur_cannot_create_negative_payment(self):
-        for body in ({'payment_amount': '-500', 'motif': 'MANQUANT_EQUIPE'},
-                     {'payment_amount': '500'}):
-            r = cl(self.u['LIVREUR']).post('/api/sales/invoices/', {
+        """Q-027 / BUG-1050 : le livreur a les memes droits que le facturier, ni plus ni
+        moins. Un paiement negatif au motif forge (inconnu) reste refuse pour le
+        livreur comme pour le facturier ; les cas legitimes recoivent la meme reponse."""
+        def post(role, body):
+            return cl(self.u[role]).post('/api/sales/invoices/', {
                 'client': str(self.c1.pk), 'payment_type': 'CASH', 'is_debt_repayment': True,
                 'lines': [], **body}, format='json')
-            self.assertEqual(r.status_code, 403)
+        forges = ({'payment_amount': '-500', 'motif': 'MOTIF_INVENTE'},)
+        for body in forges:
+            rf, rl = post('FACTURIER', body), post('LIVREUR', body)
+            self.assertEqual(rf.status_code, 400, (body, rf.content))
+            self.assertEqual(rl.status_code, rf.status_code, (body, rl.content))
+        legit = ({'payment_amount': '-500', 'motif': 'MANQUANT_EQUIPE'}, {'payment_amount': '-500'},
+                 {'payment_amount': '500'})
+        for body in legit:
+            self.assertEqual(post('LIVREUR', body).status_code,
+                             post('FACTURIER', body).status_code, body)
 
     def test_motif_not_visible_across_nodes_and_not_patchable(self):
         inv = cl(self.u['FACTURIER']).post('/api/sales/invoices/', {
@@ -221,7 +233,7 @@ class SalesIsolation(Base):
             self.assertEqual(c.post(f'/api/sales/invoices/{iid}/deliver/', {}, format='json').status_code,
                              404, u.role)
             self.assertEqual(c.post(f'/api/sales/invoices/{iid}/cancel/', {}, format='json').status_code,
-                             404 if u.role in ('GERANT', 'FACTURIER') else 403, u.role)
+                             404, u.role)  # BUG-1050 : le livreur annule comme le facturier
             self.assertEqual(c.post(f'/api/sales/invoices/{iid}/adjust/', {
                 'adjustment_sign': 1, 'lines': [{'bread_price': self.bp.pk, 'quantity': 1}]},
                 format='json').status_code, 404 if u.role == 'GERANT' else 403, u.role)

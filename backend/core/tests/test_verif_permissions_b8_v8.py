@@ -40,15 +40,9 @@ DENIED = (401, 403)
 LOCAL = dict(KIESE_CLOUD_URL='https://etskiese.example')
 CL = '/api/clients/clients/'
 
-# Routes (methode, gabarit) ou le FACTURIER passe et le LIVREUR est refuse. Remplir apres le premier balayage.
-KNOWN_FACT_ONLY = {
-    ('POST', '/api/sales/invoices/'),                      # BUG-1023 (sales/views.py l.304)
-    ('POST', '/api/sales/invoices/{pk}/cancel/'),          # BUG-1024 (sales/views.py l.1007)
-    ('GET', '/api/production/opening-confirmation/'),      # BUG-1025 (production/views.py l.3626)
-    ('POST', '/api/production/opening-confirmation/'),
-    ('GET', '/api/production/team-assignment/'),           # BUG-1026 (production/views.py l.4023)
-    ('POST', '/api/production/team-assignment/'),
-}
+# Q-027 / BUG-1050 : le LIVREUR a les memes droits que le FACTURIER. Plus aucun ecart toleré
+# (BUG-1023 a 1026 corriges) : la matrice exige LIVREUR == FACTURIER sur toutes les routes.
+KNOWN_FACT_ONLY = set()
 
 
 def _enumerate():
@@ -172,12 +166,8 @@ class MatriceLivreur(B8):
         self.assertEqual(errs, [], '5xx : ' + '\n'.join(errs))
         # le LIVREUR ne doit jamais passer ou le FACTURIER est refuse (« rien de plus »)
         self.assertEqual(liv_only, [], f'LIVREUR passe, FACTURIER refuse : {liv_only}')
-        # aucun ecart non repertorie
-        inconnu = sorted(set(fact_only) - KNOWN_FACT_ONLY)
-        self.assertEqual(inconnu, [], f'FACTURIER passe, LIVREUR 403, non repertorie : {inconnu}')
-        # les routes repertoriees doivent encore exister
-        for k in sorted(KNOWN_FACT_ONLY - set(fact_only)):
-            self.fail(f'ecart repertorie disparu (corrige ? retirer de KNOWN_FACT_ONLY et de expectedFailure) : {k}')
+        # aucun ecart : LIVREUR == FACTURIER sur toutes les routes (Q-027, BUG-1050)
+        self.assertEqual(sorted(fact_only), [], f'FACTURIER passe, LIVREUR refuse : {sorted(fact_only)}')
 
     def test_livreur_jamais_plus_que_gerant(self):
         obs = self.matrix()
@@ -199,26 +189,22 @@ class EcartsLivreurFacturier(B8):
         return f, li
 
     # BUG-1023 (sales, dev-a) : creation de facture
-    @expectedFailure
     def test_bug1023_livreur_cree_facture(self):
         _, li = self.both('post', '/api/sales/invoices/')
         self.assertNotIn(li.status_code, DENIED, 'BUG-1023 : POST /api/sales/invoices/ refuse au LIVREUR')
 
     # BUG-1024 (sales, dev-a) : annulation d'une facture en attente
-    @expectedFailure
     def test_bug1024_livreur_annule_facture_en_attente(self):
         _, li = self.both('post', f'/api/sales/invoices/{self.inv1.pk}/cancel/')
         self.assertNotIn(li.status_code, DENIED, 'BUG-1024 : cancel refuse au LIVREUR')
 
     # BUG-1025 (production, dev-a) : confirmation du stock de depart
-    @expectedFailure
     def test_bug1025_livreur_confirmation_stock_depart(self):
         for m in ('get', 'post'):
             _, li = self.both(m, '/api/production/opening-confirmation/')
             self.assertNotIn(li.status_code, DENIED, f'BUG-1025 : {m} opening-confirmation refuse au LIVREUR')
 
     # BUG-1026 (production, dev-a) : designation de l'equipe
-    @expectedFailure
     def test_bug1026_livreur_designation_equipe(self):
         for m in ('get', 'post'):
             _, li = self.both(m, '/api/production/team-assignment/')

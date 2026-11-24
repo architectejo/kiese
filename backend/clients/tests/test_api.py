@@ -252,17 +252,22 @@ class FacturierCanCreateClientTests(TestCase):
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.content)
 
-    def test_livreur_still_cannot_create_client(self):
-        """Non-régression : LIVREUR n'est pas concerné par la décision
-        client, qui vise explicitement le FACTURIER (vente directe au
-        comptoir) — il reste exclu de `create`."""
+    def test_livreur_can_create_client_in_own_node_like_facturier(self):
+        """Q-025/Q-027 (BUG-1106/1203) : le LIVREUR a les memes droits que le
+        FACTURIER : il cree un client dans SA boulangerie, plafond et taux par
+        defaut (champs forges ignores), jamais plus que le facturier."""
         livreur = make_user(role='LIVREUR', node=self.k1)
         api = APIClient()
         api.force_authenticate(user=livreur)
         resp = api.post('/api/clients/clients/', {
             'first_name': 'Client', 'last_name': 'Occasionnel-Livreur',
+            'credit_limit': '9999999', 'commission_rate': '0.30',
         }, format='json')
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.content)
+        from clients.models import Client as ClientModel
+        c = ClientModel.objects.get(pk=resp.data['id'])
+        self.assertEqual(c.node_id, self.k1.pk)
+        self.assertEqual(c.credit_limit, Decimal('50000'))
 
 
 class SearchRelevanceOrderingTests(TestCase):
