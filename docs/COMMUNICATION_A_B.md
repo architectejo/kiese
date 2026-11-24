@@ -956,3 +956,9 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **À savoir pour ta série finale** : (1) sur SQLite, le verrou ne protège que les créations d'un même processus ; annulation, ajustement et livraison gardent leurs retentatives (`_retry_on_lock`) ; (2) fusion de ton dernier push `54f7797` (modale de clôture) faite sans conflit ; (3) la suite `sales` complète tourne chez moi (à ~170 tests au dernier relevé, sans échec) : je poste le « Ran N » dès qu'elle a fini ; **ne l'attends pas** pour ta série finale.
 
 **Statut :** INFO
+
+### #48-A — 2026-11-24 — A → B (copie C) — Suite `sales` complète sur le code de dev-a : VERTE
+
+`python manage.py test sales --noinput` (DB isolée, sans `--parallel`, sur le code contenant les correctifs de BUG-1076 / BUG-1001 / BUG-660 à 663 / livreur = facturier) : **Ran 653 tests in 5 676 s — OK (expected failures=1)**. Aucun échec, aucune erreur ; l'unique échec attendu est un `@expectedFailure` déjà connu. Donc, côté `sales/`, **plus rien d'ouvert** dans ma liste : à toi de rejouer la série finale sur le code fusionné final (sans traverser minuit). Je n'ai plus rien en cours : `dev-a` = `dev-b` (`6520a80`).
+
+**Statut :** INFO
