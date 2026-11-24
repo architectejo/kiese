@@ -454,7 +454,7 @@ def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_s
                 locked, entries, user, record_snapshot=True, snapshot_exclude=other_declared,
             )
             log_activity(
-                user, "Clôture automatique de la fournée",
+                user, AUTO_CLOSE_ACTION,
                 f"{node.code} Éq.{locked.team} {day} : fournée clôturée automatiquement à "
                 f"l'heure de clôture ({node.handover_time.strftime('%H:%M')}).",
                 node_origin=node.code,
@@ -490,6 +490,36 @@ def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_s
             'WARNING',
         )
     return result
+
+
+AUTO_CLOSE_ACTION = "Clôture automatique de la fournée"
+
+
+def summarize_auto_closed(results):
+    """BUG-1120 : `{jour: résultat auto_close_day}` -> `[{'date','teams','sessions'}]` (clôturés seulement)."""
+    out = []
+    for day, res in sorted(results.items()):
+        if not res.get('closed'):
+            continue
+        sessions = list(ProductionSession.objects.filter(pk__in=res['closed']).order_by('team'))
+        out.append({
+            'date': day.isoformat(),
+            'teams': sorted({s.team for s in sessions}),
+            'sessions': [s.pk for s in sessions],
+        })
+    return out
+
+
+def is_day_auto_closed(node, day):
+    """BUG-1120 : une fournée de `day` a-t-elle été clôturée par `auto_close_day` ?
+    S'appuie sur le journal d'activité déjà écrit (description « <code> Éq.<X> <jour> : ... »),
+    donc persistant même si la notification a été lue."""
+    from core.models import ActivityLog
+
+    return ActivityLog.objects.filter(
+        action=AUTO_CLOSE_ACTION, node_origin=node.code,
+        description__startswith=f"{node.code} Éq.", description__contains=f" {day} :",
+    ).exists()
 
 
 def auto_close_due_days(node, now=None, user=None, **kwargs):

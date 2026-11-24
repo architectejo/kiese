@@ -1303,8 +1303,18 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         # l'heure de clôture de la boulangerie (si activée), au premier accès
         # lecture, sans service d'arrière-plan. Idempotent ; sans effet pour
         # une boulangerie qui n'a pas activé l'heure de clôture.
-        from .services import auto_close_due_days
-        auto_close_due_days(node)
+        from .services import auto_close_due_days, summarize_auto_closed
+        # BUG-1120 : résumé additif des clôtures faites lors de CET appel
+        # (`auto_closed_days`, absent s'il n'y en a pas : les corps de réponse
+        # existants restent identiques).
+        auto_closed_days = summarize_auto_closed(auto_close_due_days(node))
+        response = self._shift_end_response(node, user)
+        if auto_closed_days and isinstance(response.data, dict):
+            response.data['auto_closed_days'] = auto_closed_days
+        return response
+
+    def _shift_end_response(self, node, user):
+        from datetime import datetime, timedelta
 
         now = timezone.localtime()
         today = now.date()
@@ -3208,9 +3218,13 @@ def _build_daily_closure_report(node, report_date=None):
         )
         repartition_pct_par_valeur.append({'bread_price': row['bread_price'], 'label': row['label'], 'pct': str(pct_val)})
 
+    from .services import is_day_auto_closed
+
     return {
         'node': node.code,
         'date': str(report_date),
+        # BUG-1120 : vrai si une fournée du jour a été clôturée par le mécanisme automatique.
+        'auto_closed': is_day_auto_closed(node, report_date),
         **work_time_info(node),
         'categories': categories_payload,
         'totals': {
