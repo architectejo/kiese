@@ -501,11 +501,11 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
     Pour les dépenses locales, il y a des catégories qui seront uniquement pour la direction et d'autres qui seront pour les boulangeries. On doit pouvoir gérer ça depuis la configuration.
 "
 
-[] Au niveau de "Historique du client" le mois courant est visible que sur le theme light
+[c] Au niveau de "Historique du client" le mois courant est visible que sur le theme light
 
 [] Au niveau de "Commissions CM" la valeur de "Carte / Frais d'imprimé (FC)" est celle de la boulanérie "Carte / frais d'imprimé (FC)", il n'y a pas des taux de cotisation "Taux de commission par défaut" il y a que la "Cotisation sociale mensuelle par client (FC)" qui est par défaut de 2000Fc
 
-[] Un client qui vient d'être enregistrer ne doit pas avoir le statut "SUSPENDU"
+[c] Un client qui vient d'être enregistrer ne doit pas avoir le statut "SUSPENDU"
 
 [] Les "Stock de Depart" ne s'inscrivent pas dans le "Stock Pains du Jour", ils doivent s'inscrir et doivent être compter comme des pains vendu aujourd'hui
 
