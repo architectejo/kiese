@@ -7,7 +7,7 @@ import {
 } from 'react-icons/fi';
 import { salesApi, clientsApi, productionApi, Client, Invoice, ProductionSession, DailySummaryRow } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
-import { localIsoDate, useWorkDate } from '@/store/workDateStore';
+import { getWorkDate, shiftIsoDate, useWorkDate } from '@/store/workDateStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { Modal } from '@/components/shared/Modal';
 import { useProgressiveList, extractApiError } from '@/hooks/useProgressiveList';
@@ -106,7 +106,7 @@ export const Dashboard: React.FC = () => {
   const loadDashboard = async () => {
     setIsLoading(true);
     setLoadError(null);
-    const sevenDaysAgo = localIsoDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+    const sevenDaysAgo = shiftIsoDate(getWorkDate(), -7); // BUG-1134 : 7 jours avant la journée comptable
     try {
       const [clientsCountRes, summaryRes, sessionsRes, activeRes] = await Promise.all([
         clientsApi.listPage({ page: '1', page_size: '1' }),

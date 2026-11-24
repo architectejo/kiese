@@ -10,9 +10,11 @@ import type {
 // plus « aujourd'hui » lui-même. `rotation` : vrai/faux quand la réponse le dit, sinon omis.
 function feedWorkDate<R extends { data: unknown }>(
   res: R,
-  pick: (data: R['data']) => { workDate?: string | null; rotation?: boolean },
+  pick: (data: R['data']) => { workDate?: string | null; rotation?: boolean; handover?: string | null },
 ): R {
-  const { workDate, rotation } = pick(res.data);
+  const { workDate, rotation, handover } = pick(res.data);
+  // BUG-1134 : la journée va de midi à midi (heure de clôture du nœud) ; on retient cette heure.
+  if (handover) useWorkDateStore.getState().setHandover(handover);
   useWorkDateStore.getState().setWorkDate(workDate, rotation);
   return res;
 }
@@ -96,7 +98,7 @@ export interface ClosureStatus {
 export type ServiceTeam = 'A' | 'B';
 
 export interface TeamAssignment {
-  /** BUG-272 : jour calendaire local (ne change PAS à la relève). */
+  /** BUG-1130/1134 : journée comptable de midi à midi (heure de clôture du nœud). */
   work_date: string;
   /** BUG-272 : date de la relève qui ouvre la période de service (clé de la désignation). */
   shift_date: string;
@@ -1687,10 +1689,10 @@ export const productionApi = {
   teamAssignment: {
     get: (params?: { node?: string }) =>
       apiClient.get<TeamAssignment>('/api/production/team-assignment/', { params })
-        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true }))),
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true, handover: d.handover_time }))),
     set: (team: ServiceTeam, node?: string) =>
       apiClient.post<TeamAssignment>('/api/production/team-assignment/', node ? { team, node } : { team })
-        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true }))),
+        .then(res => feedWorkDate(res, d => ({ workDate: d.work_date, rotation: true, handover: d.handover_time }))),
   },
   sessions: {
     list: (params?: Record<string, string>) =>

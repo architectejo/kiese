@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { coreApi, productionApi } from '@/api/services';
 import type { BakeryNode, IntrantStatRow, IntrantStats, IntrantStatType } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
+import { useSelectedWorkDay } from '@/store/workDateStore';
 
 // BUG-1061 : lot I-2, statistiques journalières des intrants (farine, levure, huile, sel).
 const TYPES: Array<{ code: IntrantStatType; label: string }> = [
@@ -32,12 +33,6 @@ const saltValue = (r: IntrantStatRow, f: NumField, u: Exclude<SaltUnit, 'g'>): s
   return String(u === 'bags' ? bags : bags * SALT_UNITS_PER_BAG);
 };
 
-const todayIso = (): string => {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
 /** Chaîne décimale -> « 1 250,5 » (espace, virgule) ; null ou non numérique -> « — ». */
 const fmt = (v: string | null | undefined, maxDecimals = 3): string => {
   if (v === null || v === undefined || v === '') return '—';
@@ -57,14 +52,14 @@ interface Props {
 
 export const IntrantsStatsTab: React.FC<Props> = ({ canFilterNode }) => {
   const [type, setType] = useState<IntrantStatType>('FLOUR');
-  const [date, setDate] = useState(todayIso());
+  // BUG-1134 : jour par défaut = journée comptable (midi à midi) annoncée par le serveur.
+  const [date, setDate, today] = useSelectedWorkDay();
   const [node, setNode] = useState('');
   const [saltUnit, setSaltUnit] = useState<SaltUnit>('g');
   const [nodes, setNodes] = useState<BakeryNode[]>([]);
   const [data, setData] = useState<IntrantStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const today = todayIso();
 
   useEffect(() => {
     if (!canFilterNode) return;

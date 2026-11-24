@@ -1,14 +1,14 @@
 import { productionApi, BreadTransfer, BreadDisposal } from '@/api/services';
-import { localIsoDate } from '@/store/workDateStore';
+import { businessDayOf, useWorkDateStore } from '@/store/workDateStore';
 
 export const STOCK_ICONS: Record<string, string> = { FLOUR: '🌾', YEAST: '💥', SALT: '🧂', OIL: '💧' };
 
 export const displayStock = (s: string) => (s || '').replace(/\s*\(Sac \d+\s*kg\)/i, '').trim() || s;
-// BUG-161 (F3) : plus de date UTC. Un horodatage `created_at` (UTC) est converti en date LOCALE
-// avant comparaison à la date du jour ; en rotation de 24 h c'est exact : le jour
-// calendaire fait foi (les sorties n'ont pas de `work_date` côté API).
+// BUG-161 (F3) : plus de date UTC. BUG-1134 : un horodatage `created_at` est rattaché à sa
+// JOURNÉE COMPTABLE (midi à midi, heure de clôture du nœud) avant comparaison à la date de
+// travail (les sorties n'ont pas de `work_date` côté API).
 export const isOnDay = (iso: string | undefined, day: string): boolean =>
-  !!iso && localIsoDate(new Date(iso)) === day;
+  !!iso && businessDayOf(new Date(iso), useWorkDateStore.getState().handover) === day;
 
 // BUG-164 : au lieu de lire TOUTES les sorties puis de garder les 20 premières, on demande
 // 20 lignes au serveur (tri -created_at). Le KPI « Pains non valorisés » (sorties du jour)

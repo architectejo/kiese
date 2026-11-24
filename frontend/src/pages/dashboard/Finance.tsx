@@ -10,6 +10,7 @@ import {
   Doc1Row, CmHistoryRow, BakeryNode,
 } from '@/api/services';
 import { useAuthStore } from '@/store/authStore';
+import { getWorkDate, workDateMonthYear } from '@/store/workDateStore';
 
 export const Finance: React.FC = () => {
   const { user } = useAuthStore();
@@ -23,10 +24,10 @@ export const Finance: React.FC = () => {
   const [isCreatingYear, setIsCreatingYear] = useState(false);
 
   // DOC 1 state
-  const today = new Date();
+  // BUG-1134 : mois/année par défaut = ceux de la journée de travail du serveur (midi à midi).
   const [doc1Node, setDoc1Node]     = useState('');
-  const [doc1Month, setDoc1Month]   = useState(today.getMonth() + 1);
-  const [doc1Year, setDoc1Year]     = useState(today.getFullYear());
+  const [doc1Month, setDoc1Month]   = useState(() => workDateMonthYear(getWorkDate()).month);
+  const [doc1Year, setDoc1Year]     = useState(() => workDateMonthYear(getWorkDate()).year);
   const [doc1Data, setDoc1Data]     = useState<Doc1Row[]>([]);
   const [doc1Loading, setDoc1Loading] = useState(false);
   const [doc1Exporting, setDoc1Exporting] = useState(false);

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { productionApi } from '@/api/services';
 import type { FlourMonthStats as FlourMonthStatsData } from '@/api/services';
 import { getErrorDetail } from '@/api/errors';
-import { localIsoDate } from '@/store/workDateStore';
+import { localIsoDate, useWorkDate } from '@/store/workDateStore';
 import { useIntrantsExport } from './useIntrantsExport';
 
 /** Statistiques du mois — Farine (BUG-1110, lot I-3). */
@@ -11,16 +11,16 @@ const fmtSacks = (v: string | undefined | null): string =>
 const fmtFc = (v: string | undefined | null): string =>
   v == null ? '—' : `${Math.round(parseFloat(v)).toLocaleString('fr-FR')} FC`;
 
-const currentMonth = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-};
+// BUG-1134 : mois courant = mois de la journée de travail du serveur (midi à midi).
+const monthOf = (workDate: string): string => workDate.slice(0, 7);
 
 const th: React.CSSProperties = { textAlign: 'right', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { textAlign: 'right', whiteSpace: 'nowrap' };
 
 export const FlourMonthStats: React.FC<{ canPickNode: boolean }> = ({ canPickNode }) => {
-  const [month, setMonth] = useState<string>(currentMonth());
+  const workDate = useWorkDate();
+  const [pickedMonth, setMonth] = useState<string | null>(null);
+  const month = pickedMonth ?? monthOf(workDate);
   const [node, setNode] = useState<string>('');
   const [data, setData] = useState<FlourMonthStatsData | null>(null);
   const [allBakeries, setAllBakeries] = useState<Array<{ code: string; name: string }>>([]);
@@ -51,8 +51,8 @@ export const FlourMonthStats: React.FC<{ canPickNode: boolean }> = ({ canPickNod
   const { exporting, error: exportError, exportIntrants } = useIntrantsExport();
   const onExport = () => {
     const [y, m] = month.split('-').map(Number);
-    // Mois courant : aujourd'hui ; sinon dernier jour du mois affiché (dates locales).
-    const date = month === currentMonth() ? localIsoDate() : localIsoDate(new Date(y, m, 0));
+    // Mois courant : date de travail du serveur ; sinon dernier jour du mois affiché.
+    const date = month === monthOf(workDate) ? workDate : localIsoDate(new Date(y, m, 0));
     void exportIntrants({ date, month, ...(canPickNode && node ? { node } : {}) });
   };
 
