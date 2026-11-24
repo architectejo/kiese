@@ -209,7 +209,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
       subtitle={
         isForced
           ? (isRotationForced
-            ? `Le service${forced!.workDate ? ` du ${formatWorkDay(forced!.workDate)}` : ''} de l'équipe ${forced!.team} est terminé (heure de relève) et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.`
+            ? `Le service${forced!.workDate ? ` du ${formatWorkDay(forced!.workDate)}` : ''} de l'équipe ${forced!.team} est terminé (heure de clôture) et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.`
             : "Le créneau de cette équipe est terminé et la fournée n'a pas encore été clôturée. Confirmez le reste du jour pour continuer.")
           : 'Reste du Jour par catégorie — déclaré en même temps que la clôture.'
       }
@@ -255,7 +255,7 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
           <FiClock style={{ flexShrink: 0, marginTop: '1px' }} />
           <span>
             Cette boîte ne peut pas être fermée sans validation : passé un délai de 30 minutes
-            après {isRotationForced ? "l'heure de relève" : 'la fin du créneau'}, le serveur clôturera automatiquement cette fournée avec le
+            après {isRotationForced ? "l'heure de clôture" : 'la fin du créneau'}, le serveur clôturera automatiquement cette fournée avec le
             stock physique actuel.
           </span>
         </div>

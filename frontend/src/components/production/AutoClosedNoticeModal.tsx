@@ -97,7 +97,7 @@ export const AutoClosedNoticeModal: React.FC<AutoClosedNoticeModalProps> = ({
         ) : notice.rotation ? (
           <>
             Le service de l'équipe <strong>{notice.team}</strong> (jour du {formatNoticeDate(notice.date)}) s'est
-            terminé à l'heure de relève, sans validation depuis plus de 30 minutes : la fournée a été{' '}
+            terminé à l'heure de clôture, sans validation depuis plus de 30 minutes : la fournée a été{' '}
             <strong>clôturée automatiquement</strong> par le système.
           </>
         ) : (

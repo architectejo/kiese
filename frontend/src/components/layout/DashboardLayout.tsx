@@ -781,7 +781,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
                               <h4 style={{ fontWeight: 700, fontSize: '0.8rem', marginBottom: '2px', color: 'hsl(var(--text-primary))' }}>
                                 {notif.title}
                               </h4>
-                              <p style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <p style={{ fontSize: '0.75rem', color: 'hsl(var(--text-secondary))', lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>
                                 {notif.message}
                               </p>
                             </div>

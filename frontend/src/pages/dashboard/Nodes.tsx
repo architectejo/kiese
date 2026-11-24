@@ -82,7 +82,7 @@ export const Nodes: React.FC = () => {
     team_b_start_time: '',
     team_b_end_time: '',
     handover_time: '12:00',
-    team_rotation_enabled: false,
+    team_rotation_enabled: true,
     block_sales_after_closure: false,
   });
   const [globalRatePct, setGlobalRatePct] = useState<string | null>(null);
@@ -122,7 +122,7 @@ export const Nodes: React.FC = () => {
         team_b_start_time: toTimeInputValue(node.team_b_start_time),
         team_b_end_time: toTimeInputValue(node.team_b_end_time),
         handover_time: toTimeInputValue(node.handover_time) || '12:00',
-        team_rotation_enabled: !!node.team_rotation_enabled,
+        team_rotation_enabled: node.team_rotation_enabled ?? true,
         block_sales_after_closure: !!node.block_sales_after_closure,
       });
     } else {
@@ -141,7 +141,7 @@ export const Nodes: React.FC = () => {
         team_b_start_time: '',
         team_b_end_time: '',
         handover_time: '12:00',
-        team_rotation_enabled: false,
+        team_rotation_enabled: true,
         block_sales_after_closure: false,
       });
     }
@@ -525,7 +525,7 @@ export const Nodes: React.FC = () => {
                   />
                   {formErrors.handover_time && <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-danger))', marginTop: '3px', display: 'block' }}>{formErrors.handover_time}</span>}
                   <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                    Heure de clôture de la journée, qui sert aussi de relève entre équipes (défaut 12:00). À cette heure, le gérant saisit les sorties non valorisées ; la date, elle, suit le jour calendaire (minuit à minuit).
+                    Heure de clôture de la journée (défaut 12:00). La journée va de midi à midi : à cette heure, la journée est clôturée, le gérant saisit les sorties non valorisées et l'équipe de service change.
                   </span>
                 </div>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
@@ -535,10 +535,10 @@ export const Nodes: React.FC = () => {
                     onChange={(e) => setFormData({ ...formData, block_sales_after_closure: e.target.checked })}
                     style={{ width: '20px', height: '20px', marginTop: '1px', flexShrink: 0 }}
                   />
-                  <span>Bloquer les ventes après la clôture jusqu'à validation par la direction</span>
+                  <span>Bloquer les ventes après la clôture jusqu'à validation par la direction ou le comptable</span>
                 </label>
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--color-warning))', lineHeight: 1.4 }}>
-                  Lorsque cette option est activée, la création de factures est refusée dès l'heure de clôture, tant que la direction n'a pas validé la clôture du jour de cette boulangerie.
+                  Lorsque cette option est activée, la création de factures est refusée dès l'heure de clôture, tant que la direction ou le comptable n'a pas validé la clôture du jour de cette boulangerie.
                 </span>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
                   <input
@@ -606,7 +606,7 @@ export const Nodes: React.FC = () => {
                   </div>
                 </div>
                 <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                  Ces horaires seront remplacés par l'heure de relève ci-dessus ; ils servent encore, pour l'instant, à la confirmation du stock de départ. Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
+                  Ces horaires seront remplacés par l'heure de clôture ci-dessus ; ils servent encore, pour l'instant, à la confirmation du stock de départ. Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
                 </span>
               </div>
 
