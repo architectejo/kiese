@@ -189,3 +189,12 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 - ce mécanisme n'est actif que pour les boulangeries où l'heure de clôture a été activée (le même réglage que le blocage des ventes), car l'heure de relève par défaut (12 h) clôturerait sinon des boulangeries qui ne l'ont pas voulu.
 
 *Questions : (1) 30 minutes de délai, c'est bien ? (2) Pour une fournée sans livraison ou à zéro sac, faut-il la clôturer quand même (à zéro) ou la laisser ouverte comme aujourd'hui ? (3) Si le gérant n'a pas rempli Non vendu / Déclassés / Sorties gratuites, la clôture automatique est-elle acceptée telle quelle (avec une alerte) ou doit-elle attendre sa saisie ? (4) Faut-il un réglage « clôture automatique » séparé du blocage des ventes ?*
+
+### Q-054 (synchronisation, BUG-1006) — Date d'une réception confirmée hors ligne
+
+**Situation.** Une boulangerie sans connexion confirme la réception d'un transfert un soir. Le poste n'envoie l'information au siège que le lendemain. Les totaux du groupe par jour peuvent alors compter cette réception au lendemain pour une boulangerie et à la veille pour l'autre.
+
+- **A.** La date est celle de la **saisie** sur le poste (la veille).
+- **B.** La date est celle de la **synchronisation** (le lendemain).
+
+*Recommandation : A (la journée où le gérant a réellement confirmé).*
