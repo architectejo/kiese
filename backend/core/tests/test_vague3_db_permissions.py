@@ -24,10 +24,10 @@ MATRIX = [
     ("/api/core/users/{NIL}/", "DELETE", None, DIRECTION_UP, (404,), "BUG-247"),
     ("/api/core/users/{NIL}/reset_password/", "POST", {}, DIRECTION_UP, (404,), "BUG-248"),
     ("/api/core/users/", "POST", {}, DIRECTION_UP, (400,), "BUG-247"),
-    # clients : écriture gérant+, création facturier (BUG-250/259)
+    # clients : écriture gérant+, création facturier et livreur (BUG-250/259, Q-027)
     ("/api/clients/clients/{NIL}/", "PATCH", {}, GERANT_UP, (404,), "BUG-259"),
     ("/api/clients/clients/{NIL}/", "DELETE", None, GERANT_UP, (404,), "BUG-259"),
-    ("/api/clients/clients/", "POST", {}, GERANT_UP | {"FACTURIER"}, (400,), "BUG-250"),
+    ("/api/clients/clients/", "POST", {}, GERANT_UP | {"FACTURIER", "LIVREUR"}, (400,), "BUG-250"),
     # caisse sociale : écriture gérant+ (BUG-249/254)
     ("/api/clients/contributions/", "POST", {}, GERANT_UP, (400,), "BUG-249"),
     ("/api/clients/contributions/bulk_create_month/", "POST", {}, GERANT_UP, (400, 403), "BUG-249"),

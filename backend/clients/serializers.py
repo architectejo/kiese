@@ -40,7 +40,18 @@ class ClientBoundsMixin(AsciiDigitsMixin):
         return value
 
 
+class DefaultTrueBooleanField(serializers.BooleanField):
+    """B-2 / BUG-1116 : en multipart (formulaire avec photo) DRF lit un booleen ABSENT « faux » ;
+    un client neuf etait donc cree inactif (« SUSPENDU »). Absent = valeur par defaut (actif)."""
+
+    def get_value(self, dictionary):
+        if self.field_name not in dictionary:
+            return serializers.empty
+        return super().get_value(dictionary)
+
+
 class ClientSerializer(ClientBoundsMixin, serializers.ModelSerializer):
+    is_active = DefaultTrueBooleanField(required=False)
     full_name     = serializers.CharField(read_only=True)
     node_display  = serializers.StringRelatedField(source='node', read_only=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
@@ -67,6 +78,7 @@ class ClientSerializer(ClientBoundsMixin, serializers.ModelSerializer):
 
 
 class ClientCreateSerializer(ClientBoundsMixin, serializers.ModelSerializer):
+    is_active = DefaultTrueBooleanField(required=False, default=True)
     class Meta:
         model  = Client
         fields = [

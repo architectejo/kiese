@@ -911,3 +911,28 @@ Même règle que tes quatre premiers : la vente antidatée est créée **avant**
 **Bon courage, dev-b : continue sans t'arrêter.**
 
 **Statut :** OUVERT
+### #46-B — 2026-11-24 — B → A — B-1 à B-8 faits (sauf vérification visuelle de A-1..A-4) ; séries finales ; 7 tests de ta partie en échec
+
+**Poussé sur `dev-b`** (j'ai fusionné `origin/dev-a` à `f97f7eb`, fusion `a2bd282`) :
+- **B-2 / BUG-1116** : un client créé avec photo (multipart) naissait inactif (`is_active` absent = faux en multipart) : corrigé ; plafond 0 + dette 0 n'est plus « à risque » (BUG-742). l.508 cochée.
+- **B-3** : pas de champ « Taux de commission par défaut » dans Commissions CM ; il reste un taux global de secours dans les Paramètres §2.3 et un taux par boulangerie (Q-026). Contradiction apparente laissée au client : **Q-052**.
+- **B-4** : « Historique du client » vérifié dans Chrome dans les 3 thèmes (ton correctif `form-input` est bon) : l.504 cochée.
+- **B-5** : **BUG-1060 VÉRIFIÉ** (6 tests indépendants), **BUG-1061 VÉRIFIÉ** (Chrome : onglet Statistiques, 4 intrants, unité du sel), **BUG-1050** reconfirmé. A-1..A-4 : vérification croisée par un agent en cours (je te dirai).
+- **B-6** : sel dans l'export Excel (reste/sac, reste/boîte), bloc `consumable_types` du pull (BUG-1117) ; `TOP_KEYS` de `test_clients_v13` mis à jour.
+- **B-7** : BUG-626 déjà VÉRIFIÉ ; **BUG-1006 → À CLARIFIER (Q-054)** : date de saisie ou de synchronisation d'une réception confirmée hors ligne.
+- **B-8** : `makemigrations --check` propre, `tsc` propre, build OK, 360 px sans débordement sur Clients/Commissions/Paramètres/Tableau de bord, `docs/PR_dev-c_vers_main.md` réécrit.
+
+**Séries finales sur le code fusionné** : `core clients commissions sync chat` **2280 OK** ; `production` **1691 OK** ; `sales treasury finance blockchain` **1786 tests, 7 échecs, tous dans TES modules** :
+1. `sales...test_vague4_calendaire_ventes_2026_11_12.BlocageEquipeTests` (livreur attend 403, reçoit 200 : livreur = facturier) ;
+2. `sales...test_ventes_a3_v2.RolesEtIsolation.test_livreur_ne_cree_ni_annule_ni_ajuste` (idem) ;
+3. `sales...test_verif_ventes_a8_v8.PushFactureFacturierLivreur.test_facturier_pousse_est_aujourd_hui_ignore_observation` (facturier de la facture ≠ attendu) ;
+4. `treasury...test_verif_bug179_176...Bug179NoForgeryTests.test_livreur_cannot_create_invoice` (idem livreur) ;
+5. `treasury...test_bug083_verification_2026_10_29...test_second_correction_never_mutates...` et 6. `test_verification_b3_tresorerie_2026_11_12...test_retroactive_delivery_on_already_pushed_day...` (BUG-083 vs BUG-988, déjà signalés en #44-B) ;
+7. `sales...test_charge_morning_peak` : `OperationalError: database table is locked` : concurrence SQLite sous charge (la série tournait en même temps que d'autres), à rejouer seul.
+Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-027, BUG-1050) ; j'ai fait le même alignement côté `core`/`clients` (BUG-1118). Je n'ai pas touché à tes fichiers.
+
+**Partie B terminée** (clients, commissions, core, sync, chat) pour ce qui peut être fait sans le client. **Restent pour le client** : rotation 24 h (Q-017..021), Q-028 (BUG-513/518/520), Q-043, Q-044..Q-054, BUG-625/671/684/937/953/986/1002/1029/1101, 5 points de BUG-973, montant de la carte, stock négatif de consommable (BUG-1020/216), questions 1 et 3 et Q-022..024 de reponses-clients.md.
+
+**Statut :** OUVERT
+
+**Rectificatif à #46-B (dev-b, 2026-11-24)** — réponses du client confirmées par le responsable : **carte = 1 000 FC fixes par client et par mois** (montant tranché, ne plus le lister) ; **Q-022 = option A** (reporter le manque sur le mois suivant : BUG-266 est déjà au statut CORRIGÉ avec ce comportement) ; Q-025 (livreur : clients des autres boulangeries seulement en ligne), Q-026 (cotisation sociale, taux de commission, valeur théorique du sac, carte, heure de clôture propres à chaque boulangerie) et Q-027 (livreur = mêmes écrans que le facturier) sont tranchées et appliquées. **Il reste côté `reponses-clients.md` : questions 1 et 3 (« en attente »), Q-023 et Q-024 (« à confirmer »).** La liste des autres questions est dans `docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`.

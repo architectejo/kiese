@@ -92,7 +92,14 @@ class Bug250(Base):
         self.assertEqual(f.patch(f'{self.URL}{self.c1.pk}/', {'credit_limit': '1'}, format='json').status_code, 403)
 
     def test_livreur_cannot_create(self):
-        self.assertEqual(cl(self.u['LIVREUR']).post(self.URL, self.body(), format='json').status_code, 403)
+        """Q-025/Q-027 : le livreur cree comme le facturier (sa boulangerie, champs
+        forges ignores) ; il ne modifie toujours pas un client (comme le facturier)."""
+        r = cl(self.u['LIVREUR']).post(self.URL, self.body(), format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        c = Client.objects.get(pk=r.data['id'])
+        self.assertEqual((c.credit_limit, c.commission_rate, c.node_id), (Dc('50000'), Dc('0.25'), self.k1.pk))
+        self.assertEqual(cl(self.u['LIVREUR']).patch(
+            f'{self.URL}{self.c1.pk}/', {'credit_limit': '1'}, format='json').status_code, 403)
 
     def test_bounds_for_gerant_and_hq(self):
         for role in ('GERANT', 'DIRECTION'):

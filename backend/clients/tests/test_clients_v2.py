@@ -335,7 +335,7 @@ class CategorieTests(Base):
         api(self.g1).post(f'{CL}{c.id}/recalculate_category/')  # déjà RISK : pas de doublon
         self.assertEqual(SystemNotification.objects.count(), before + 1)
 
-    @expectedFailure   # BUG-742 : plafond 0 et dette 0 = a risque
+    # BUG-742 corrige par BUG-1116 : plafond 0 et dette 0 = NORMAL
     def test_plafond_zero_avec_dette_zero_n_est_pas_a_risque(self):
         """Plafond 0 accepté par l'API (0..10 000 000) mais un client sans aucune
         dette est classé « à risque » (0 >= 0) : voir BUG-742."""

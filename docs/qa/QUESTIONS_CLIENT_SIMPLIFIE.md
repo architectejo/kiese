@@ -161,6 +161,15 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 
 *Questions : (1) le signe et l'écart vide sont-ils corrects ? (2) le gérant doit-il voir les statistiques de sa boulangerie ? (3) la direction seule voit-elle D1 ?*
 
+### Q-052 (remarque.md, ligne 506) — « Taux de commission par défaut » : à garder ou à supprimer ?
+
+**Situation.** Vous avez demandé qu'il n'y ait pas de « Taux de commission par défaut » dans l'écran Commissions CM, avec seulement la cotisation sociale (2 000 FC) et la carte propres à la boulangerie. Cet écran n'a pas ce champ. Mais vous avez aussi répondu (Q-026) que le « Taux de Commission » est **propre à chaque boulangerie** : il se règle dans la fiche de la boulangerie. Il reste un taux **global** dans les Paramètres (§2.3), utilisé seulement quand une boulangerie n'a pas son propre taux.
+
+- **A.** Garder le taux global comme valeur de secours (aucun changement visible pour vous).
+- **B.** Supprimer le taux global : chaque boulangerie doit alors avoir son taux renseigné.
+
+*Recommandation : A.*
+
 ### Q-051 (stock de départ) — « Compté comme des pains vendus aujourd'hui » : que veut dire exactement ?
 
 **Situation.** Vous avez demandé que le stock de départ s'inscrive dans « Stock Pains du Jour » et soit « compté comme des pains vendus aujourd'hui ». Aujourd'hui l'application l'**affiche** dans une colonne « Stock de départ » et ne change pas le calcul de clôture (produit = vendus + reste du jour − reste d'hier + …).
@@ -180,3 +189,12 @@ Voir `docs/qa/MESSAGE_CLIENT_2026-11-21.md`, question Q6 (liste à cocher). Cond
 - ce mécanisme n'est actif que pour les boulangeries où l'heure de clôture a été activée (le même réglage que le blocage des ventes), car l'heure de relève par défaut (12 h) clôturerait sinon des boulangeries qui ne l'ont pas voulu.
 
 *Questions : (1) 30 minutes de délai, c'est bien ? (2) Pour une fournée sans livraison ou à zéro sac, faut-il la clôturer quand même (à zéro) ou la laisser ouverte comme aujourd'hui ? (3) Si le gérant n'a pas rempli Non vendu / Déclassés / Sorties gratuites, la clôture automatique est-elle acceptée telle quelle (avec une alerte) ou doit-elle attendre sa saisie ? (4) Faut-il un réglage « clôture automatique » séparé du blocage des ventes ?*
+
+### Q-054 (synchronisation, BUG-1006) — Date d'une réception confirmée hors ligne
+
+**Situation.** Une boulangerie sans connexion confirme la réception d'un transfert un soir. Le poste n'envoie l'information au siège que le lendemain. Les totaux du groupe par jour peuvent alors compter cette réception au lendemain pour une boulangerie et à la veille pour l'autre.
+
+- **A.** La date est celle de la **saisie** sur le poste (la veille).
+- **B.** La date est celle de la **synchronisation** (le lendemain).
+
+*Recommandation : A (la journée où le gérant a réellement confirmé).*

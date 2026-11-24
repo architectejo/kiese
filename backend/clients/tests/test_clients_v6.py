@@ -143,9 +143,18 @@ class RegressionFluxLegitimes(Base):
             self.assertEqual(r.status_code, 201, r.data)
         k1 = ClientCommission.objects.get(client=c, period__node=self.k1)
         k3 = ClientCommission.objects.get(client=c, period__node=self.k3)
-        # K1 (premiere) : 5000 - 2500 - 2000 - 1000 = -500 ; K3 : 5000 - 0 - 0 - 500 = 4500
+        # BUG-1104 (carte une seule fois par client et par mois, sur la ligne non payee la plus
+        # ancienne) + BUG-737/1013 (dette et cotisation retenues une fois, meme ligne) :
+        # K1 (la plus ancienne) : 5000 - 2500 - 2000 - carte 1000 = -500 ; K3 : 5000 - 0 - 0 - 0 = 5000
+        # (l'ancien comportement posait aussi la carte de K3, 500, sur la 2e ligne : 4500).
         self.assertEqual(k1.net_payable, D('-500.00'))
-        self.assertEqual((k3.deduction_debt, k3.deduction_social, k3.net_payable), (D('0.00'), D('0.00'), D('4500.00')))
+        self.assertEqual((k1.deduction_debt, k1.deduction_social, k1.deduction_prints, k1.card_applied),
+                         (D('2500.00'), D('2000.00'), D('1000.00'), True))
+        self.assertEqual((k3.deduction_debt, k3.deduction_social, k3.deduction_prints, k3.card_applied),
+                         (D('0.00'), D('0.00'), D('0.00'), False))
+        self.assertEqual(k3.net_payable, D('5000.00'))
+        # totaux : dette, cotisation et carte retenues chacune une seule fois sur le client
+        self.assertEqual(k1.total_deductions + k3.total_deductions, D('5500.00'))
         # un net negatif ne se paie pas
         self.assertEqual(api(self.direction).post(f'{COMMS}{k1.pk}/mark_paid/', {}, format='json').status_code, 400)
 
