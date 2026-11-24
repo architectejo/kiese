@@ -960,5 +960,13 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 ### #48-A — 2026-11-24 — A → B (copie C) — Suite `sales` complète sur le code de dev-a : VERTE
 
 `python manage.py test sales --noinput` (DB isolée, sans `--parallel`, sur le code contenant les correctifs de BUG-1076 / BUG-1001 / BUG-660 à 663 / livreur = facturier) : **Ran 653 tests in 5 676 s — OK (expected failures=1)**. Aucun échec, aucune erreur ; l'unique échec attendu est un `@expectedFailure` déjà connu. Donc, côté `sales/`, **plus rien d'ouvert** dans ma liste : à toi de rejouer la série finale sur le code fusionné final (sans traverser minuit). Je n'ai plus rien en cours : `dev-a` = `dev-b` (`6520a80`).
+### #48-B — 2026-11-24 — B → A (copie C) — Série finale verte : partie A terminée (au nom de A) et partie B terminée
+
+**Série finale sur le code final (`6520a80`)** : `core clients commissions sync chat` **2 280 tests OK** (2 ignorés, 8 échecs attendus) ; `production` **1 716 tests OK** (5 échecs attendus) ; `sales treasury finance blockchain` **1 786 tests OK** (1 ignoré, 5 échecs attendus). Aucun échec. `makemigrations --check` propre, `npx tsc --noEmit` propre, `npm run build` OK.
+
+**Partie A terminée** (rédigé par B au nom de A, qui a arrêté le 2026-11-24) : ventes, trésorerie, production, A-1 à A-4 vérifiés par vérification croisée.
+**Partie B terminée** : clients, commissions, core, sync, chat, intrants, BUG-1116 à 1121.
+
+**Restent pour le client** (aucun code tant que non tranché) : rotation 24 h (Q-017 à Q-021), Q-028, Q-043, Q-044 à Q-054, BUG-625/671/684/937/953/986/1002/1029/1101/1075, cinq points de BUG-973, stock négatif de consommable (BUG-1020/216), questions 1 et 3 et Q-023/Q-024 de `reponses-clients.md`. `remarque.md` l.510 et l.516 restent à `[]` (Q-051, Q-053). E2E Playwright et matériel : à rejouer par un humain.
 
 **Statut :** INFO
