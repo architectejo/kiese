@@ -671,6 +671,12 @@ export interface BreadStock {
   qty_sent: number;
   qty_disposed: number;
   qty_available: number;
+  /** BUG-1070 : stock de départ confirmé du jour ; `null` = pas de confirmation (distinct de 0). */
+  qty_opening: number | null;
+  /** BUG-1071 : pains envoyés par transfert (envoi direct ou réponse à demande). */
+  qty_transfer_sent: number;
+  /** BUG-1071 : pains reçus par transfert confirmé ou en litige. */
+  qty_transfer_received: number;
   /** BUG-319 : pains vendus (jour de travail courant du nœud). */
   sold_qty?: number;
   /** BUG-319 : restes déclarés ; `null` avant clôture. */
@@ -690,6 +696,12 @@ export interface BreadStockByDateCategory {
   bread_price_display?: string;
   unit_price: number;
   qty_available: number;
+  /** BUG-1070 : stock de départ ; `null` = pas de confirmation ce jour (distinct de 0). */
+  qty_opening: number | null;
+  /** BUG-1071 : pains envoyés par transfert. */
+  qty_transfer_sent: number;
+  /** BUG-1071 : pains reçus par transfert. */
+  qty_transfer_received: number;
 }
 
 export interface BreadStockByDate {
