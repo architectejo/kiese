@@ -493,6 +493,8 @@ export interface DailyClosureCategory {
   non_vendu_nv: DailyClosureQuantityFc;
   declasses: DailyClosureQuantityFc;
   sorties_gratuites: DailyClosureQuantityFc;
+  /** BUG-1119 : pains soldés déclarés (type SOLD_DISCOUNT) — réconciliation de la journée. */
+  soldes_declares?: DailyClosureQuantityFc;
 }
 
 export interface DailyClosureRepartitionRow {

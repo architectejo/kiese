@@ -262,8 +262,8 @@ export const CloseSessionModal: React.FC<CloseSessionModalProps> = ({
       )}
 
       <p style={{ fontSize: '0.74rem', color: 'hsl(var(--text-secondary))', marginBottom: '12px' }}>
-        Pour chaque catégorie produite par cette fournée, indiquez le reste du jour (pains
-        invendus, non livrés). Laissez à 0 si tout a été écoulé. Le reste ne peut pas être négatif. Cette action recoupe
+        Pour chaque catégorie, indiquez le reste de la journée (pains
+        invendus, non livrés) : un seul reste par catégorie et par boulangerie, quelle que soit l'équipe (A ou B). Laissez à 0 si tout a été écoulé. Le reste ne peut pas être négatif. Cette action recoupe
         automatiquement les ventes et dispositions du jour avec la production déclarée —
         elle est <strong>irréversible</strong> : la fournée ne sera plus modifiable.
       </p>

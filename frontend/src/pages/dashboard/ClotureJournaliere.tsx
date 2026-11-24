@@ -6,6 +6,7 @@ import { useSelectedWorkDay } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { CalendarPicker } from '@/components/shared/CalendarPicker';
 import { ClotureKpiCards } from '@/components/production/ClotureKpiCards';
+import { AutoClosedDayBanner } from '@/components/production/AutoClosedDayBanner';
 import { ClotureClientsModal } from '@/components/production/ClotureClientsModal';
 import { ClotureOperations } from '@/components/treasury/ClotureOperations';
 import { isProduitEnAttente, PRODUIT_EN_ATTENTE_HELP } from '@/utils/clotureProduit';
@@ -308,6 +309,7 @@ export const ClotureJournaliere: React.FC = () => {
                     <th style={{ textAlign: 'right' }}>Non Vendu (NV)</th>
                     <th style={{ textAlign: 'right' }}>Déclassés</th>
                     <th style={{ textAlign: 'right' }}>Sorties Gratuites</th>
+                    <th style={{ textAlign: 'right' }} title="Pains soldés déclarés par le gérant (réconciliation de la journée).">Soldés déclarés</th>
                   </tr>
                 </thead>
                 <tbody style={{ fontSize: '0.7rem' }}>
@@ -384,6 +386,10 @@ export const ClotureJournaliere: React.FC = () => {
                         {formatQty(cat.sorties_gratuites.quantity)}
                         <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.sorties_gratuites.fc)}</div>
                       </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {formatQty(cat.soldes_declares?.quantity ?? 0)}
+                        <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-secondary))' }}>{formatFC(cat.soldes_declares?.fc ?? 0)}</div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -395,6 +401,9 @@ export const ClotureJournaliere: React.FC = () => {
           </div>
         </>
       )}
+
+      {/* Information : clôture automatique des fournées à l'heure de clôture (BUG-1119) */}
+      <AutoClosedDayBanner nodeCode={effectiveNodeCode} date={date} />
 
       {/* Options de clôture (rapports facturiers, versement/billetage, dépenses locales, clôtures du jour),
           déplacées depuis l'ancienne page « Clôture & Caisse » (désormais « Caisse »). */}
