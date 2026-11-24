@@ -123,7 +123,10 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         closure.refresh_from_db()
         return closure
 
-    def _add_retroactive_invoice(self, qty):
+    def _create_pending_retroactive_invoice(self, qty):
+        """Saisie (statut en attente) d'une facture rétroactive tant que la clôture
+        du jour visé n'est pas confirmée (BUG-988 refuse toute nouvelle vente sur
+        un jour dont la clôture est confirmée)."""
         create = self.api_fact.post('/api/sales/invoices/', {
             'client': str(self.client_obj.pk),
             'payment_type': 'CASH',
@@ -132,7 +135,11 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
             'lines': [{'bread_price': self.bread.pk, 'quantity': qty}],
         }, format='json')
         self.assertEqual(create.status_code, 201, create.content)
-        invoice_id = create.data['id']
+        return create.data['id']
+
+    def _deliver_retroactive_invoice(self, invoice_id):
+        """Livraison rétroactive APRÈS confirmation et inscription de la clôture :
+        c'est ce chemin qui écrit la correction append-only (BUG-083)."""
         deliver = self.api_fact.post(
             f'/api/sales/invoices/{invoice_id}/deliver/', {'delivered_at': str(self.day)}, format='json'
         )
@@ -140,13 +147,26 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         return Invoice.objects.get(pk=invoice_id)
 
     def test_second_correction_never_mutates_the_first_correction_or_the_original(self):
+        # BUG-988 : les deux factures rétroactives sont SAISIES avant la confirmation
+        # de la clôture du jour ; seule leur LIVRAISON a lieu après (correction).
+        pending_1 = self._create_pending_retroactive_invoice(qty=2)
+        pending_2 = self._create_pending_retroactive_invoice(qty=3)
         closure = self._lock_day()
         original_entry = CashbookEntry.objects.get(source_closure=closure, is_correction=False)
+
+        # BUG-988 : une NOUVELLE vente sur ce jour confirmé est refusée, sans écriture.
+        refused = self.api_fact.post('/api/sales/invoices/', {
+            'client': str(self.client_obj.pk), 'payment_type': 'CASH',
+            'payment_amount': str(self.bread.unit_price), 'invoice_date': str(self.day),
+            'lines': [{'bread_price': self.bread.pk, 'quantity': 1}],
+        }, format='json')
+        self.assertEqual(refused.status_code, 403, refused.content)
+        self.assertEqual(CashbookEntry.objects.filter(is_correction=True).count(), 0)
 
         # Empreinte EN BASE (refresh_from_db) avant toute correction.
         original_before = _full_db_snapshot(original_entry)
 
-        self._add_retroactive_invoice(qty=2)  # +600 FC — première correction.
+        self._deliver_retroactive_invoice(pending_1)  # +600 FC — première correction.
         self.assertEqual(CashbookEntry.objects.filter(is_correction=True).count(), 1)
         first_correction = CashbookEntry.objects.get(is_correction=True)
         first_correction_before = _full_db_snapshot(first_correction)
@@ -155,7 +175,7 @@ class MultipleSuccessiveCorrectionsTests(TransactionTestCase):
         # première correction (déjà couvert ailleurs, revérifié ici en base).
         self.assertEqual(original_before, _full_db_snapshot(original_entry))
 
-        self._add_retroactive_invoice(qty=3)  # +900 FC — deuxième correction.
+        self._deliver_retroactive_invoice(pending_2)  # +900 FC — deuxième correction.
 
         self.assertEqual(
             CashbookEntry.objects.count(), 3,

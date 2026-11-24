@@ -422,6 +422,10 @@ class RetroRotationTests(TransactionTestCase):
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, prev, deliver=False)
             inv0 = Invoice.objects.get()
             inv0.deliver(livreur=self.facA, delivered_at=_local(prev, 14, 0))
+            # BUG-988 : la facture rétroactive est SAISIE (en attente) avant la confirmation
+            # de la clôture ; seule sa LIVRAISON a lieu après (écriture de correction).
+            r = self._post_invoice(prev)
+            self.assertEqual(r.status_code, 201, r.content)
             self.assertEqual(self.api_g.post('/api/treasury/reports/generate/', {'date': str(prev)}, format='json').status_code, 200)
             cr = self.api_g.post('/api/treasury/closures/', {'date': str(prev), 'bills_1000': 1, 'bills_500': 1}, format='json')
             self.assertEqual(cr.status_code, 201, cr.content)
@@ -430,8 +434,8 @@ class RetroRotationTests(TransactionTestCase):
             self.assertEqual(self.api_c.post(f'/api/treasury/closures/{cid}/push_to_cashbook/', {}, format='json').status_code, 201)
             before = CashbookEntry.objects.get(source_closure_id=cid, is_correction=False)
             snap = (before.block_hash, before.running_balance, before.entry_amount)
-            r = self._post_invoice(prev)
-            self.assertEqual(r.status_code, 201, r.content)
+            # BUG-988 : une NOUVELLE vente sur ce jour confirmé est refusée.
+            self.assertEqual(self._post_invoice(prev).status_code, 403)
             d = self.api_f.post(f"/api/sales/invoices/{r.json()['id']}/deliver/", {'delivered_at': str(prev)}, format='json')
             self.assertEqual(d.status_code, 200, d.content)
             inv = Invoice.objects.get(pk=r.json()['id'])

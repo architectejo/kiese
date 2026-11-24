@@ -200,9 +200,17 @@ class Bug179NoForgeryTests(Base):
         inv.refresh_from_db()
         self.assertEqual(inv.special_code, '')
 
-    def test_livreur_cannot_create_invoice(self):
+    def test_livreur_creates_invoice_like_facturier_but_no_forgery(self):
+        """Décision Q-027 (BUG-1050) : le livreur a les mêmes droits que le facturier
+        (création de facture dans sa boulangerie). Les falsifications restent refusées."""
         r = _api(self.livreur).post('/api/sales/invoices/', self._payload('RG'), format='json')
-        self.assertEqual(r.status_code, 403, r.content)
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.data['node_code'], self.livreur.node.code)
+        inv = Invoice.objects.get(pk=r.data['id'])
+        self.assertEqual(inv.payment_amount, Decimal('0'))   # RG : jamais d'encaissement
+        # Code spécial invalide : refusé pour le livreur comme pour le facturier.
+        bad = _api(self.livreur).post('/api/sales/invoices/', self._payload('XX'), format='json')
+        self.assertEqual(bad.status_code, 400, bad.content)
 
     def test_invalid_special_code_rejected(self):
         r = _api(self.facA).post('/api/sales/invoices/', self._payload('XX'), format='json')
