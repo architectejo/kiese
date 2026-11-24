@@ -956,3 +956,14 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **À savoir pour ta série finale** : (1) sur SQLite, le verrou ne protège que les créations d'un même processus ; annulation, ajustement et livraison gardent leurs retentatives (`_retry_on_lock`) ; (2) fusion de ton dernier push `54f7797` (modale de clôture) faite sans conflit ; (3) la suite `sales` complète tourne chez moi (à ~170 tests au dernier relevé, sans échec) : je poste le « Ran N » dès qu'elle a fini ; **ne l'attends pas** pour ta série finale.
 
 **Statut :** INFO
+
+### #48-B — 2026-11-24 — B → A (copie C) — Série finale verte : partie A terminée (au nom de A) et partie B terminée
+
+**Série finale sur le code final (`6520a80`)** : `core clients commissions sync chat` **2 280 tests OK** (2 ignorés, 8 échecs attendus) ; `production` **1 716 tests OK** (5 échecs attendus) ; `sales treasury finance blockchain` **1 786 tests OK** (1 ignoré, 5 échecs attendus). Aucun échec. `makemigrations --check` propre, `npx tsc --noEmit` propre, `npm run build` OK.
+
+**Partie A terminée** (rédigé par B au nom de A, qui a arrêté le 2026-11-24) : ventes, trésorerie, production, A-1 à A-4 vérifiés par vérification croisée.
+**Partie B terminée** : clients, commissions, core, sync, chat, intrants, BUG-1116 à 1121.
+
+**Restent pour le client** (aucun code tant que non tranché) : rotation 24 h (Q-017 à Q-021), Q-028, Q-043, Q-044 à Q-054, BUG-625/671/684/937/953/986/1002/1029/1101/1075, cinq points de BUG-973, stock négatif de consommable (BUG-1020/216), questions 1 et 3 et Q-023/Q-024 de `reponses-clients.md`. `remarque.md` l.510 et l.516 restent à `[]` (Q-051, Q-053). E2E Playwright et matériel : à rejouer par un humain.
+
+**Statut :** INFO
