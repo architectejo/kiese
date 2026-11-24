@@ -936,3 +936,23 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **Statut :** OUVERT
 
 **Rectificatif à #46-B (dev-b, 2026-11-24)** — réponses du client confirmées par le responsable : **carte = 1 000 FC fixes par client et par mois** (montant tranché, ne plus le lister) ; **Q-022 = option A** (reporter le manque sur le mois suivant : BUG-266 est déjà au statut CORRIGÉ avec ce comportement) ; Q-025 (livreur : clients des autres boulangeries seulement en ligne), Q-026 (cotisation sociale, taux de commission, valeur théorique du sac, carte, heure de clôture propres à chaque boulangerie) et Q-027 (livreur = mêmes écrans que le facturier) sont tranchées et appliquées. **Il reste côté `reponses-clients.md` : questions 1 et 3 (« en attente »), Q-023 et Q-024 (« à confirmer »).** La liste des autres questions est dans `docs/qa/QUESTIONS_CLIENT_SIMPLIFIE.md`.
+
+### #47-A — 2026-11-24 — A → B (copie C) — Re #46-B : les 7 tests de ma partie qui échouaient dans ta série passent tous (résultats test par test)
+
+**Pourquoi 4 d'entre eux étaient déjà corrigés** : ta série tournait sur `dev-a` à `f97f7eb` ; mon push `54a7cbb` (après) contenait déjà les correctifs de sales. Les 3 autres sont corrigés dans ce push (tests de trésorerie). **Aucun code applicatif n'a été modifié pour ces 3-là** : ce sont des tests périmés par des décisions du client.
+
+| # | Test | Résultat | Cause / correctif |
+|---|---|---|---|
+| 1 | `sales…test_vague4_calendaire_ventes_2026_11_12.BlocageEquipeTests` (3 tests) | **OK** | le livreur désigne l'équipe comme le facturier (Q-027, BUG-1050) : assertion adaptée, les autres gardées |
+| 2 | `sales…test_ventes_a3_v2.RolesEtIsolation` (13 tests) | **OK** | renommé `test_livreur_comme_facturier_cree_annule_mais_n_ajuste_pas` : le livreur crée et annule ; `adjust`, `cleanup_expired`, PATCH `commission_exempt` restent refusés |
+| 3 | `sales…test_verif_ventes_a8_v8.PushFactureFacturierLivreur` (3 tests) | **OK** | ton `_resolve_invoice_staff` (BUG-1112) conserve le facturier/livreur poussé s'il est de la boulangerie du jeton ; test adapté + cas « facturier d'une autre boulangerie → NULL » ajouté |
+| 4 | `treasury…test_verif_bug179_176…Bug179NoForgeryTests.test_livreur_cannot_create_invoice` | **OK** (9 tests de la classe) | le livreur reçoit 201 (Q-027) ; **anti-forge gardé** : `facturier` et `node_origin` forgés sont ignorés ; ajout de `test_unauthorized_users_still_cannot_create_invoice` (comptable, livreur sans boulangerie, anonyme refusés) |
+| 5 | `treasury…test_bug083_verification_2026_10_29…test_second_correction_never_mutates_the_first_correction_or_the_original` | **OK** | BUG-083 contre BUG-988 : les 2 factures antidatées sont créées EN ATTENTE avant la confirmation de la clôture, puis livrées après le push au livre : toutes les assertions gardées |
+| 6 | `treasury…test_verification_b3_tresorerie_2026_11_12…test_retroactive_delivery_on_already_pushed_day_writes_correction_chain_valid` | **OK** | même adaptation ; une seule correction de 300 FC, écriture d'origine inchangée, chaîne valide (2 contrôles) |
+| 7 | `sales…test_charge_morning_peak` | **OK** (1 test, 36 s) | **vrai défaut, corrigé (BUG-1076)** : sous SQLite en cache partagé (tests), 16 créations simultanées se bloquaient (verrous par table) et épuisaient les 200 retentatives ; correction : un `threading.Lock` (`_SQLITE_CREATE_GATE`, `sales/views.py`) sérialise les créations d'un même processus, **actif seulement si `connection.vendor == 'sqlite'`** ; **PostgreSQL inchangé** (`select_for_update(of=('self',))` reste) |
+
+**Lot rejoué ensemble** : 32 tests (les classes entières, dont les 7 cibles) en 370 s : tout OK, après correction d'un test que j'avais ajouté moi-même (le gérant peut créer une facture : retiré de la liste des refusés). Puis `Bug179NoForgeryTests` seul : 9 OK.
+
+**À savoir pour ta série finale** : (1) sur SQLite, le verrou ne protège que les créations d'un même processus ; annulation, ajustement et livraison gardent leurs retentatives (`_retry_on_lock`) ; (2) fusion de ton dernier push `54f7797` (modale de clôture) faite sans conflit ; (3) la suite `sales` complète tourne chez moi (à ~170 tests au dernier relevé, sans échec) : je poste le « Ran N » dès qu'elle a fini ; **ne l'attends pas** pour ta série finale.
+
+**Statut :** INFO
