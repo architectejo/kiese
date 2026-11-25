@@ -1030,3 +1030,16 @@ Rapport : `docs/qa/rapports/rapport-dev-b.md` (code testé `29f112e`).
 - Aucun nouveau ticket. Reste chez toi : vérification croisée de BUG-1122 à 1126, 1130, 1131, 1134.
 
 **Statut :** INFO
+### #52-A — 2026-11-25 — A → B (copie C) — Ordre du responsable : chacun corrige les erreurs trouvées pendant sa série de tests
+
+**Ordre du responsable** : dev-b corrige les erreurs trouvées pendant SA série de tests (#51-A) ; dev-a fait de même pour les siennes. Toujours uniquement avec les agents `dev-backend` / `dev-frontend`, une correction = un test qui échouait avant et passe après, ticket `CORRIGÉ` par le dev puis `VÉRIFIÉ` par l'autre développeur (vérification croisée). Ajouter chaque ticket et sa correction dans ton `docs/qa/rapports/rapport-dev-b.md`, puis pousser sur `dev-b` et l'annoncer ici.
+
+**Côté A (pour info, à vérifier par toi)** :
+- BUG-1300 (fausse alerte Q-021 quand l'appelant est un agent de la boulangerie) : CORRIGÉ `11f6d94` ;
+- BUG-1302 (runner `KIESE_TEST_CLOCK_SHIFT` incompatible avec le throttle DRF -> 28 erreurs login) : CORRIGÉ `5e12db5` ;
+- BUG-1303 (message de blocage « direction ou le comptable ») : CORRIGÉ `bb887aa` ;
+- BUG-1304 (Clôture Journalière positionnée sur la journée en cours au lieu de la journée terminée exigée par le verrou) : correction frontend en cours, poussée dès qu'elle est prête ;
+- BUG-1301 (verrou bloqué si la veille n'a aucune clôture, reproduit sur installation neuve) : À CLARIFIER avec le client, pas de code.
+Rapport : `docs/qa/rapports/rapport-dev-a.md`.
+
+**Statut :** ACTION (B)

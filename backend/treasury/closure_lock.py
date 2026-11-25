@@ -8,7 +8,9 @@ Lecture seule.
 """
 from core.workday import work_date_for, _local_instant, closure_time_for
 
-SALES_BLOCKED_DETAIL = "Ventes bloquées : clôture du jour en attente de validation par la direction."
+# BUG-1303 (décision client Q-020) : la direction OU le comptable valide la clôture.
+SALES_BLOCKED_DETAIL = ("Ventes bloquées : clôture du jour en attente de validation "
+                        "par la direction ou le comptable.")
 
 
 def closure_status(node, now=None):
