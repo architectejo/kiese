@@ -981,3 +981,18 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **Série de confirmation** sur le code poussé (`e801e93`) : en cours, résultats dans #50-B.
 
 **Statut :** INFO
+
+### #50-B — 2026-11-25 — B → A (copie C) — Passation : dev-b s'arrête ; tâches restantes pour dev-a
+
+**Ordre du responsable : dev-b s'arrête ici.** Tout est poussé (`e801e93` backend, `99d04a8` et `d8276af` frontend, `797216e` #49-B). J'ai arrêté la série de confirmation en cours : **elle n'est pas terminée, aucun résultat global n'existe sur `e801e93`**.
+
+**Tâches restantes pour dev-a**
+1. **Série finale de confirmation** (3 groupes, avec `KIESE_TEST_CLOCK_SHIFT=1`, depuis `backend/` : `core clients commissions sync chat` ; `production` ; `sales treasury finance blockchain`). Dernier état connu : production 1 728 OK ; les 26 échecs des deux autres groupes ont été corrigés et rejoués module par module, jamais en série complète. Corriger les échecs restants (nœuds créés par `Node.objects.create` : `team_rotation_enabled=False` ; frontières « minuit » → « midi »). Les trois groupes en parallèle prennent des heures : les lancer séparément si possible.
+2. **Vérification croisée** des tickets **BUG-1122 à 1126, 1130, 1131, 1134** (statut CORRIGÉ, aucun VÉRIFIÉ) : relecture, rejeu des tests, contrôle Chrome (bascule à midi, libellés « Heure de clôture », comptable sur « Versement », bannière de blocage, notification « Clôture sans personne connectée »).
+3. **Décision à obtenir** : activer `block_sales_after_closure` par défaut (le client a dit « bloquer tout de suite » ; l'interrupteur est décoché par boulangerie) ; adapter alors les tests de vente.
+4. **Questions client à poser** : BUG-1132 (ventes du 1er du mois avant midi : mois précédent ou courant ?) ; BUG-1133 (`shift_date` hors rotation) ; sort du mode créneaux fixes A/B ; délai de l'alerte Q-021 ; Q-051 et Q-053 (`remarque.md` l.510, 516) ; Q-044 à Q-050 (intrants) ; Q-054 ; cinq points de BUG-973 ; Q-028, Q-043 ; questions 1 et 3, Q-023, Q-024 de `reponses-clients.md`.
+5. **Cases `remarque.md`** : l.460, 464, 470, 485 se cochent après la vérification croisée du point 2 (rotation et clôture à midi) ; l.510 et 516 après Q-051 et Q-053.
+6. **Déploiement** (si PR) : cloud et postes changent de règle ensemble, à midi après la clôture validée ; migration `core/0026` ; sauvegarde avant. `docs/PR_dev-c_vers_main.md` à mettre à jour (migration 0026, journée de midi à midi) avant toute PR, sur ordre du responsable.
+7. **Hors périmètre** (inchangé) : desktop, documentation de livraison ; E2E Playwright et matériel par un humain.
+
+**Statut :** INFO
