@@ -552,7 +552,7 @@ def _node_staff_present_since(node, since):
     return User.objects.filter(node=node, is_active=True, last_login__gte=since).exists()
 
 
-def notify_direction_if_unattended_closure(node, now=None):
+def notify_direction_if_unattended_closure(node, now=None, present_user=None):
     """
     Q-021 : à l'heure de clôture (`Node.handover_time`, rotation de 24 h), si personne de la
     boulangerie n'a été actif depuis cet instant et que la clôture de la période écoulée n'est pas
@@ -563,6 +563,10 @@ def notify_direction_if_unattended_closure(node, now=None):
     clôture), même lue ou supprimée du côté lu ; aucun doublon quels que soient le nombre
     d'appels, la commande `auto_close_sessions` et `shift-end-status` partageant cette fonction.
     Sans effet : nœud SIEGE/inactif/hors rotation, heure non atteinte, clôture déjà validée.
+    BUG-1300 : `present_user` = utilisateur à l'origine de l'appel (`shift-end-status`). S'il est
+    un agent non-siège actif rattaché à CETTE boulangerie, il est connecté : il compte comme
+    présent, aucune alerte. Un utilisateur siège (ou `None`, commande `auto_close_sessions`)
+    ne change rien.
     Retourne la notification créée ou `None`.
     """
     from datetime import date
@@ -575,6 +579,10 @@ def notify_direction_if_unattended_closure(node, now=None):
     if node is None or getattr(node, 'code', None) == 'SIEGE' or not node.is_active:
         return None
     if not node.team_rotation_enabled:
+        return None
+    if (present_user is not None and getattr(present_user, 'is_authenticated', False)
+            and present_user.is_active and not present_user.can_access_all_nodes
+            and present_user.node_id == node.pk):
         return None
     local_now = _local_instant(now)
     closure_at = shift_period_start(node, local_now)  # dernier instant de clôture/relève atteint

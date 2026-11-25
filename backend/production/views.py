@@ -1306,7 +1306,8 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         from .services import auto_close_due_days, summarize_auto_closed, notify_direction_if_unattended_closure
         # Q-021 : heure de clôture passée sans personne de la boulangerie -> direction/comptable
         # avertis (une seule notification par boulangerie et par période, idempotent).
-        notify_direction_if_unattended_closure(node)
+        # BUG-1300 : l'appelant, s'il est un agent de CETTE boulangerie, est connecté -> présent.
+        notify_direction_if_unattended_closure(node, present_user=user)
         # BUG-1120 : résumé additif des clôtures faites lors de CET appel
         # (`auto_closed_days`, absent s'il n'y en a pas : les corps de réponse
         # existants restent identiques).
