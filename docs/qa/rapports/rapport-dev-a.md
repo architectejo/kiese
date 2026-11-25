@@ -11,7 +11,7 @@ Branche `dev-a`, base `5e12db5` (fusion de `dev-b` `50623ad` + BUG-1300 + BUG-13
 |---|---|
 | `core clients commissions sync chat` | Ran 2 298 — FAILED (failures=3, errors=28) : 30 dus à BUG-1302 (outil de test, corrigé), 1 concurrence SQLite à rejouer seul |
 | `production` | Ran 1 731 — **OK** (expected failures=5) |
-| `sales treasury finance blockchain` | en cours |
+| `sales treasury finance blockchain` | Ran 1 794 — **OK** (skipped=1, expected failures=5) |
 
 Frontend : `npx tsc --noEmit` propre ; `npx vitest run` 10/10 OK ; `npm run build` OK (4 min 21 s).
 
@@ -38,3 +38,10 @@ Frontend : `npx tsc --noEmit` propre ; `npx vitest run` 10/10 OK ; `npm run buil
 | « Stock Pains du Jour » (stock de départ, vendu, envoyés, reçu, TOTAL) | gérant K1, Chrome bureau | OK |
 
 Reste à voir à l'écran : bannière de blocage au POS (360 px).
+
+## 5. Vérification croisée des tickets de dev-b
+
+BUG-1122, 1123, 1124, 1125, 1126, 1130, 1131, 1134 (rotation 24 h, journée de midi à midi, validation comptable, alerte Q-021, libellés) et BUG-1140 (Succursales : créneaux A/B masqués en rotation, phrase « les équipes se relaient à l'heure de clôture (12:00) » ; réapparition des champs quand la rotation est décochée, sans enregistrer) : **VÉRIFIÉ** par dev-a (API + Chrome, tableau §4). Défauts trouvés pendant cette vérification : BUG-1300, 1303, 1304 (corrigés, vérifiés par dev-b) ; BUG-1301 (client).
+
+## 6. `remarque.md`
+Cochées par dev-a : **l.460** (modale « Stock de départ du jour » à l'heure de rotation) et **l.470** (rotation de 24 h). Restent à `[]` : l.464 et l.485 (modale de clôture avec fournées réelles jamais vue à l'écran avec des données), l.510 et l.516 (Q-051, Q-053).

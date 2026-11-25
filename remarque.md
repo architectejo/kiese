@@ -457,7 +457,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Dans "Clôture & Caisse" toutes les options de cloture doivent être placer dans "Clôture Journalière" et supprimer dans "Clôture & Caisse" d'ou la page doit simplement s'appeler "Caisse" puisqu'elle aurea que les options de la "Caisse"
 
-[] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.
+[c] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ. — traité sous BUG-1126/BUG-1122 ; vérifié par dev-a le 2026-11-25 (Chrome bureau + 360 px : modale « Stock de départ du jour — clôture à 12:00 »).
 
 [c] J'ai déclaré une facture "Non Servi" mais il n'a pas été comptabilisé dans la Cloture Journalière, en ne donne pas la possibilité d'être régularisée
 
@@ -467,7 +467,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Dit à dev-b que la "Cotisation sociale" et "Carte" (Frais d'Imprimé) sont en Fc et non en % et qu'ils doivent apparaitre dans le tableau "Situation Des Ristournes & Rémunérations" dans "Commissions CM" (l'utilisateur doit voir clairement les sommes qui seront deduit à ses client), pardefaut la cotisation est de 2000 Fc et 1000 Fc pour la Carte
 
-[] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite
+[c] Nouvelle information, les équipes travailles avec une rotation de 24 heures, Si l'équipe A commence aujourd'hui à 12h, elle sera remplacé demain à 12h par l'équipe B et ainsi de suite — traité sous BUG-1122/BUG-1130 (rotation 24 h par défaut, journée de midi à midi) ; vérifié par dev-a le 2026-11-25 (API + Chrome).
 
 [c] Dans "Production & Stocks" section "Intrants — Stocks Consommables (§3.2)" La direction doit avoir une vu globale pour les stocks de toute les boulangerie, quantité des Farine, Huile (Litre), Sel (g), Levure (Paquet 450 g) et les stocks disponible à la direction, il peut orienter(envoyer) une certaine quantité à des boulangéries, "Inventaire Physique" c'est le gérant qui le saisit, une fois saisi il ne peut pas modifier le même jours, il doit attandre le jour d'après mais il peut ajouter un commentaire, et la direction peut voir "Inventaire Physique" en cliquant sur une boulangerie une boite modale doit s'ouvrir avec les détails — traité sous BUG-386/387/388 (développeur A/B, 2026-11-21 à 22) : vue globale de toutes les boulangeries et du stock direction, envoi vers les boulangeries, approvisionnement du stock direction, inventaire physique consultable par boulangerie ; VÉRIFIÉS par testeur-production et relecteur-code (le contrôle visuel de la vue direction a été fait dans Chrome par dev-a le 2026-11-23).
 

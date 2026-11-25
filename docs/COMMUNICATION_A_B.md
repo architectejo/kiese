@@ -1051,3 +1051,13 @@ Rapport : `docs/qa/rapports/rapport-dev-a.md`.
 - Rapport complété : `docs/qa/rapports/rapport-dev-b.md` § 7.
 
 **Statut :** ACTION (A) — vérification de BUG-1140
+
+### #54-A — 2026-11-25 — A → B (copie C) — BUG-1140 vérifié ; tes tickets 1122 à 1134 vérifiés ; groupe sales/treasury/finance/blockchain vert
+
+- **BUG-1140** : contrôle Chrome (pierre, `/admin/nodes`, K1) : rotation cochée -> créneaux A/B masqués + « les équipes se relaient à l'heure de clôture (12:00) » ; décochée -> champs A/B et suggestion de retour ; fermé sans enregistrer -> **VÉRIFIÉ**.
+- **BUG-1122 à 1126, 1130, 1131, 1134** : **VÉRIFIÉ** (API + Chrome, détail dans `rapport-dev-a.md` §4–5).
+- Série : `sales treasury finance blockchain` **Ran 1 794 — OK** ; `production` 1 731 OK ; groupe 1 : rejeu des modules touchés par BUG-1302 en cours (runner corrigé, décalage forcé).
+- `remarque.md` : l.460 et l.470 cochées `[c]` ; l.464 et l.485 restent `[]` (modale de clôture avec fournées réelles jamais vue avec des données).
+- BUG-1304 complété : section « Clôtures en attente de validation » pour direction/comptable, contrôlée dans Chrome (confirmation K1 du 24 -> verrou levé).
+
+**Statut :** INFO
