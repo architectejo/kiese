@@ -51,3 +51,13 @@ Aucune nouvelle ligne cochée dans cette série : l.460, 464, 470, 485 attendent
 ## 6. Points en attente du client
 
 BUG-1132 (ventes du 1er du mois avant midi : mois précédent ou courant ?), BUG-1133 (`shift_date` hors rotation), BUG-1301, sort du mode créneaux fixes A/B, activation par défaut de `block_sales_after_closure`, délai de l'alerte Q-021, Q-051 / Q-053 (l.510, 516), Q-044 à Q-050, Q-054, Q-028, Q-043, cinq points de BUG-973.
+
+## 7. Corrections après la série (ordre #52-A)
+
+| Ticket | Constat | Correction | Contrôles | Statut |
+|---|---|---|---|---|
+| **BUG-1140** (dev-b) | Formulaire Succursales : rotation de 24 h cochée, mais les horaires fixes A/B et la suggestion « 06h00–13h00 / 13h00–20h00 » restent affichés (contradictoire avec Q-017) | Backend vérifié : en rotation, les horaires A/B ne sont plus lus (relève à `handover_time`). En rotation, les 4 champs A/B sont masqués (valeurs conservées) et remplacés par « En rotation de 24 h, les équipes se relaient à l'heure de clôture (HH:MM) ». Hors rotation : inchangé. Helper `frontend/src/utils/nodeTeamSchedule.ts`, `pages/dashboard/Nodes.tsx` | `tsc` OK ; vitest `nodeTeamSchedule.test.ts` 5 OK ; `npm run build` OK | CORRIGÉ — à vérifier par dev-a (procédure dans le registre) |
+
+Vérification croisée des nouveaux tickets de dev-a :
+- **BUG-1303** (message de blocage « direction ou le comptable ») : relecture de `treasury/closure_lock.py` + `treasury.tests.test_bug1303_message_blocage_a` et `test_dev_d38_blocage_ventes` : **Ran 17 tests — OK** → **VÉRIFIÉ**.
+- **BUG-1304** (Clôture Journalière positionnée sur la journée terminée, file des clôtures en attente) : relecture de `utils/closureDay.ts` + vitest `closureDay.test.ts` **7 tests OK** → **VÉRIFIÉ** (contrôle Chrome : celui de dev-a, non refait).

@@ -1043,3 +1043,11 @@ Rapport : `docs/qa/rapports/rapport-dev-b.md` (code testé `29f112e`).
 Rapport : `docs/qa/rapports/rapport-dev-a.md`.
 
 **Statut :** ACTION (B)
+
+### #53-B — 2026-11-25 — B → A (copie C) — Réponse à #52-A : corrections de ma série faites, BUG-1303 et BUG-1304 vérifiés
+
+- Ma série n'a révélé qu'un défaut : **BUG-1140** (formulaire Succursales : horaires fixes A/B et suggestion 06h–13h / 13h–20h affichés alors que la rotation de 24 h est cochée). **CORRIGÉ** : en rotation, champs A/B masqués (valeurs conservées), phrase « les équipes se relaient à l'heure de clôture (HH:MM) » ; hors rotation inchangé. `tsc`, vitest (5), build OK. **À vérifier par toi** (procédure de contrôle manuel dans le registre : `/admin/nodes`, rotation cochée/décochée, heure 14:30, 360 px).
+- **BUG-1303** : 17 tests OK → **VÉRIFIÉ**. **BUG-1304** : relecture + vitest 7 OK → **VÉRIFIÉ** (contrôle Chrome : le tien).
+- Rapport complété : `docs/qa/rapports/rapport-dev-b.md` § 7.
+
+**Statut :** ACTION (A) — vérification de BUG-1140

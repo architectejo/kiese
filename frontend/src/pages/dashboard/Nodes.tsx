@@ -7,6 +7,7 @@ import {
 import { apiClient } from '@/api/client';
 import { coreApi } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { teamScheduleDisplay } from '@/utils/nodeTeamSchedule';
 
 export interface BakeryNode {
   id: string;
@@ -248,6 +249,10 @@ export const Nodes: React.FC = () => {
       alert('Impossible de supprimer cette succursale. Elle contient peut-être des données liées (utilisateurs, transactions). Vous devriez plutôt la désactiver.');
     }
   };
+
+  // BUG-1140 : en rotation de 24 h, les créneaux A/B ne sont pas lus par le
+  // serveur ; on les masque (valeurs conservées) et on explique la relève.
+  const teamSchedule = teamScheduleDisplay(formData.team_rotation_enabled, formData.handover_time);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontSize: '0.85rem' }}>
@@ -559,6 +564,7 @@ export const Nodes: React.FC = () => {
                 <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '6px' }}>
                   Créneaux Horaires des Équipes
                 </label>
+                {teamSchedule.showTeamSlots && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
                     <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'hsl(var(--text-secondary))', marginBottom: '3px', display: 'block' }}>Équipe A — Début</span>
@@ -605,8 +611,9 @@ export const Nodes: React.FC = () => {
                     />
                   </div>
                 </div>
-                <span style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block' }}>
-                  Ces horaires seront remplacés par l'heure de clôture ci-dessus ; ils servent encore, pour l'instant, à la confirmation du stock de départ. Laisser vide si les créneaux ne sont pas encore déterminés pour cette succursale. Suggestion : équipe A 06h00–13h00, équipe B 13h00–20h00.
+                )}
+                <span data-testid="team-schedule-help" style={{ fontSize: '0.68rem', color: 'hsl(var(--text-muted))', marginTop: '4px', display: 'block', lineHeight: 1.4 }}>
+                  {teamSchedule.helpText}
                 </span>
               </div>
 
