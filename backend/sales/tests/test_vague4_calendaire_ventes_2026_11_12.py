@@ -1,9 +1,11 @@
 """
 Vague 4 (testeur-ventes, 2026-11-12) : decision client « Rapport Journalier =
-JOUR CALENDAIRE » (BUG-271/272) vue des Ventes et de la Tresorerie, bout en
+JOUR CALENDAIRE » (BUG-271/272), REMPLACEE le 2026-11-24 par la journee comptable de
+MIDI A MIDI (BUG-1130, Q-018) : une vente a 03:00 est de la journee de la veille, la
+releve de 12:00 change l'equipe ET la date. Vue des Ventes et de la Tresorerie, bout en
 bout par l'API (facturation -> livraison -> rapport facturier -> cloture de
 caisse -> rapport journalier consolide), avec horloge simulee. Donnees
-fictives uniquement (base de test).
+fictives uniquement (base de test). Scenarios horaires adaptes en BUG-1130.
 """
 from datetime import date, datetime, time, timedelta
 from datetime import timezone as dt_timezone
@@ -79,7 +81,7 @@ class Base(TestCase):
 
 
 class DatesEtRecusCalendairesTests(Base):
-    def test_vente_03h00_jour_calendaire_et_numeros_uniques_par_date(self):
+    def test_vente_03h00_journee_de_la_veille_et_numeros_uniques_par_journee(self):
         self.assign(PREV, 'B')
         with _now(23, 50, PREV):
             r0 = self.sale()
@@ -87,15 +89,17 @@ class DatesEtRecusCalendairesTests(Base):
             r1 = self.sale()
             r2 = self.sale(pay=500)
         self.assertEqual([r0.status_code, r1.status_code, r2.status_code], [201, 201, 201])
+        # BUG-1130 : 23:50 puis 03:00 le lendemain = MEME journee comptable (11/11), une seule serie.
         self.assertEqual(r0.data['receipt_number'], 'K1-20261111-0001')
-        self.assertEqual(r1.data['receipt_number'], 'K1-20261112-0001')
-        self.assertEqual(r2.data['receipt_number'], 'K1-20261112-0002')
-        for r, d in ((r0, PREV), (r1, D), (r2, D)):
-            self.assertEqual(Invoice.objects.get(pk=r.data['id']).invoice_date, d)
+        self.assertEqual(r1.data['receipt_number'], 'K1-20261111-0002')
+        self.assertEqual(r2.data['receipt_number'], 'K1-20261111-0003')
+        for r in (r0, r1, r2):
+            self.assertEqual(Invoice.objects.get(pk=r.data['id']).invoice_date, PREV)
         # equipe de service a 03:00 = periode du 11/11 (releve de 12:00 pas encore passee)
         self.assertEqual(r1.data['team'], 'B')
 
-    def test_releve_12h00_change_equipe_pas_date_ni_serie_de_numeros(self):
+    def test_releve_12h00_change_equipe_date_et_serie_de_numeros(self):
+        # BUG-1130 : la releve (= heure de cloture) change l'equipe, la journee comptable et la serie.
         self.assign(PREV, 'B')
         self.assign(D, 'A')
         with _now(11, 59):
@@ -103,8 +107,8 @@ class DatesEtRecusCalendairesTests(Base):
         with _now(12, 0):
             r2 = self.sale()
         self.assertEqual((r1.data['team'], r2.data['team']), ('B', 'A'))
-        self.assertEqual(r1.data['receipt_number'], 'K1-20261112-0001')
-        self.assertEqual(r2.data['receipt_number'], 'K1-20261112-0002')
+        self.assertEqual(r1.data['receipt_number'], 'K1-20261111-0001')
+        self.assertEqual(r2.data['receipt_number'], 'K1-20261112-0001')
 
     def test_numeros_uniques_apres_suppression_d_une_facture_expiree(self):
         self.assign(D, 'A')
@@ -131,11 +135,12 @@ class DatesEtRecusCalendairesTests(Base):
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(r.data['team'], 'B')
         self.assertEqual(r.data['receipt_number'], 'K1-20261111-0001')
-        # maintenant 03:00 : vente datee du 11/11 -> 11/11 03:00 -> periode du 10/11 = A
+        # BUG-1130 : maintenant 03:00 le 12/11 (journee comptable du 11/11) : vente datee du 10/11 ->
+        # placee dans la journee du 10/11 (au meme decalage) -> periode du 10/11 = A
         with _now(3, 0):
-            r = self.sale(invoice_date=str(PREV))
+            r = self.sale(invoice_date=str(OLDER))
         self.assertEqual(r.data['team'], 'A')
-        self.assertEqual(r.data['receipt_number'], 'K1-20261111-0002')
+        self.assertEqual(r.data['receipt_number'], 'K1-20261110-0001')
 
     def test_vente_retroactive_sans_designation_ne_bloque_pas_et_prend_l_equipe_du_facturier(self):
         cfg = get_config()
@@ -168,9 +173,9 @@ class BlocageEquipeTests(Base):
             self.assertEqual(r.data['team'], 'B')          # equipe designee, pas celle du compte (A)
             self.assertEqual(self.refund().status_code, 201)
 
-    def test_a_03h00_la_designation_du_jour_calendaire_ne_vaut_que_pour_la_periode_du_matin(self):
+    def test_a_03h00_la_designation_du_lendemain_ne_vaut_pas_encore(self):
         # periode en cours a 03:00 = celle ouverte le 11/11 a 12:00 ; la designation
-        # du 12/11 (releve 12:00) n'est pas encore valable.
+        # du 12/11 (releve 12:00) n'est pas encore valable (BUG-1130 : journee comptable = 11/11).
         self.assign(D, 'A')
         with _now(3, 0):
             r = self.sale()
@@ -178,12 +183,12 @@ class BlocageEquipeTests(Base):
             self.assertEqual(r.data['code'], 'TEAM_NOT_ASSIGNED')
             ta = _api(self.fa).post(TA, {'team': 'B'}, format='json')
             self.assertIn(ta.status_code, (200, 201), ta.data)
-            self.assertEqual(ta.data['work_date'], str(D))      # date calendaire
+            self.assertEqual(ta.data['work_date'], str(PREV))   # journee comptable (midi a midi)
             self.assertEqual(ta.data['shift_date'], str(PREV))  # periode de service
             r = self.sale()
             self.assertEqual(r.status_code, 201, r.data)
             self.assertEqual(r.data['team'], 'B')
-            self.assertEqual(Invoice.objects.get(pk=r.data['id']).invoice_date, D)
+            self.assertEqual(Invoice.objects.get(pk=r.data['id']).invoice_date, PREV)
 
     def test_sans_rotation_aucun_blocage_et_equipe_du_compte(self):
         node = make_node(code='K9')
@@ -194,12 +199,13 @@ class BlocageEquipeTests(Base):
                                     'lines': [{'bread_price': self.bp.pk, 'quantity': 1}]}, format='json')
         self.assertEqual(r.status_code, 201, r.data)
         self.assertEqual(r.data['team'], 'B')
-        self.assertEqual(r.data['receipt_number'], 'K9-20261112-0001')
+        self.assertEqual(r.data['receipt_number'], 'K9-20261111-0001')  # BUG-1130 : 03:00 = journee du 11/11
 
 
 class RapportFacturierEtClotureTests(Base):
     def _journee(self):
-        """A de 03:00 a 11:59 (periode du 11/11), B apres 12:00 ; 2 ventes chacune, livrees."""
+        """BUG-1130 : A sert la journee du 11/11 (13:00 le 11/11 -> 12:00 le 12/11), B la journee du
+        12/11 (des 12:00) ; 2 ventes chacune, livrees. Les deux equipes ne partagent plus un jour."""
         self.assign(PREV, 'A')
         self.assign(D, 'B')
         ids = {'A': [], 'B': []}
@@ -217,25 +223,33 @@ class RapportFacturierEtClotureTests(Base):
 
     def test_un_rapport_facturier_par_equipe_et_date_idempotent_et_cloture_unique(self):
         self._journee()
+        cfg = get_config()
+        cfg.allow_backdated_sales = True   # rapport/cloture de la journee passee (11/11)
+        cfg.save()
         g = _api(self.gerant)
         with _now(20, 0):
+            # Journee du 11/11 (equipe A) : un rapport, un seul par (equipe, date), idempotent.
+            r = g.post('/api/treasury/reports/generate/', {'date': str(PREV)}, format='json')
+            self.assertEqual(r.status_code, 200, r.content)
+            self.assertEqual(sorted((x['team'], x['date']) for x in r.data), [('A', str(PREV))])
+            r = g.post('/api/treasury/reports/generate/', {'date': str(PREV)}, format='json')   # regeneration
+            self.assertEqual(FacturierReport.objects.filter(node=self.node, date=PREV).count(), 1)
+            self.assertEqual({x['team']: Decimal(x['total_cash_sales']) for x in r.data}, {'A': Decimal('500')})
+            self.assertEqual({x['team']: Decimal(x['total_credit_sales']) for x in r.data}, {'A': Decimal('2500')})
+            # Journee du 12/11 (equipe B, defaut = journee en cours a 20:00).
             r = g.post('/api/treasury/reports/generate/', {}, format='json')
             self.assertEqual(r.status_code, 200, r.content)
-            self.assertEqual(sorted((x['team'], x['date']) for x in r.data), [('A', str(D)), ('B', str(D))])
-            r = g.post('/api/treasury/reports/generate/', {}, format='json')   # regeneration
-            self.assertEqual(FacturierReport.objects.filter(node=self.node, date=D).count(), 2)
-            cash = {x['team']: Decimal(x['total_cash_sales']) for x in r.data}
-            credit = {x['team']: Decimal(x['total_credit_sales']) for x in r.data}
-            self.assertEqual(cash, {'A': Decimal('500'), 'B': Decimal('1000')})
-            self.assertEqual(credit, {'A': Decimal('2500'), 'B': Decimal('1500')})
-            c = g.post('/api/treasury/closures/', {'date': str(D), 'bills_1000': 1, 'bills_500': 1}, format='json')
+            self.assertEqual(sorted((x['team'], x['date']) for x in r.data), [('B', str(D))])
+            self.assertEqual({x['team']: Decimal(x['total_cash_sales']) for x in r.data}, {'B': Decimal('1000')})
+            self.assertEqual({x['team']: Decimal(x['total_credit_sales']) for x in r.data}, {'B': Decimal('1500')})
+            c = g.post('/api/treasury/closures/', {'date': str(D), 'bills_1000': 1}, format='json')
             self.assertEqual(c.status_code, 201, c.content)
             self.assertEqual(c.data['date'], str(D))
-            self.assertEqual(Decimal(c.data['total_entries']), Decimal('1500'))   # A + B, un seul jour
+            self.assertEqual(Decimal(c.data['total_entries']), Decimal('1000'))   # la journee D uniquement
             self.assertEqual(Decimal(c.data['cash_gap']), Decimal('0'))
             self.assertEqual(g.post('/api/treasury/closures/', {'date': str(D), 'bills_500': 1}, format='json').status_code, 400)
             self.assertEqual(CashClosure.objects.filter(node=self.node).count(), 1)
-        with _now(1, 0, D + timedelta(days=1)):
+        with _now(13, 0, D + timedelta(days=1)):
             c2 = g.post('/api/treasury/closures/', {'date': str(D + timedelta(days=1)), 'bills_500': 1}, format='json')
             self.assertEqual(c2.status_code, 201, c2.content)
             self.assertEqual(c2.data['date'], str(D + timedelta(days=1)))   # une cloture par (noeud, date)
@@ -264,7 +278,7 @@ class RapportFacturierEtClotureTests(Base):
         self.assign(PREV, 'A')
         self.assign(D, 'B')
         other = make_client(self.node)
-        with _now(3, 0):
+        with _now(13, 0, PREV):  # BUG-1130 : l'equipe A sert la journee du 11/11
             n1 = self.sale(qty=2, pay=1000).data['id']                       # A : 1000 normal, CM 25 %
             self.deliver(n1)
             ns = self.sale(special_code='NS', qty=3, client=other)
@@ -280,18 +294,19 @@ class RapportFacturierEtClotureTests(Base):
             self.deliver(sol.data['id'])
         report = _build_daily_closure_report(self.node, D)
         row = next(c for c in report['categories'] if c['bread_price'] == self.bp.pk)
-        self.assertEqual(row['facture_jr'], {'quantity': 6, 'fc': '3000.00'})       # A + B ensemble
-        self.assertEqual(Decimal(row['commission_jr']['fc']), Decimal('750.00'))    # 25 % de 3000
-        self.assertEqual(row['non_servi']['quantity'], 3)
-        self.assertEqual(Decimal(row['non_servi']['fc']), Decimal('1500'))
+        self.assertEqual(row['facture_jr'], {'quantity': 4, 'fc': '2000.00'})       # B seule (journee du 12/11)
+        self.assertEqual(Decimal(row['commission_jr']['fc']), Decimal('500.00'))    # 25 % de 2000
+        self.assertEqual(row['non_servi']['quantity'], 0)
         self.assertEqual(row['regularisation']['quantity'], 1)
         self.assertEqual(Decimal(row['regularisation']['fc']), Decimal('500'))
         self.assertEqual(row['vente_cash_soldee']['quantity'], 2)
         self.assertEqual(Decimal(row['vente_cash_soldee']['fc']), Decimal('750'))
-        # la veille ne contient rien de ce jour
+        # la journee du 11/11 (equipe A) porte SES chiffres, pas ceux du 12/11
         prev = _build_daily_closure_report(self.node, PREV)
         prow = next(c for c in prev['categories'] if c['bread_price'] == self.bp.pk)
-        self.assertEqual(prow['facture_jr']['quantity'], 0)
+        self.assertEqual(prow['facture_jr'], {'quantity': 2, 'fc': '1000.00'})
+        self.assertEqual(prow['non_servi']['quantity'], 3)
+        self.assertEqual(Decimal(prow['non_servi']['fc']), Decimal('1500'))
         # via l'API (gerant) : meme chiffres, une seule fois
         with _now(21, 0):
             r = _api(self.gerant).get('/api/production/daily-closure/', {'date': str(D)})
@@ -325,14 +340,14 @@ class FrontiereDeMinuitTests(Base):
             r = _api(self.gerant).post('/api/treasury/reports/generate/', {}, format='json')
         inv = Invoice.objects.get(pk=iid)
         self.assertEqual(inv.invoice_date, PREV)
-        self.assertEqual(timezone.localtime(inv.delivered_at).date(), D)
-        # chiffres releves (pas de regle claire sur le jour de rattachement du cash) :
+        self.assertEqual(timezone.localtime(inv.delivered_at).date(), D)  # date calendaire de livraison
+        # BUG-1130 : livree a 00:05 le 12/11 = encore la journee comptable du 11/11 : le cash est rattache a PREV.
         self.assertEqual(r.status_code, 200, r.content)
-        self.assertEqual([(x['date'], x['total_cash_sales']) for x in r.data], [(str(D), '500.00')])
+        self.assertEqual([(x['date'], x['total_cash_sales']) for x in r.data], [(str(PREV), '500.00')])
 
     def test_vente_solde_exclue_du_credit_de_daily_summary(self):
         # BUG-275 (complément) : la décote d'une VENTE SOLDE n'est jamais une créance.
-        with _now(10, 0):
+        with _now(13, 0):  # BUG-1130 : 13:00 = journee D
             iid = self.sale(qty=2, pay=500, is_soldee=True).data['id']   # 2 x 75 % du prix, paiement partiel
             self.assertEqual(self.deliver(iid).status_code, 200)
             rows = _api(self.gerant).get(INV + 'daily_summary/', {'date': str(D)}).data
@@ -347,9 +362,9 @@ class FrontiereDeMinuitTests(Base):
             g = _api(self.gerant)
             ds = {d: g.get(INV + 'daily_summary/', {'date': str(d)}).data for d in (PREV, D)}
             bs = {d: g.get(INV + 'bread_summary/', {'date': str(d)}).data['grand_total_qty'] for d in (PREV, D)}
-        # `daily_summary` range la facture au 11/11 (invoice_date), `bread_summary`
-        # (et le rapport facturier / la cloture) au 12/11 (delivered_at).
+        # `daily_summary`, `bread_summary` (et le rapport facturier / la cloture) rangent la facture
+        # par la journee comptable de la LIVRAISON : 00:05 le 12/11 = journee du 11/11 (BUG-1130).
         jour_daily = [d for d in (PREV, D) if any(r['count'] for r in ds[d])]
         jour_pains = [d for d in (PREV, D) if bs[d]]
         self.assertEqual(jour_daily, jour_pains)
-        self.assertEqual(jour_daily, [D])   # BUG-275 : jour de LIVRAISON
+        self.assertEqual(jour_daily, [PREV])   # BUG-275 : jour de LIVRAISON, midi a midi

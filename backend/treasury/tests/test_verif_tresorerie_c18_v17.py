@@ -195,9 +195,10 @@ class Journee18(Base13):
         self.assertEqual([e.running_balance for e in entries], [Dc('67500'), Dc('102500')])
         self.assertEqual({e.piece_number for e in entries},
                          {f"VC-C1-{d1:%Y%m%d}", f"VC-C2-{d1:%Y%m%d}"})
-        # le jour 1 valide ne debloque pas le jour 2 (closure-status du jour courant)
+        # BUG-1130 (midi a midi) : closure-status porte sur la journee TERMINEE (ici le jour 1,
+        # heure de cloture 00:00) : validee -> ventes debloquees ; le jour 2 sera exige a sa fin.
         st = self._status(self.dirn, self.n1)
-        self.assertEqual((st['blocked'], st['validated'], st['closure_date']), (True, False, str(d2)))
+        self.assertEqual((st['blocked'], st['validated'], st['closure_date']), (False, True, str(d1)))
         # ---- jour 2 ----
         self.report(self.n1, 'A', '20000', date=d2)
         disputed = self.transfer(50, 48, frm=self.n2, to=self.n1)
@@ -219,8 +220,8 @@ class Journee18(Base13):
         r = push_client(raw2).post(PUSH, {'batch_id': str(uuid.uuid4()), 'records': {CLO: [clo]}}, format='json')
         self.assertEqual(r.status_code, 200, r.content)
         self.assertTrue(CashClosure.objects.filter(pk=clo['id']).exists(), r.content)
-        # validation + versements ; ventes de n1 toujours bloquees avant la validation de n1
-        self.assertTrue(self._status(self.dirn, self.n1)['blocked'])
+        # validation + versements (BUG-1130 : la journee 1 validee ne bloque plus les ventes du jour 2)
+        self.assertFalse(self._status(self.dirn, self.n1)['blocked'])
         for cid in (c3.json()['id'], clo['id']):
             self.assertEqual(self.valider(cid).status_code, 200)
             self.assertEqual(self.verser(cid).status_code, 201)

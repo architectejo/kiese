@@ -174,13 +174,14 @@ class Node(models.Model):
         )
     )
     team_rotation_enabled = models.BooleanField(
-        default=False,
-        db_default=False,
+        default=True,
+        db_default=True,
         verbose_name=_("Rotation d'équipes active"),
         help_text=_(
             "BUG-161 : si activé, la facturation est bloquée tant que l'équipe "
-            "de service de la journée de travail n'est pas désignée. Désactivé "
-            "par défaut (comportement historique)."
+            "de service de la journée de travail n'est pas désignée. Q-017 "
+            "(réponse client 2026-11-24) : ACTIVÉ par défaut, toutes les "
+            "boulangeries sont en rotation de 24 h (relève 12:00 par défaut)."
         )
     )
     block_sales_after_closure = models.BooleanField(

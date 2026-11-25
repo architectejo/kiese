@@ -126,9 +126,9 @@ class BreadSummaryTests(Base):
         r = direction.get(INV + 'bread_summary/', {'date': d, 'node': self.other_node.pk})
         self.assertEqual(r.data['grand_total_qty'], 0)
 
-    def test_suit_le_jour_calendaire_en_rotation(self):
-        # BUG-247 (décision 2026-11-12) : même en rotation, le récapitulatif
-        # suit le JOUR CALENDAIRE (minuit à minuit), pas la relève.
+    def test_suit_la_journee_de_midi_a_midi_en_rotation(self):
+        # BUG-1130 (décision 2026-11-24, remplace BUG-247 jour calendaire) : le récapitulatif
+        # suit la JOURNÉE COMPTABLE de midi à midi : une livraison à 03:00 est de la veille.
         from datetime import datetime
         from core.workday import work_date_for, shift_date
         from production.models import DailyTeamAssignment
@@ -140,9 +140,9 @@ class BreadSummaryTests(Base):
         inst = timezone.make_aware(datetime.combine(wd, time(3, 0)), timezone.get_current_timezone())
         self._delivered(inst)
         resp = self.api.get(INV + 'bread_summary/', {'date': str(wd)})
-        self.assertEqual(resp.data['grand_total_qty'], 2)
-        resp = self.api.get(INV + 'bread_summary/', {'date': str(wd - timedelta(days=1))})
         self.assertEqual(resp.data['grand_total_qty'], 0)
+        resp = self.api.get(INV + 'bread_summary/', {'date': str(wd - timedelta(days=1))})
+        self.assertEqual(resp.data['grand_total_qty'], 2)
 
     def test_date_invalide_400(self):
         self.assertEqual(self.api.get(INV + 'bread_summary/', {'date': 'n/a'}).status_code, 400)

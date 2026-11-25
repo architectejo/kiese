@@ -245,13 +245,13 @@ class RestesDeJourneeTests(_Base):
         self._snap(self.k1, PREV, 'B', 2)       # reste d'hier de la journée = 2
         self._snap(self.k1, D, 'A', 20)
         self._snap(self.k1, D, 'B', 6)          # reste du jour = 6 (équipe B en dernier)
-        with _now(10):
+        with _now(13):  # BUG-1130 : 13:00 = dans la journee comptable D (10:00 serait la veille)
             r = cl(self.f1).post('/api/sales/invoices/', {
                 'client': str(client.pk), 'payment_type': 'CASH', 'payment_amount': 500 * 30,
                 'lines': [{'bread_price': self.bp.pk, 'quantity': 30}]}, format='json')
         self.assertEqual(r.status_code, 201, r.data)
         Invoice.objects.filter(pk=r.data['id']).update(
-            status=Invoice.Status.DELIVERED, delivered_at=_at(D, 10, 5), invoice_date=D)
+            status=Invoice.Status.DELIVERED, delivered_at=_at(D, 13, 5), invoice_date=D)
         r = cl(self.g1).get('/api/production/daily-closure/', {'date': str(D)})
         self.assertEqual(r.status_code, 200, r.data)
         row = next(c for c in r.data['categories'] if c['bread_price'] == self.bp.pk)
@@ -276,13 +276,19 @@ class ClotureAutomatiqueTests(_Base):
         self.client_obj = make_client(self.k1)
 
     def _sale(self, qty=7, d=D):
-        with _now(9, 0, d):
+        # BUG-1130 (midi a midi) : la journee `d` se termine a d+1 17:00 (cloture de K1) ; la vente est
+        # faite a 18:00 de `d` (dans la journee) et, le verrou etant actif, la cloture de la journee
+        # precedente est supposee validee.
+        from treasury.models import CashClosure
+        CashClosure.objects.get_or_create(
+            node=self.k1, date=d - timedelta(days=1), defaults={'is_validated': True, 'node_origin': 'K1'})
+        with _now(18, 0, d):
             r = cl(self.f1).post('/api/sales/invoices/', {
                 'client': str(self.client_obj.pk), 'payment_type': 'CASH', 'payment_amount': 500 * qty,
                 'lines': [{'bread_price': self.bp.pk, 'quantity': qty}]}, format='json')
         self.assertEqual(r.status_code, 201, r.data)
         Invoice.objects.filter(pk=r.data['id']).update(
-            status=Invoice.Status.DELIVERED, delivered_at=_at(d, 9, 5), invoice_date=d)
+            status=Invoice.Status.DELIVERED, delivered_at=_at(d, 18, 5), invoice_date=d)
 
     def _session(self, team='A', sacks='1.50', closed=False, auto=True, d=D, node=None):
         node = node or self.k1
@@ -297,14 +303,14 @@ class ClotureAutomatiqueTests(_Base):
         s = self._session()
         self._sale()
         physique = BreadStock.objects.get(node=self.k1, bread_price=self.bp).qty_available
-        r1 = auto_close_day(self.k1, D, now=_at(D, 18, 0))
+        r1 = auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 18, 0))
         self.assertEqual(r1['closed'], [s.pk])
         self.assertEqual(DailyBreadStockSnapshot.objects.get(node=self.k1, date=D, team='A', bread_price=self.bp).qty_at_close,
                          max(0, physique))
         counts = (ActivityLog.objects.count(), SystemNotification.objects.count(),
                   DailyBreadStockSnapshot.objects.count(), BreadDisposal.objects.count())
         for _ in range(3):
-            self.assertEqual(auto_close_day(self.k1, D, now=_at(D, 18, 30))['closed'], [])
+            self.assertEqual(auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 18, 30))['closed'], [])
         self.assertEqual(counts, (ActivityLog.objects.count(), SystemNotification.objects.count(),
                                   DailyBreadStockSnapshot.objects.count(), BreadDisposal.objects.count()))
 
@@ -312,7 +318,7 @@ class ClotureAutomatiqueTests(_Base):
         s = self._session(closed=True)
         DailyBreadStockSnapshot.objects.create(node=self.k1, bread_price=self.bp, date=D, team='A', qty_at_close=3)
         self._sale()
-        res = auto_close_day(self.k1, D, now=_at(D, 20, 0))
+        res = auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 20, 0))
         self.assertEqual(res['closed'], [])
         self.assertEqual(DailyBreadStockSnapshot.objects.get(node=self.k1, date=D, team='A').qty_at_close, 3)
 
@@ -323,19 +329,19 @@ class ClotureAutomatiqueTests(_Base):
                                      disposal_type=BreadDisposal.DisposalType.REMAINING, quantity=13)
         BreadDisposal.objects.create(node=self.k1, session=s, bread_price=self.bp,
                                      disposal_type=BreadDisposal.DisposalType.DECLASSED, quantity=2, unit_price_sold=100)
-        auto_close_day(self.k1, D, now=_at(D, 18, 0))
+        auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 18, 0))
         self.assertEqual(BreadDisposal.objects.get(session=s, bread_price=self.bp2, disposal_type='REMAINING').quantity, 13)
         self.assertEqual(DailyBreadStockSnapshot.objects.get(node=self.k1, date=D, bread_price=self.bp2).qty_at_close, 13)
         self.assertEqual(BreadDisposal.objects.get(session=s, disposal_type='DECLASSED').quantity, 2)
 
     def test_pas_de_cloture_sans_livraison_ou_a_zero_sac_ou_sans_production(self):
         a = self._session('A')
-        self.assertEqual(auto_close_day(self.k1, D, now=_at(D, 19, 0))['closed'], [])   # aucune livraison
+        self.assertEqual(auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 19, 0))['closed'], [])   # aucune livraison
         a.refresh_from_db()
         self.assertFalse(a.is_closed)
         self._sale()
         zero = self._session('B', sacks='0.00')
-        res = auto_close_day(self.k1, D, now=_at(D, 19, 0))
+        res = auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 19, 0))
         self.assertEqual(res['closed'], [a.pk])
         reasons = {x['session']: x['reason'] for x in res['skipped']}
         self.assertEqual(reasons[zero.pk], "fournée à zéro sac")
@@ -345,7 +351,7 @@ class ClotureAutomatiqueTests(_Base):
     def test_fournee_manuelle_sans_ligne_non_cloturee(self):
         manual_vide = self._session('A', auto=False)
         self._sale()
-        res = auto_close_day(self.k1, D, now=_at(D, 19, 0))
+        res = auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 19, 0))
         self.assertEqual(res['closed'], [])
         self.assertEqual(res['skipped'][0]['reason'], "aucune production déclarée")
         manual_vide.refresh_from_db()
@@ -354,20 +360,20 @@ class ClotureAutomatiqueTests(_Base):
     def test_inactive_sans_interrupteur_ou_avant_delai_ou_siege_ou_jour_futur(self):
         s = self._session()
         self._sale()
-        self.assertFalse(auto_close_day(self.k1, D, now=_at(D, 17, 29))['due'])
-        self.assertTrue(auto_close_day(self.k1, D, now=_at(D, 17, 30))['due'] or True)
+        self.assertFalse(auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 17, 29))['due'])
+        self.assertTrue(auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 17, 30))['due'] or True)
         s.refresh_from_db()
         self.assertTrue(s.is_closed)   # 17:30 = heure + 30 min : due
         s2 = self._session('B')
         self.k1.block_sales_after_closure = False
         self.k1.save()
-        res = auto_close_day(self.k1, D, now=_at(D, 23, 0))
+        res = auto_close_day(self.k1, D, now=_at(D + timedelta(days=1), 23, 0))
         self.assertFalse(res['due'])
         s2.refresh_from_db()
         self.assertFalse(s2.is_closed)
         self.k1.block_sales_after_closure = True
         self.k1.save()
-        self.assertFalse(auto_close_day(self.k1, D + timedelta(days=2), now=_at(D, 23, 0))['due'])
+        self.assertFalse(auto_close_day(self.k1, D + timedelta(days=2), now=_at(D + timedelta(days=1), 23, 0))['due'])
 
     def test_isolation_par_boulangerie_commande_et_due_days(self):
         self.k2.block_sales_after_closure = True
@@ -376,7 +382,7 @@ class ClotureAutomatiqueTests(_Base):
         s1 = self._session()
         s2 = self._session('A', node=self.k2)
         self._sale()
-        auto_close_due_days(self.k1, now=_at(D, 19, 0))
+        auto_close_due_days(self.k1, now=_at(D + timedelta(days=1), 19, 0))
         s1.refresh_from_db()
         s2.refresh_from_db()
         self.assertTrue(s1.is_closed)
@@ -386,7 +392,7 @@ class ClotureAutomatiqueTests(_Base):
     def test_shift_end_status_roles_et_isolation(self):
         s = self._session()
         self._sale()
-        with _now(19, 0):
+        with _now(19, 0, d=D + timedelta(days=1)):
             # le livreur et le facturier de K2 ne déclenchent que SA boulangerie
             r = cl(self.f2).get('/api/production/sessions/shift-end-status/', {'node': 'K1'})
             self.assertEqual(r.status_code, 200, r.content)

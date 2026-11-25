@@ -23,8 +23,8 @@ from blockchain.models import TamperAlert, BlockchainSnapshot
 
 class RunCheckIntegrationTests(TestCase):
     def setUp(self):
-        self.node = Node.objects.create(code='K1', name='K1 - TABORA')
-        self.node2 = Node.objects.create(code='K2', name='K2 - COQ')
+        self.node = Node.objects.create(code='K1', name='K1 - TABORA', team_rotation_enabled=False)
+        self.node2 = Node.objects.create(code='K2', name='K2 - COQ', team_rotation_enabled=False)
         self.admin = User.objects.create_user(
             username='admin-test', password='x', role=User.Role.ADMIN,
         )

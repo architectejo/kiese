@@ -27,7 +27,10 @@ VALUES = (20000, 10000, 5000, 1000, 500, 200, 100, 50)
 
 
 def today():
-    return timezone.localdate()
+    # BUG-1130 : journée comptable de midi à midi (12:00 par défaut), pas le jour calendaire
+    # (sinon les tests lancés entre 00:00 et 12:00 daterait « aujourd'hui » dans le futur).
+    from core.workday import work_date_for
+    return work_date_for(None)
 
 
 def cl(user=None):

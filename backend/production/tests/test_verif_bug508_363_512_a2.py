@@ -33,7 +33,7 @@ class Bug508FullPriceTests(R._ReportBase):
 
     def test_rg_soldee_all_prices_multiple_changes_stable(self):
         bps = {p: make_bread_price(f'Z{p}', f'Pain {p} Z', p) for p in PRICES}
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(bp, 200) for bp in bps.values()])
             for bp in bps.values():
                 self._inv([(bp, 7)], code='RG', soldee=True)
@@ -45,7 +45,7 @@ class Bug508FullPriceTests(R._ReportBase):
                 self.assertEqual(set(got), {str(D(7 * p).quantize(D('0.01')))}, (p, got))
 
     def test_plain_rg_and_normal_sale_stable(self):
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 100)])
             self._inv([(self.bp300, 5)], code='RG')
             self._inv([(self.bp300, 4)])
@@ -59,7 +59,7 @@ class Bug508FullPriceTests(R._ReportBase):
 
     def test_loss_all_prices_stable_and_exact(self):
         bps = {p: make_bread_price(f'L{p}', f'Pain {p} L', p) for p in PRICES}
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(bp, 200) for bp in bps.values()])
             for bp in bps.values():
                 self._inv([(bp, 8)], soldee=True)
@@ -72,7 +72,7 @@ class Bug508FullPriceTests(R._ReportBase):
                 self.assertEqual(a, b, p)
 
     def test_line_resave_keeps_full_price(self):
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 100)])
             inv = self._inv([(self.bp300, 10)], soldee=True, deliver=False)
             self._retarif(self.bp300, 700)
@@ -85,7 +85,7 @@ class Bug508FullPriceTests(R._ReportBase):
             self.assertEqual(ln.loss, D('450'))
 
     def test_new_invoice_after_change_uses_new_full_price_old_untouched(self):
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 100)])
             old = self._inv([(self.bp300, 10)], code='RG', soldee=True)
             self._retarif(self.bp300, 400)
@@ -98,7 +98,7 @@ class Bug508FullPriceTests(R._ReportBase):
     @expectedFailure  # BUG-513
     def test_past_day_produced_value_after_tariff_change(self):
         """Valorisation de la production d'un jour passe : relit-elle le catalogue ?"""
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 100)])
             b = self._cat(self._report(R.J), self.bp300)['produit']
             self._retarif(self.bp300, 400)

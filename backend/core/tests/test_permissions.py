@@ -59,8 +59,8 @@ class BaseNodeTestCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code="K1", name="DEMO K1 TABORA")
-        cls.k2 = Node.objects.create(code="K2", name="DEMO K2 COQ")
+        cls.k1 = Node.objects.create(code="K1", name="DEMO K1 TABORA", team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code="K2", name="DEMO K2 COQ", team_rotation_enabled=False)
 
         cls.admin = make_user("ADMIN", node=None)
         cls.direction = make_user("DIRECTION", node=None)
@@ -639,7 +639,7 @@ class BreadTransferIsolationTests(BaseNodeTestCase):
     l'utilisateur appartient à from_node ou to_node."""
 
     def setUp(self):
-        self.k3 = Node.objects.create(code="K3", name="DEMO K3 ATHENEE")
+        self.k3 = Node.objects.create(code="K3", name="DEMO K3 ATHENEE", team_rotation_enabled=False)
         self.gerant_k3 = make_user("GERANT", node=self.k3)
         self.transfer_k2_k3 = BreadTransfer.objects.create(
             from_node=self.k3, to_node=self.k2,

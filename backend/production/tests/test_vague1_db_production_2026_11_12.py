@@ -375,5 +375,5 @@ class ClassicTeamAssignmentTests(_Base):
                    return_value=timezone.make_aware(datetime(2026, 11, 12, 5, 0), timezone.get_current_timezone())):
             ta = self.api.get('/api/production/team-assignment/').json()
             oc = self.api.get('/api/production/opening-confirmation/').json()
-        self.assertEqual(oc['work_date'], '2026-11-12')
+        self.assertEqual(oc['work_date'], '2026-11-11')  # BUG-1130 : 05:00 = journée comptable du 11/11
         self.assertEqual(ta['work_date'], oc['work_date'])

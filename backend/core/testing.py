@@ -16,7 +16,7 @@ _user_seq = [0]
 
 
 def make_node(code=None, name=None, sac_value_fc=None,
-              social=Decimal('0.00'), card_fee=Decimal('0.00')):
+              social=Decimal('0.00'), card_fee=Decimal('0.00'), rotation=False):
     # BUG-417 : les defauts reels d'une nouvelle boulangerie sont 2000 / 1000 FC
     # (Node.monthly_social_contribution / card_fee_fc). Les fabriques de test
     # restent neutres (0) pour que les scenarios existants calculent a la main
@@ -24,8 +24,12 @@ def make_node(code=None, name=None, sac_value_fc=None,
     _node_seq[0] += 1
     code = code or f"TK{_node_seq[0]}"
     name = name or f"Boulangerie Test {code}"
+    # Q-017 (2026-11-24) : en production `Node.team_rotation_enabled` vaut True par defaut.
+    # La fabrique reste neutre (rotation=False) pour ne pas changer les scenarios historiques
+    # (hors rotation) ; les tests de rotation passent rotation=True ou activent le drapeau.
     return Node.objects.create(code=code, name=name, sac_value_fc=sac_value_fc,
-                               monthly_social_contribution=social, card_fee_fc=card_fee)
+                               monthly_social_contribution=social, card_fee_fc=card_fee,
+                               team_rotation_enabled=rotation)
 
 
 def make_user(role='FACTURIER', node=None, team='A', username=None, password='test-pass-123'):

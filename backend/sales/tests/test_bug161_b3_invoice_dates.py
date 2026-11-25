@@ -1,8 +1,9 @@
 """
 BUG-161 (B3) / BUG-189 / BUG-247 : dates des factures = date de travail du nœud
-(`core.workday.work_date_for`) = JOUR CALENDAIRE local (jamais la date UTC ni
-celle du système), avec ou sans rotation (décision client 2026-11-12). En
-rotation seule l'ÉQUIPE change à la relève (désignation par période).
+(`core.workday.work_date_for`) = JOURNÉE COMPTABLE de midi à midi (BUG-1130,
+décision client Q-018 du 2026-11-24, remplace le jour calendaire du 2026-11-12),
+jamais la date UTC ni celle du système, avec ou sans rotation. Tests adaptés en
+BUG-1130 : avant 12:00 la date est celle de la veille.
 """
 from datetime import timezone as dt_timezone
 from datetime import date, datetime, time
@@ -71,13 +72,14 @@ class _Base(TestCase):
 
 
 class NoRotationEquivalenceTests(_Base):
-    def test_invoice_date_and_receipt_use_local_date_at_00_30(self):
+    def test_invoice_date_and_receipt_use_business_day_at_00_30(self):
+        # BUG-1130 : 00:30 le 12/11 = journée comptable du 11/11 (midi à midi).
         with _now(0, 30):
             r = self._sale()
         self.assertEqual(r.status_code, 201, r.data)
         inv = Invoice.objects.get(pk=r.data['id'])
-        self.assertEqual(inv.invoice_date, D)
-        self.assertTrue(inv.receipt_number.startswith('K1-20261112-'), inv.receipt_number)
+        self.assertEqual(inv.invoice_date, PREV)
+        self.assertTrue(inv.receipt_number.startswith('K1-20261111-'), inv.receipt_number)
 
     def test_invoice_date_at_noon_unchanged(self):
         with _now(12, 0):
@@ -87,23 +89,23 @@ class NoRotationEquivalenceTests(_Base):
         self.assertTrue(inv.receipt_number.startswith('K1-20261112-0001'))
 
     def test_future_date_refused_and_today_accepted_at_00_30(self):
-        with _now(0, 30):
-            self.assertEqual(self._sale(invoice_date='2026-11-13').status_code, 400)
-            self.assertEqual(self._sale(invoice_date='2026-11-12').status_code, 201)
+        with _now(0, 30):  # journée comptable = 11/11
+            self.assertEqual(self._sale(invoice_date='2026-11-12').status_code, 400)
+            self.assertEqual(self._sale(invoice_date='2026-11-11').status_code, 201)
 
     def test_past_date_refused_without_backdating_setting(self):
-        with _now(0, 30):
-            r = self._sale(invoice_date='2026-11-11')
+        with _now(0, 30):  # journée comptable = 11/11 : le 10/11 est passé
+            r = self._sale(invoice_date='2026-11-10')
         self.assertEqual(r.status_code, 400)
 
     def test_repayment_not_backdated_at_00_30(self):
-        with _now(0, 30), patch('sales.views._warn_if_commission_period_locked') as warn:
+        with _now(12, 30), patch('sales.views._warn_if_commission_period_locked') as warn:
             r = self._repay()
         self.assertEqual(r.status_code, 201, r.data)
         warn.assert_not_called()
 
     def test_pending_deliveries_default_date_is_local_date(self):
-        with _now(0, 30):
+        with _now(12, 30):
             r = self._sale()
             self.assertEqual(r.status_code, 201)
             resp = _api(self.gerant).get(INV + 'pending_deliveries/')
@@ -111,7 +113,7 @@ class NoRotationEquivalenceTests(_Base):
         self.assertEqual(len(resp.data), 1)
 
     def test_daily_summary_default_date_is_local_date(self):
-        with _now(0, 30):
+        with _now(12, 30):
             r = self._sale()
             Invoice.objects.filter(pk=r.data['id']).update(
                 status=Invoice.Status.DELIVERED, delivered_at=timezone.now())   # BUG-275 : jour de livraison
@@ -128,68 +130,70 @@ class RotationDatesTests(_Base):
         DailyTeamAssignment.objects.create(node=self.node, work_date=PREV, team='B')
         DailyTeamAssignment.objects.create(node=self.node, work_date=D, team='A')
 
-    def test_sale_at_03_00_carries_calendar_date_and_outgoing_team(self):
-        # BUG-247 : 03:00 = jour calendaire D (pas la veille) ; équipe = celle de la période en cours.
+    def test_sale_at_03_00_carries_business_day_and_outgoing_team(self):
+        # BUG-1130 : 03:00 le 12/11 = journée comptable du 11/11 ; équipe = celle de la période en cours.
         with _now(3, 0):
             r = self._sale()
         self.assertEqual(r.status_code, 201, r.data)
         inv = Invoice.objects.get(pk=r.data['id'])
-        self.assertEqual(inv.invoice_date, D)
+        self.assertEqual(inv.invoice_date, PREV)
         self.assertEqual(inv.team, 'B')
-        self.assertTrue(inv.receipt_number.startswith('K1-20261112-'), inv.receipt_number)
+        self.assertTrue(inv.receipt_number.startswith('K1-20261111-'), inv.receipt_number)
 
-    def test_team_change_at_12_00_does_not_change_date(self):
+    def test_team_and_date_change_together_at_12_00(self):
+        # BUG-1130 : à la relève (= clôture) l'équipe ET la journée comptable changent.
         with _now(11, 59):
             r1 = self._sale()
         with _now(12, 0):
             r2 = self._sale()
         i1, i2 = Invoice.objects.get(pk=r1.data['id']), Invoice.objects.get(pk=r2.data['id'])
-        self.assertEqual((i1.invoice_date, i1.team), (D, 'B'))
+        self.assertEqual((i1.invoice_date, i1.team), (PREV, 'B'))
         self.assertEqual((i2.invoice_date, i2.team), (D, 'A'))
-        self.assertTrue(i1.receipt_number.startswith('K1-20261112-'))
+        self.assertTrue(i1.receipt_number.startswith('K1-20261111-'))
         self.assertTrue(i2.receipt_number.startswith('K1-20261112-'))
 
-    def test_midnight_to_one_window_is_local_calendar_date(self):
-        # 00:30 locale = 23:30 UTC la veille : la date reste D (locale).
+    def test_midnight_to_one_window_is_local_business_day(self):
+        # 00:30 locale = 23:30 UTC la veille : jamais la date UTC ; BUG-1130 : journée du 11/11.
         with _now(0, 30):
             r = self._sale()
         inv = Invoice.objects.get(pk=r.data['id'])
-        self.assertEqual(inv.invoice_date, D)
+        self.assertEqual(inv.invoice_date, PREV)
         self.assertEqual(inv.team, 'B')
-        self.assertTrue(inv.receipt_number.startswith('K1-20261112-'))
+        self.assertTrue(inv.receipt_number.startswith('K1-20261111-'))
 
-    def test_midnight_crossing_changes_date_not_team(self):
+    def test_midnight_crossing_changes_neither_date_nor_team(self):
+        # BUG-1130 : minuit ne change plus rien (la journée traverse minuit).
         with _now(23, 59, PREV):
             r1 = self._sale()
         with _now(0, 1):
             r2 = self._sale()
         i1, i2 = Invoice.objects.get(pk=r1.data['id']), Invoice.objects.get(pk=r2.data['id'])
         self.assertEqual((i1.invoice_date, i1.team), (PREV, 'B'))
-        self.assertEqual((i2.invoice_date, i2.team), (D, 'B'))
+        self.assertEqual((i2.invoice_date, i2.team), (PREV, 'B'))
 
-    def test_calendar_date_is_accepted_after_midnight(self):
-        with _now(3, 0):
-            r = self._sale(invoice_date='2026-11-12')
+    def test_business_day_is_accepted_after_midnight(self):
+        with _now(3, 0):  # journée comptable = 11/11
+            r = self._sale(invoice_date='2026-11-11')
         self.assertEqual(r.status_code, 201, r.data)
 
     def test_future_calendar_date_refused(self):
-        with _now(3, 0):
-            r = self._sale(invoice_date='2026-11-13')
+        with _now(3, 0):  # journée comptable = 11/11 : le 12/11 est « futur »
+            r = self._sale(invoice_date='2026-11-12')
         self.assertEqual(r.status_code, 400)
         self.assertIn('future', r.data['detail'])
 
-    def test_current_calendar_date_is_not_backdated(self):
+    def test_current_business_day_is_not_backdated(self):
         with _now(3, 0), patch('sales.views._warn_if_commission_period_locked') as warn:
-            r = self._repay(invoice_date='2026-11-12')
+            r = self._repay(invoice_date='2026-11-11')
         self.assertEqual(r.status_code, 201, r.data)
         warn.assert_not_called()
 
-    def test_previous_calendar_date_is_backdated(self):
+    def test_previous_business_day_is_backdated(self):
         cfg = get_config()
         cfg.allow_backdated_sales = True
         cfg.save()
         with _now(3, 0), patch('sales.views._warn_if_commission_period_locked') as warn:
-            r = self._repay(invoice_date='2026-11-11')
+            r = self._repay(invoice_date='2026-11-10')
         self.assertEqual(r.status_code, 201, r.data)
         warn.assert_called_once()
 
@@ -202,22 +206,24 @@ class RotationDatesTests(_Base):
         inv = Invoice.objects.get(pk=r.data['id'])
         self.assertEqual(work_date_for(self.node, inv.delivered_at), OLDER)
 
-    def test_combine_date_with_now_time_rotation_is_calendar(self):
-        with _now(3, 0):
-            self.assertEqual(_combine_date_with_now_time(D, self.node), _at(D, 3, 0))
+    def test_combine_date_with_now_time_rotation_is_business_day(self):
+        # BUG-1130 : l'instant retombe DANS la journée comptable demandée, au même
+        # décalage depuis midi (03:00 = 15 h après midi de la veille).
+        with _now(3, 0):  # journée courante = 11/11
+            self.assertEqual(_combine_date_with_now_time(PREV, self.node), _at(D, 3, 0))
             moved = _combine_date_with_now_time(OLDER, self.node)
             self.assertEqual(work_date_for(self.node, moved), OLDER)
-            self.assertEqual(moved, _at(OLDER, 3, 0))
+            self.assertEqual(moved, _at(PREV, 3, 0))
         with _now(15, 0):
             self.assertEqual(_combine_date_with_now_time(PREV, self.node), _at(PREV, 15, 0))
             self.assertEqual(_combine_date_with_now_time(D, self.node), _at(D, 15, 0))
 
-    def test_combine_date_with_now_time_without_rotation_unchanged(self):
+    def test_combine_date_with_now_time_without_rotation_same_rule(self):
         plain = make_node(code='K9')
-        with _now(3, 0):
-            self.assertEqual(_combine_date_with_now_time(D, plain), _at(D, 3, 0))
-            self.assertEqual(_combine_date_with_now_time(D), _at(D, 3, 0))
-            self.assertEqual(_combine_date_with_now_time(PREV), _at(PREV, 3, 0))
+        with _now(3, 0):  # journée courante = 11/11
+            self.assertEqual(_combine_date_with_now_time(PREV, plain), _at(D, 3, 0))
+            self.assertEqual(_combine_date_with_now_time(PREV), _at(D, 3, 0))
+            self.assertEqual(_combine_date_with_now_time(OLDER), _at(PREV, 3, 0))
 
     def test_pending_deliveries_lists_current_calendar_date(self):
         with _now(3, 0):
@@ -226,7 +232,7 @@ class RotationDatesTests(_Base):
             resp = _api(self.gerant).get(INV + 'pending_deliveries/')
         self.assertEqual(len(resp.data), 1)
 
-    def test_adjust_takes_current_calendar_date(self):
+    def test_adjust_takes_current_business_day(self):
         with _now(3, 0):
             r = self._sale()
             inv = Invoice.objects.get(pk=r.data['id'])
@@ -237,5 +243,5 @@ class RotationDatesTests(_Base):
             }, format='json')
         self.assertEqual(adj.status_code, 201, adj.data)
         adjustment = Invoice.objects.get(pk=adj.data['id'])
-        self.assertEqual(adjustment.invoice_date, D)
-        self.assertTrue(adjustment.receipt_number.startswith('K1-20261112-'))
+        self.assertEqual(adjustment.invoice_date, PREV)
+        self.assertTrue(adjustment.receipt_number.startswith('K1-20261111-'))

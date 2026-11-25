@@ -45,7 +45,7 @@ recompute_v3_hash = _migration_0014.recompute_v3_hash
 
 
 def _make_node(code='K1', name='K1 - TABORA'):
-    return Node.objects.create(code=code, name=name)
+    return Node.objects.create(code=code, name=name, team_rotation_enabled=False)
 
 
 class IsCorrectionTamperingDetectedTests(TestCase):

@@ -5,6 +5,11 @@ jour calendaire (réouverture contrôlée de la session close, sans second
 rapport ni double comptage du reste). Couvre aussi la valeur théorique /
 manquant / excédent et les ventes consolidées pour deux équipes un même jour.
 Données fictives uniquement.
+
+BUG-1130 (journée comptable de midi à midi, Q-018 du 2026-11-24) : la relève de 12:00 termine la
+journée ET la fournée (plus de clôture silencieuse à minuit) ; la même équipe redésignée après la
+relève ouvre une NOUVELLE session sur la NOUVELLE journée (J+1) au lieu de rouvrir la session close.
+Scénarios adaptés : plus de réouverture de la session de la veille, un seul reste par (équipe, jour).
 """
 from datetime import date, datetime, time
 from datetime import timezone as dt_timezone
@@ -56,20 +61,21 @@ class _Base(TestCase):
         }, format='json')
 
     def _a_continues_then_handover(self):
-        """A produit le jour J, poursuit après minuit (J+1), est clôturée à la relève de J+1."""
+        """A produit la journée J, poursuit après minuit (rien ne se passe à minuit, BUG-1130) et est
+        clôturée à la relève de J+1 (12:00 + délai de grâce)."""
         with _now(13, 0):
             self._assign('A')
             self.assertEqual(self._produce('A').status_code, 201)
         with _now(0, 10, d=J1):
-            self.assertTrue(self.g.get(SHIFT).data['auto_closed'])
+            self.assertFalse(self.g.get(SHIFT).data.get('auto_closed', False))
         with _now(12, 40, d=J1):
             self.assertTrue(self.g.get(SHIFT).data['auto_closed'])
 
 
 class RedesignatedSameTeamTests(_Base):
-    def test_declare_after_redesignation_reopens_single_session(self):
+    def test_declare_after_redesignation_opens_single_session_of_new_day(self):
         self._a_continues_then_handover()
-        closed = ProductionSession.objects.get(node=self.node, team='A', date=J1)
+        closed = ProductionSession.objects.get(node=self.node, team='A', date=J)
         self.assertTrue(closed.is_closed)
         with _now(12, 45, d=J1):
             self._assign('A')
@@ -89,7 +95,10 @@ class RedesignatedSameTeamTests(_Base):
             self.assertFalse(self.g.get(SHIFT).data.get('auto_closed', False))
             s.refresh_from_db()
             self.assertFalse(s.is_closed)
-        self.assertTrue(ActivityLog.objects.filter(action="Réouverture Production").exists())
+        # BUG-1130 : la session de la journée J reste close (aucune réouverture de la veille).
+        closed.refresh_from_db()
+        self.assertTrue(closed.is_closed)
+        self.assertFalse(ActivityLog.objects.filter(action="Réouverture Production").exists())
 
     def test_opening_confirmation_after_redesignation(self):
         self._a_continues_then_handover()
@@ -136,29 +145,32 @@ class RedesignatedSameTeamTests(_Base):
             self._assign('B')
             r = self._produce('A', 5)
             self.assertEqual(r.status_code, 400)
-            s = ProductionSession.objects.get(node=self.node, team='A', date=J1)
+            s = ProductionSession.objects.get(node=self.node, team='A', date=J)
             self.assertTrue(s.is_closed)
+            self.assertFalse(ProductionSession.objects.filter(node=self.node, team='A', date=J1).exists())
 
 
 class TwoTeamsSameDayConsolidatedTests(_Base):
     def test_theoretical_manquant_excedent_and_consolidated_report(self):
-        # Équipe A : 1 sac (200 000) -> 300 pains de 500 = 150 000 : manquant 50 000.
-        with _now(9, 0):
+        # BUG-1130 : deux équipes = deux journées consécutives (midi à midi), un rapport chacune.
+        # Équipe A (journée J) : 1 sac (200 000) -> 300 pains de 500 = 150 000 : manquant 50 000.
+        with _now(13, 0):
             self._assign('A')
             self.assertEqual(self._produce('A', 300).status_code, 201)
-        # Équipe B après la relève : 1 sac -> 500 pains = 250 000 : excédent 50 000.
-        with _now(12, 40):
+        # Équipe B après la relève (journée J1) : 1 sac -> 500 pains = 250 000 : excédent 50 000.
+        with _now(12, 40, d=J1):
             self.assertTrue(self.g.get(SHIFT).data['auto_closed'])
             self._assign('B')
             self.assertEqual(self._produce('B', 500).status_code, 201)
         a = ProductionSession.objects.get(node=self.node, team='A', date=J)
-        b = ProductionSession.objects.get(node=self.node, team='B', date=J)
+        b = ProductionSession.objects.get(node=self.node, team='B', date=J1)
         self.assertEqual((a.theoretical_yield, a.total_fc_produced, a.yield_gap), (200000, 150000, -50000))
         self.assertEqual((b.theoretical_yield, b.total_fc_produced, b.yield_gap), (200000, 250000, 50000))
-        with _now(13, 0):
-            r = self.g.get('/api/production/daily-closure/', {'date': str(J)})
-            self.assertEqual(r.status_code, 200, r.data)
-            cat = {c['bread_price']: c for c in r.data['categories']}[self.bp.pk]
-            # un seul rapport consolidé : somme des deux équipes (pas de doublon)
-            self.assertEqual(cat['produit']['quantity'], 800)
-            self.assertEqual(ProductionSession.objects.filter(node=self.node, date=J).count(), 2)
+        with _now(13, 0, d=J1):
+            for day, qty in ((J, 300), (J1, 500)):
+                r = self.g.get('/api/production/daily-closure/', {'date': str(day)})
+                self.assertEqual(r.status_code, 200, r.data)
+                cat = {c['bread_price']: c for c in r.data['categories']}[self.bp.pk]
+                # un rapport par journée comptable (pas de doublon, pas de mélange)
+                self.assertEqual(cat['produit']['quantity'], qty)
+            self.assertEqual(ProductionSession.objects.filter(node=self.node).count(), 2)

@@ -7,6 +7,9 @@ actuel, devenu caduc depuis BUG-303). Données fictives uniquement.
 Journée de relève : 12:00 (rotation). Horloge simulée : `timezone.now` renvoie un
 datetime UTC aware ; Kinshasa = UTC+1 (00:30 local = 23:30 UTC la veille).
 Les attendus sont calculés à la main, pas recopiés depuis la vue.
+
+BUG-1130 (Q-018, midi à midi, 2026-11-24) : la journée comptable change à 12:00 ; les scénarios
+« 10:00 / 00:30 / minuit » sont adaptés (13:00 = journée du jour ; 00:30 = journée de la veille).
 """
 from datetime import date, datetime, time
 from datetime import timezone as dt_timezone
@@ -153,14 +156,14 @@ class Bug190Tests(_Base):
         with _now(23, 50):
             self.assertEqual(self._produce(self.bp500, 5).status_code, 201)
         stock = BreadStock.objects.get(node=self.node, bread_price=self.bp500).qty_available
-        with _now(0, 40, d=J1):
+        with _now(12, 40, d=J1):  # BUG-1130 : minuit ne clôture rien ; la relève de 12:00 + grâce, si
             for _ in range(5):
                 self.g.get(SHIFT)
         self.assertEqual(BreadStock.objects.get(node=self.node, bread_price=self.bp500).qty_available, stock)
         # les sessions de la date J sont toutes clôturées
         self.assertFalse(ProductionSession.objects.filter(node=self.node, date=J, is_closed=False).exists())
         # un reste par date et par catégorie dans le rapport de J (pas de somme doublée)
-        with _now(0, 45, d=J1):
+        with _now(12, 45, d=J1):
             rep = self.g.get(CLOSURE, {'date': str(J)})
         self.assertEqual(rep.status_code, 200, rep.data)
         row = self._row(rep, self.bp500)
@@ -323,7 +326,7 @@ class Bug192Tests(_Base):
             ok = self._produce(self.bp500, 5)
             self.assertEqual(ok.status_code, 201, ok.data)
         s = ProductionSession.objects.get()
-        self.assertEqual((s.team, s.date), ('B', J1))
+        self.assertEqual((s.team, s.date), ('B', J))  # BUG-1130 : 10:00 = journée comptable J
 
     def test_explicit_past_date_other_team_still_accepted_retroactive(self):
         """Saisie rétroactive (date passée explicite) : conservée, ni refusée ni détournée."""
@@ -406,6 +409,7 @@ class Bug193Tests(_Base):
         return self._row(rep, self.bp300)[key]['quantity']
 
     def test_confirmed_at_00_30_local_belongs_to_new_local_day_not_utc_day(self):
+        # BUG-1130 : 00:30 le J1 = journée comptable J (midi à midi), ni la date UTC ni le jour calendaire.
         for rot in (True, False):
             with self.subTest(rotation=rot):
                 from production.models import BreadTransfer
@@ -416,10 +420,10 @@ class Bug193Tests(_Base):
                 if rot:
                     self._rotation(other)
                 with _now(14, 0, d=J1):
-                    self.assertEqual(self._q(self.g, J1, 'appro_recu', self.node), 15)
-                    self.assertEqual(self._q(self.g, J, 'appro_recu', self.node), 0)
-                    self.assertEqual(self._q(a2, J1, 'appro_effectue', other), 15)
-                    self.assertEqual(self._q(a2, J, 'appro_effectue', other), 0)
+                    self.assertEqual(self._q(self.g, J, 'appro_recu', self.node), 15)
+                    self.assertEqual(self._q(self.g, J1, 'appro_recu', self.node), 0)
+                    self.assertEqual(self._q(a2, J, 'appro_effectue', other), 15)
+                    self.assertEqual(self._q(a2, J1, 'appro_effectue', other), 0)
 
     def test_confirmed_at_23_50_local_stays_on_same_day(self):
         other, a2 = self._confirmed(23, 50, J)
@@ -433,9 +437,10 @@ class Bug193Tests(_Base):
         with _now(14, 0, d=J1):
             r1 = self.g.get(CLOSURE, {'date': str(J1)})
             r0 = self.g.get(CLOSURE, {'date': str(J)})
-        # appro reçu 15 x 300 = 4500 RETRANCHÉ du total du jour J1 uniquement (BUG-675)
-        self.assertEqual(Decimal(r1.data['totals']['total_du_jour_fc']), Decimal('-4500.00'))
-        self.assertEqual(Decimal(r0.data['totals']['total_du_jour_fc']), Decimal('0.00'))
+        # appro reçu 15 x 300 = 4500 RETRANCHÉ du total de la journée J uniquement (BUG-675 ; BUG-1130 :
+        # confirmé à 00:30 le J1 = journée comptable J)
+        self.assertEqual(Decimal(r0.data['totals']['total_du_jour_fc']), Decimal('-4500.00'))
+        self.assertEqual(Decimal(r1.data['totals']['total_du_jour_fc']), Decimal('0.00'))
 
 
 # --------------------------------------------------------------------------
@@ -681,7 +686,7 @@ class _ReportBase(TestCase):
 
 class Bug185Tests(_ReportBase):
     def test_mix_of_plain_and_soldee_rg_and_real_soldee_sale(self):
-        with _now(10):
+        with _now(13):
             self._session('A', J, [(self.bp300, 100)])
             self._inv([(self.bp300, 10)], code='RG')                 # 3000 plein
             self._inv([(self.bp300, 10)], code='RG', soldee=True)    # 3000 plein (pas 2250, pas double)
@@ -695,18 +700,18 @@ class Bug185Tests(_ReportBase):
         self.assertEqual(data['totals']['total_breads_billed'], 40)
 
     def test_rg_soldee_belongs_to_local_day_at_00_30(self):
-        with _now(0, 30, d=J1):
-            self._session('A', J1, [(self.bp300, 50)])
+        with _now(0, 30, d=J1):  # BUG-1130 : 00:30 = journée comptable J (midi à midi)
+            self._session('A', J, [(self.bp300, 50)])
             self._inv([(self.bp300, 10)], code='RG', soldee=True)
-            r1 = self._report(J1)
-            r0 = self._report(J)
+            r1 = self._report(J)
+            r0 = self._report(J1)
         self.assertEqual(self._cat(r1, self.bp300)['regularisation']['fc'], '3000.00')
         self.assertEqual(self._cat(r0, self.bp300)['regularisation']['fc'], '0.00')
 
     def test_rg_soldee_full_price_follows_frozen_price_after_tariff_change(self):
         """Une RG soldée est valorisée « prix plein ». Après un changement de tarif, le rapport d'une
         journée passée ne doit pas bouger (comme une RG non soldée, qui lit le prix figé)."""
-        with _now(10):
+        with _now(13):
             self._session('A', J, [(self.bp300, 50)])
             self._inv([(self.bp300, 10)], code='RG', soldee=True)
             self._inv([(self.bp300, 10)], code='RG')
@@ -723,7 +728,7 @@ class Bug186Tests(_ReportBase):
         return sum(Decimal(x['pct']) for x in data['totals'][key])
 
     def test_sum_is_100_with_carryover_two_categories(self):
-        with _now(10):
+        with _now(13):
             r = self.g.post(OPENING, {'team': 'A', 'date': str(J),
                                       'lines': [{'bread_price': self.bp500.pk, 'qty': 8}]}, format='json')
             self.assertEqual(r.status_code, 200, r.data)
@@ -737,21 +742,21 @@ class Bug186Tests(_ReportBase):
 
     def test_three_categories_sum_within_rounding(self):
         bp = make_bread_price('VR_200', 'Pain 200 VR', 200)
-        with _now(10):
+        with _now(13):
             self._session('A', J, [(self.bp300, 10), (self.bp500, 10), (bp, 10)])
             data = self._report(J)
         for key in ('repartition_pct_par_quantite',):
             self.assertLessEqual(abs(self._sum(data, key) - Decimal('100')), Decimal('0.02'), self._sum(data, key))
 
     def test_sacs_only_session_no_division_error(self):
-        with _now(10):
+        with _now(13):
             r = self.g.post(SESSIONS, {'team': 'A', 'date': str(J), 'flour_sacks_used': '2.00'}, format='json')
             self.assertIn(r.status_code, (201, 400), r.data)
             data = self._report(J)
         self.assertTrue(all(Decimal(x['pct']) == 0 for x in data['totals']['repartition_pct_par_quantite']))
 
     def test_two_teams_same_day_sum_100(self):
-        with _now(10):
+        with _now(13):
             self._session('A', J, [(self.bp300, 70)])
             self._session('B', J, [(self.bp300, 30), (self.bp500, 100)])
             data = self._report(J)
@@ -760,7 +765,7 @@ class Bug186Tests(_ReportBase):
 
 class Bug177ClosureTests(_ReportBase):
     def test_ns_pending_counted_sum_of_order_total_cancelled_excluded(self):
-        with _now(10):
+        with _now(13):
             a = self._inv([(self.bp300, 10), (self.bp500, 4)], code='NS')   # 3000 + 2000 = 5000
             b = self._inv([(self.bp300, 5)], code='NS')                      # 1500
             c = self._inv([(self.bp300, 100)], code='NS')                    # annulée
@@ -775,9 +780,9 @@ class Bug177ClosureTests(_ReportBase):
         self.assertEqual(data['totals']['total_breads_billed'], 0)
 
     def test_ns_not_deleted_nor_expired_after_12h_and_other_day_excluded(self):
-        with _now(10):
+        with _now(13):
             self._inv([(self.bp300, 10)], code='NS')
-        with _now(10, d=J1):   # 24 h plus tard
+        with _now(13, d=J1):   # 24 h plus tard
             r = self.g.post('/api/sales/invoices/cleanup_expired/')
             self.assertEqual(r.status_code, 200, r.data)
             self.assertEqual(r.data['expired'], 0, r.data)
@@ -787,17 +792,17 @@ class Bug177ClosureTests(_ReportBase):
         self.assertEqual(self._cat(d1, self.bp300)['non_servi']['fc'], '0.00')
 
     def test_ns_at_00_30_local_is_new_day(self):
-        with _now(0, 30, d=J1):
+        with _now(0, 30, d=J1):  # BUG-1130 : 00:30 = encore la journée comptable J
             self._inv([(self.bp300, 10)], code='NS')
-            d1 = self._report(J1)
-            d0 = self._report(J)
+            d1 = self._report(J)
+            d0 = self._report(J1)
         self.assertEqual(self._cat(d1, self.bp300)['non_servi']['fc'], '3000.00')
         self.assertEqual(self._cat(d0, self.bp300)['non_servi']['fc'], '0.00')
 
     def test_ns_does_not_leak_to_other_node(self):
         other = make_node(code='K2')
         og = APIClient(); og.force_authenticate(make_user('GERANT', node=other))
-        with _now(10):
+        with _now(13):
             self._inv([(self.bp300, 10)], code='NS')
             r = og.get(CLOSURE, {'date': str(J)})
         self.assertEqual(r.status_code, 200, r.data)

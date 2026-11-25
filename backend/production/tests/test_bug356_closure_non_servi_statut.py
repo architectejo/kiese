@@ -121,14 +121,15 @@ class NonServiStatutTests(Base):
         self.assertEqual(data['totals']['non_servi_total_fc'], '4200.00')
 
     def test_jour_de_travail_et_minuit(self):
+        # Q-018 (2026-11-24) : la journee va de midi a midi (et non plus de minuit a minuit).
+        # 11:59 le 15 -> journee du 14 ; 12:00 le 15 -> journee du 15 ; minuit n'est plus une frontiere.
         inv = self.create(((300, 10),))
         self.non_servi(inv)
         day = date(2026, 10, 14)
-        # 23:59 le 14 -> jour du 14 ; 00:00 le 15 -> jour du 15
-        Invoice.objects.filter(pk=inv).update(not_served_at=_aware(day, 23, 59))
+        Invoice.objects.filter(pk=inv).update(not_served_at=_aware(date(2026, 10, 15), 11, 59))
         self.assertEqual(self.report(day)[1]['non_servi_jour']['quantity'], 10)
         self.assertEqual(self.report(date(2026, 10, 15))[1]['non_servi_jour']['quantity'], 0)
-        Invoice.objects.filter(pk=inv).update(not_served_at=_aware(date(2026, 10, 15), 0, 0))
+        Invoice.objects.filter(pk=inv).update(not_served_at=_aware(date(2026, 10, 15), 12, 0))
         self.assertEqual(self.report(day)[1]['non_servi_jour']['quantity'], 0)
         self.assertEqual(self.report(date(2026, 10, 15))[1]['non_servi_jour']['quantity'], 10)
 

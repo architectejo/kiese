@@ -1,6 +1,12 @@
 """D38 / BUG-973 : blocage des ventes après l'heure de clôture (remarque.md l.464/488).
 Heure de clôture = Node.handover_time ; interrupteur Node.block_sales_after_closure.
-Données fictives. Pas de rotation 24 h (Q-017 à Q-021 sans réponse)."""
+Données fictives. Pas de rotation 24 h (Q-017 à Q-021 sans réponse).
+
+BUG-1130 (Q-018, 2026-11-24) : journée comptable de midi à midi. Le verrou exige la
+validation de la clôture de la journée qui vient de SE TERMINER (jour de travail - 1) ;
+« avant l'heure » signifie donc : la clôture de la journée terminée est validée et la
+journée en cours se poursuit. Tests adaptés en conséquence (une clôture validée pour le
+jour calendaire courant ne débloque plus rien)."""
 import datetime as dt
 
 from django.test import TestCase
@@ -9,6 +15,7 @@ from rest_framework.test import APIClient
 
 from core.models import Node, SystemNotification
 from core.testing import make_bread_price, make_client, make_node, make_user
+from core.workday import work_date_for
 from treasury.closure_lock import SALES_BLOCKED_DETAIL, closure_status, sales_blocked_for
 from treasury.models import CashClosure
 
@@ -49,8 +56,10 @@ class D38(TestCase):
         return api(user).post(INV, body, format='json')
 
     def validate_closure(self, node, day=None):
-        return CashClosure.objects.create(node=node, date=day or timezone.localdate(), is_validated=True,
-                                          node_origin=node.code)
+        # BUG-1130 : par défaut, la clôture de la journée comptable qui vient de se terminer.
+        return CashClosure.objects.create(
+            node=node, date=day or (work_date_for(node) - dt.timedelta(days=1)), is_validated=True,
+            node_origin=node.code)
 
     def test_interrupteur_off_comportement_inchange(self):
         self.cfg(self.n1, enabled=False)
@@ -68,7 +77,11 @@ class D38(TestCase):
         self.assertTrue(SystemNotification.objects.filter(title__startswith='Ventes bloquées').exists())
 
     def test_avant_heure_pas_de_blocage(self):
+        # BUG-1130 : journée en cours (heure de clôture pas encore atteinte) et clôture de la
+        # journée terminée validée -> pas de blocage ; sans cette validation -> blocage.
         self.cfg(self.n1, hour=FUTURE)
+        self.assertEqual(self.sale(self.fa1, self.cl1).status_code, 403)
+        self.validate_closure(self.n1)
         self.assertEqual(self.sale(self.fa1, self.cl1).status_code, 201)
 
     def test_apres_validation_direction_201(self):
@@ -79,8 +92,8 @@ class D38(TestCase):
 
     def test_cloture_non_validee_ne_debloque_pas(self):
         self.cfg(self.n1)
-        CashClosure.objects.create(node=self.n1, date=timezone.localdate(), is_validated=False,
-                                   node_origin='DB1')
+        CashClosure.objects.create(node=self.n1, date=work_date_for(self.n1) - dt.timedelta(days=1),
+                                   is_validated=False, node_origin='DB1')
         self.assertEqual(self.sale(self.fa1, self.cl1).status_code, 403)
 
     def test_jour_suivant_reblocage(self):
@@ -96,6 +109,9 @@ class D38(TestCase):
 
         def mk(h):
             return timezone.make_aware(dt.datetime.combine(d, dt.time(h, 0)))
+        # BUG-1130 : à 17:00 on est encore dans la journée de la veille (clôture à 18:00) dont la
+        # précédente (d-2) est validée ; à 18:00 la journée d-1 se termine : sa clôture est exigée.
+        self.validate_closure(self.n1, d - dt.timedelta(days=2))
         self.assertFalse(sales_blocked_for(self.n1, mk(17)))
         self.assertTrue(sales_blocked_for(self.n1, mk(18)))
 
@@ -137,7 +153,8 @@ class D38(TestCase):
         for k in ('closure_hour', 'blocked', 'reason', 'closure_date', 'validated'):
             self.assertIn(k, d)
         self.assertEqual(d['closure_hour'], '12:00')
-        self.assertEqual(d['closure_date'], str(timezone.localdate()))
+        # BUG-1130 : journée terminée à valider = jour de travail - 1.
+        self.assertEqual(d['closure_date'], str(work_date_for(self.n1) - dt.timedelta(days=1)))
 
     def test_status_bloque_puis_valide(self):
         self.cfg(self.n1)

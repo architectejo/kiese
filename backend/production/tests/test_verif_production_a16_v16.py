@@ -232,8 +232,11 @@ class A16Sweep(A16Base):
         tid, _ = self.to_dispute_direct()
         self.go('cloud')
         self.assertTrue(closure_status(Node.objects.get(pk=self.k2.pk))['blocked'])
-        c2 = CashClosure.objects.create(node=self.k2, date=ddate.today(), node_origin='Q2')
-        c1 = CashClosure.objects.create(node=self.k1, date=ddate.today(), node_origin='Q1')
+        # BUG-1130 : la cloture exigee par le verrou est celle de la journee comptable terminee
+        # (heure de cloture 00:00 -> veille).
+        veille = ddate.today() - dt.timedelta(days=1)
+        c2 = CashClosure.objects.create(node=self.k2, date=veille, node_origin='Q2')
+        c1 = CashClosure.objects.create(node=self.k1, date=veille, node_origin='Q1')
         r = cl(self.cpt).post(f'/api/treasury/closures/{c2.pk}/validate/', {}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
         self.assertIn('Confirmation bloquée', r.data['detail'])

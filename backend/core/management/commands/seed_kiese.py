@@ -1,3 +1,4 @@
+import datetime
 import sys
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
@@ -34,6 +35,11 @@ class Command(BaseCommand):
                 defaults={'name': nd['name'], 'address': nd['address']}
             )
             nodes[nd['code']] = node
+            # Q-017 : toutes les boulangeries en rotation de 24 h, relève/clôture 12:00 par défaut.
+            if not node.team_rotation_enabled or not node.handover_time:
+                node.team_rotation_enabled = True
+                node.handover_time = node.handover_time or datetime.time(12, 0)
+                node.save(update_fields=['team_rotation_enabled', 'handover_time'])
             if created:
                 self.stdout.write(f'Created Node: {node}')
             else:

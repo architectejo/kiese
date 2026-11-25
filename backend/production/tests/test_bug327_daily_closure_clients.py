@@ -19,7 +19,9 @@ OTHER = date(2026, 10, 15)
 
 
 def _aware(d, hour=10):
-    return timezone.make_aware(datetime(d.year, d.month, d.day, hour, 0), timezone.get_current_timezone())
+    # Q-018 : journee comptable de midi a midi. Les heures du scenario (8..12, ordre conserve)
+    # sont decalees de +5 h pour rester dans la journee `d` (13 h..17 h).
+    return timezone.make_aware(datetime(d.year, d.month, d.day, hour + 5, 0), timezone.get_current_timezone())
 
 
 def _api(user):

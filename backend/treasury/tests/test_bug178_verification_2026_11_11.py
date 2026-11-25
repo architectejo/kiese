@@ -42,7 +42,7 @@ def _mk(node, fac, client, bread, qty, ptype, payment, team='A', code='',
     inv.save()
     if deliver:
         if day:
-            at = tz.make_aware(datetime(day.year, day.month, day.day, 9, 0, 0))
+            at = tz.make_aware(datetime(day.year, day.month, day.day, 13, 0, 0))
             inv.deliver(livreur=fac, delivered_at=at)
         else:
             inv.deliver(livreur=fac)

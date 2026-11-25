@@ -31,8 +31,8 @@ def cl(user):
 class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code='K1', name='QA K1')
-        cls.k2 = Node.objects.create(code='K2', name='QA K2')
+        cls.k1 = Node.objects.create(code='K1', name='QA K1', team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code='K2', name='QA K2', team_rotation_enabled=False)
         cls.admin = mk('qadmin', 'ADMIN')
         cls.dir = mk('qdir', 'DIRECTION')
         cls.compta = mk('qcompta', 'COMPTABLE')

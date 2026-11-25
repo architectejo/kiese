@@ -47,7 +47,7 @@ class HqCannotBypassDisabledSettingByPickingNodeTests(TestCase):
         config.allow_backdated_sales = False
         config.save(update_fields=['allow_backdated_sales'])
         self.api_hq = _api_for(self.hq)
-        self.yesterday = date.today() - timedelta(days=1)
+        self.yesterday = date.today() - timedelta(days=2)  # BUG-1130 : la veille (journee terminee) est desormais acceptee ; le refus s'applique des l'avant-veille
 
     def test_hq_cannot_close_past_date_by_choosing_node_explicitly(self):
         resp = self.api_hq.post('/api/treasury/closures/', {
@@ -114,7 +114,7 @@ class RetroactiveReportFeedsRetroactiveClosureOfSameDayTests(TestCase):
         from datetime import datetime, time
         from django.utils import timezone as djtz
 
-        dt = djtz.make_aware(datetime.combine(day, time(9, 0)))
+        dt = djtz.make_aware(datetime.combine(day, time(13, 0)))  # BUG-1130 : midi à midi (09:00 serait la veille)
         inv = Invoice.objects.create(
             node=self.node, client=self.client_obj, facturier=self.facA, team='A',
             status=Invoice.Status.PENDING, payment_type=Invoice.PaymentType.CASH,

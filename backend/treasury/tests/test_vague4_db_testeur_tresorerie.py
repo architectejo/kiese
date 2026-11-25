@@ -1,6 +1,8 @@
 """
 Vague 4 (testeur-tresorerie, 2026-11-12) : décision client « JOUR CALENDAIRE »
-(BUG-271/272). Une clôture de caisse par (boulangerie, date) additionnant les deux
+(BUG-271/272), REMPLACÉE le 2026-11-24 par la journée comptable de MIDI À MIDI (BUG-1130,
+Q-018) : les scénarios horaires ci-dessous sont adaptés (la journée J court de J 12:00
+à J+1 12:00). Une clôture de caisse par (boulangerie, date) additionnant les deux
 équipes, un rapport facturier par (équipe, date), même si l'équipe change à la
 relève ; fenêtre minuit-01:00 (Kinshasa = UTC+1) ; billetage ; chaîne de hash et
 ancre `CashbookHead`.
@@ -23,6 +25,7 @@ from treasury.tests.test_verification_b3_tresorerie_2026_11_12 import Clock, _ap
 
 J = date(2026, 11, 12)
 J1 = date(2026, 11, 13)
+JP = date(2026, 11, 11)   # veille de J (BUG-1130)
 
 
 class _Base(TestCase):
@@ -67,14 +70,15 @@ class _Base(TestCase):
 
 class CalendarDayClosureTests(_Base):
     def test_day_split_over_midnight_and_handover_is_one_closure_two_reports(self):
-        with Clock(J, 0, 5) as clk:                              # 23:05 UTC la veille : jour local = J
-            _sale(self.node, self.facA, self.client_obj, self.bread, 1, J)      # 300 (00:05)
-            clk.set(J, 11, 59, 30)
-            _sale(self.node, self.facA, self.client_obj, self.bread, 2, J)      # 600 (11:59)
-            clk.set(J, 12, 0, 10)                                              # après la relève : équipe B
-            _sale(self.node, self.facB, self.client_obj, self.bread, 4, J, team='B')   # 1200
+        # BUG-1130 : la journée J (12:00 -> 12:00) enjambe minuit ; une seule clôture, deux rapports.
+        with Clock(J, 12, 5) as clk:
+            _sale(self.node, self.facA, self.client_obj, self.bread, 1, J)      # 300 (12:05)
             clk.set(J, 23, 59, 0)
-            _sale(self.node, self.facB, self.client_obj, self.bread, 5, J, team='B')   # 1500 (23:59)
+            _sale(self.node, self.facA, self.client_obj, self.bread, 2, J)      # 600 (23:59)
+            clk.set(J1, 0, 5, 10)                                              # après minuit : même journée J
+            _sale(self.node, self.facB, self.client_obj, self.bread, 4, J, team='B')   # 1200
+            clk.set(J1, 11, 59, 0)
+            _sale(self.node, self.facB, self.client_obj, self.bread, 5, J, team='B')   # 1500 (11:59)
             reports = self.gen(J)
             by_team = {r['team']: r for r in reports}
             self.assertEqual(set(by_team), {'A', 'B'})
@@ -94,18 +98,19 @@ class CalendarDayClosureTests(_Base):
             r2 = self.api.post('/api/treasury/closures/', {'date': str(J), 'bills_50': 1}, format='json')
             self.assertEqual(r2.status_code, 400, r2.content)
 
-    def test_midnight_is_the_day_boundary_for_reports_and_closures(self):
-        with Clock(J, 23, 59, 0) as clk:
-            _sale(self.node, self.facA, self.client_obj, self.bread, 2, J)      # 600 -> J
-            clk.set(J1, 0, 0, 30)                                              # 00:00:30 : jour J1
-            _sale(self.node, self.facA, self.client_obj, self.bread, 3, J1)     # 900 -> J1
-            rj = self.gen(J)
+    def test_noon_is_the_day_boundary_for_reports_and_closures(self):
+        # BUG-1130 : la frontière est midi (heure de clôture), plus minuit.
+        with Clock(J, 11, 59, 0) as clk:
+            _sale(self.node, self.facA, self.client_obj, self.bread, 2, JP)     # 600 -> journée JP
+            clk.set(J, 12, 0, 30)                                              # 12:00:30 : journée J
+            _sale(self.node, self.facA, self.client_obj, self.bread, 3, J)      # 900 -> journée J
+            rj = self.gen(JP)
             self.assertEqual([Decimal(r['total_cash_sales']) for r in rj], [Decimal('600')])
-            rj1 = self.gen(J1)
+            rj1 = self.gen(J)
             self.assertEqual([Decimal(r['total_cash_sales']) for r in rj1], [Decimal('900')])
             self.assertEqual(FacturierReport.objects.filter(node=self.node, team='A').count(), 2)
-            c1, _e1 = self.close_push(J, {'bills_500': 1, 'bills_100': 1})
-            c2, _e2 = self.close_push(J1, {'bills_500': 1, 'bills_200': 2})
+            c1, _e1 = self.close_push(JP, {'bills_500': 1, 'bills_100': 1})
+            c2, _e2 = self.close_push(J, {'bills_500': 1, 'bills_200': 2})
             self.assertEqual((Decimal(c1['net_cash']), Decimal(c2['net_cash'])), (Decimal('600'), Decimal('900')))
             self.assertEqual(Decimal(c1['cash_gap']), Decimal('0'))
             self.assertEqual(Decimal(c2['cash_gap']), Decimal('0'))
@@ -113,19 +118,19 @@ class CalendarDayClosureTests(_Base):
             self.assertEqual(self.verdicts(), (True, True, True))
 
     def test_same_team_cannot_sell_again_after_report_but_other_team_can(self):
-        with Clock(J, 3, 0) as clk:
+        with Clock(J, 13, 0) as clk:  # BUG-1130 : 13:00, dans la journée J (midi à midi)
             _sale(self.node, self.facA, self.client_obj, self.bread, 1, J)
             self.gen(J)
             late = _sale(self.node, self.facA, self.client_obj, self.bread, 1, J, deliver=False)
             with self.assertRaises(ValidationError):
                 late.deliver(livreur=self.facA)
-            clk.set(J, 13, 0)
+            clk.set(J, 14, 0)
             ok = _sale(self.node, self.facB, self.client_obj, self.bread, 1, J, team='B')
             self.assertEqual(ok.status, Invoice.Status.DELIVERED)
             self.assertEqual(len(self.gen(J)), 2)
 
     def test_closure_recomputed_when_other_team_sells_after_preparation(self):
-        with Clock(J, 8, 0) as clk:
+        with Clock(J, 13, 0) as clk:  # BUG-1130 : dans la journée J (midi à midi)
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, J)
             self.gen(J)
             r = self.api.post('/api/treasury/closures/', {'date': str(J), 'bills_1000': 1, 'bills_500': 1}, format='json')
@@ -145,7 +150,7 @@ class BillsTotalTests(_Base):
         faces = {20000: 3, 10000: 2, 5000: 1, 1000: 4, 500: 5, 200: 6, 100: 7, 50: 9}
         payload = {f'bills_{k}': v for k, v in faces.items()}
         expected = sum(k * v for k, v in faces.items())
-        with Clock(J, 10, 0):
+        with Clock(J, 13, 0):  # BUG-1130 : dans la journée J (midi à midi)
             r = self.api.post('/api/treasury/closures/', {'date': str(J), **payload}, format='json')
             self.assertEqual(r.status_code, 201, r.content)
             self.assertEqual(Decimal(r.json()['physical_cash_total']), Decimal(expected))
@@ -163,11 +168,11 @@ class BillsTotalTests(_Base):
 
 class ChainAnchorTests(_Base):
     def test_anchor_follows_pushes_and_detects_tail_deletion(self):
-        with Clock(J, 10, 0) as clk:
+        with Clock(J, 13, 0) as clk:  # BUG-1130 : dans la journée J (midi à midi)
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, J)
             self.gen(J)
             self.close_push(J, {'bills_1000': 1, 'bills_500': 1})
-            clk.set(J1, 10, 0)
+            clk.set(J1, 13, 0)
             _sale(self.node, self.facA, self.client_obj, self.bread, 3, J1)
             self.gen(J1)
             self.close_push(J1, {'bills_500': 1, 'bills_200': 2})

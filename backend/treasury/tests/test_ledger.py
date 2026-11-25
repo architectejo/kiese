@@ -28,7 +28,7 @@ from treasury.views import append_cashbook_entry
 
 
 def _make_node(code='K1', name='K1 - TABORA'):
-    return Node.objects.create(code=code, name=name)
+    return Node.objects.create(code=code, name=name, team_rotation_enabled=False)
 
 
 class CashbookChainTests(TestCase):

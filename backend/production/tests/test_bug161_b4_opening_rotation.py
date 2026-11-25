@@ -94,7 +94,7 @@ class RotationNeedsConfirmationTests(_Base):
             self.assertEqual(self._post(team='A').status_code, 200)
         with _now(11, 59):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-12')  # BUG-247 : date calendaire
+        self.assertEqual(r.data['date'], '2026-11-11')  # BUG-1130 : journée comptable (midi à midi)
         self.assertEqual(r.data['team'], 'A')           # équipe de la période démarrée le 11/11
         self.assertFalse(r.data['needs_confirmation'])
         with _now(12, 0):
@@ -109,7 +109,7 @@ class RotationNeedsConfirmationTests(_Base):
             self.assertEqual(self._post().status_code, 200)
         with _now(0, 0, d=date(2026, 11, 13)):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-13')  # BUG-247 : minuit change la date, pas l'équipe
+        self.assertEqual(r.data['date'], '2026-11-12')  # BUG-1130 : minuit ne change plus la date (midi à midi)
         self.assertFalse(r.data['needs_confirmation'])
 
     def test_confirmation_by_any_team_clears_the_box(self):
@@ -135,7 +135,7 @@ class RotationNeedsConfirmationTests(_Base):
         self._assign(D, 'B')
         with _now(23, 29):
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-12')
+        self.assertEqual(r.data['date'], '2026-11-11')  # BUG-1130 : journée du 11/11 jusqu'à 23:30
         self.assertEqual(r.data['opening_team'], 'A')
         with _now(23, 30):
             r = self.api.get(OPENING)
@@ -157,7 +157,7 @@ class RotationNeedsConfirmationTests(_Base):
             k1 = self.api.get(OPENING)
             k2 = api2.get(OPENING)
         self.assertEqual(k1.data['date'], '2026-11-12')
-        self.assertEqual(k2.data['date'], '2026-11-12')    # BUG-247 : même date calendaire
+        self.assertEqual(k2.data['date'], '2026-11-11')    # BUG-1130 : K2 (clôture 18:00) est encore dans la journée du 11/11
         self.assertEqual(k2.data['team'], 'B')             # K2 n'a pas encore sa relève
         self.assertEqual(k2.data['opening_team'], 'B')
 
@@ -213,7 +213,7 @@ class RotationPostTests(_Base):
         self._assign(D, 'B')
         with _now(2, 0):
             r = self._post()
-        self.assertEqual(r.data['date'], '2026-11-12')  # BUG-247 : date calendaire
+        self.assertEqual(r.data['date'], '2026-11-11')  # BUG-1130 : 02:00 = journée du 11/11
         self.assertEqual(r.data['team'], 'A')           # équipe de la période démarrée le 11/11
 
     def test_without_rotation_team_still_required(self):
@@ -346,4 +346,5 @@ class PreviousDayFrozenTests(_Base):
         # dernier reste déclaré (11 confirmés - 6) est ajouté au départ de journée.
         report_d = _build_daily_closure_report(self.node, D)
         cat = next(c for c in report_d['categories'] if c['bread_price'] == self.bp.pk)
-        self.assertEqual(cat['reste_du_hier'], {'A': -11, 'B': 0})
+        # (BUG-1130 : la journée du 12/11 démarre à 12:00 avec l'équipe B, qui porte l'écart.)
+        self.assertEqual(cat['reste_du_hier'], {'A': 0, 'B': -11})

@@ -55,19 +55,18 @@ class _Base(TestCase):
 class SameTeamTwoConsecutivePeriodsTests(_Base):
     def test_bug278_same_team_designated_again_can_declare_after_handover(self):
         """
-        BUG-278 : la session d'une équipe est unique par (équipe, jour calendaire). L'équipe A
-        qui poursuit après minuit (session J+1 ouverte automatiquement) est clôturée à la
-        relève de J+1 ; si elle est de nouveau désignée pour la période suivante (désignation
-        manuelle autorisée), elle ne peut plus déclarer aucune fournée de l'après-midi :
-        400 « Session de production clôturée pour l'équipe A le J+1 ».
+        BUG-278 / BUG-1130 (midi à midi) : la session d'une équipe est unique par (équipe, journée
+        comptable). L'équipe A produit la journée J, poursuit après minuit SANS rien clôturer, est
+        clôturée à la relève de J+1 ; de nouveau désignée pour la période suivante, elle déclare
+        une fournée sur la NOUVELLE journée J+1 (201, nouvelle session, plus de blocage).
         """
         with _now(13, 0):
             self._assign('A')
             self.assertEqual(self._produce('A').status_code, 201)
-        with _now(0, 10, d=J1):  # passage de minuit : J clôturée, session J+1 ouverte pour A
+        with _now(0, 10, d=J1):  # BUG-1130 : minuit ne clôture rien, la journée J se poursuit
             r = self.g.get(SHIFT)
-            self.assertTrue(r.data['auto_closed'])
-        self.assertTrue(ProductionSession.objects.filter(node=self.node, team='A', date=J1, is_closed=False).exists())
+            self.assertFalse(r.data.get('auto_closed', False))
+        self.assertTrue(ProductionSession.objects.filter(node=self.node, team='A', date=J, is_closed=False).exists())
         with _now(12, 40, d=J1):  # relève passée de 40 min : clôture forcée de la session de A
             r = self.g.get(SHIFT)
             self.assertTrue(r.data['auto_closed'])

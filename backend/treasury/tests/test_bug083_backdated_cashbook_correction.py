@@ -51,7 +51,7 @@ def _deliver_same_day(node, facturier, client_obj, bread, qty, day):
     inv.payment_amount = inv.order_total
     inv.compute_debt_after()
     inv.save()
-    delivered_at = tz.make_aware(datetime(day.year, day.month, day.day, 9, 0, 0))
+    delivered_at = tz.make_aware(datetime(day.year, day.month, day.day, 13, 0, 0))
     inv.deliver(livreur=facturier, delivered_at=delivered_at)
     return inv
 

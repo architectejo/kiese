@@ -506,6 +506,7 @@ class FacturierReportViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
             config = Config.get_instance()
             date_error = validate_requested_date(
                 target_date, config, field_label="La date du rapport (date)", node=node,
+                allow_previous_day=True,  # BUG-1130 : journée comptable qui vient de se terminer
             )
             if date_error:
                 return Response({'detail': date_error}, status=status.HTTP_400_BAD_REQUEST)
@@ -639,6 +640,7 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         config = Config.get_instance()
         date_error = validate_requested_date(
             target_date, config, field_label="La date de clôture (date)", node=node,
+            allow_previous_day=True,  # BUG-1130 : la journée terminée se clôture après la bascule de midi
         )
         if date_error:
             raise ValidationError({'detail': date_error})
@@ -769,7 +771,7 @@ class CashClosureViewSet(VersementsRecapMixin, NoNodeGuardMixin, NodeImmutableFo
         config = Config.get_instance()
         date_error = validate_requested_date(
             target_date, config, field_label="La date de clôture (date)",
-            node=serializer.instance.node,
+            node=serializer.instance.node, allow_previous_day=True,  # BUG-1130
         )
         if date_error:
             raise ValidationError({'detail': date_error})

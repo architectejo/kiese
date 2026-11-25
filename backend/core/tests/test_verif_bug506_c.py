@@ -23,8 +23,8 @@ def rows(r):
 
 class Bug506Verif(TestCase):
     def setUp(self):
-        self.k1 = Node.objects.create(code='K1', name='K1')
-        self.k2 = Node.objects.create(code='K2', name='K2')
+        self.k1 = Node.objects.create(code='K1', name='K1', team_rotation_enabled=False)
+        self.k2 = Node.objects.create(code='K2', name='K2', team_rotation_enabled=False)
         self.admin = User.objects.create_user('v6_adm', password='x', role='ADMIN')
         self.dir = User.objects.create_user('v6_dir', password='x', role='DIRECTION')
         self.c2 = Client.objects.create(first_name='Deux', last_name='Autre', node=self.k2)
@@ -86,7 +86,7 @@ class Bug506Verif(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
 
     def test_node_deleted_leaves_orphan_who_sees_nothing(self):
-        n3 = Node.objects.create(code='K3', name='K3')
+        n3 = Node.objects.create(code='K3', name='K3', team_rotation_enabled=False)
         g = User.objects.create_user('v6_g4', password='x', role='GERANT', node=n3)
         n3.delete()
         g.refresh_from_db()

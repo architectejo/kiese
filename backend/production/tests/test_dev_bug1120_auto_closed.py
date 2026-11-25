@@ -3,7 +3,7 @@ BUG-1120 : la clôture automatique est visible dans `shift-end-status`
 (`auto_closed_days`, additif) et dans `daily-closure` (`auto_closed`, persistant).
 Données fictives.
 """
-from datetime import time
+from datetime import time, timedelta
 
 from production.models import _adjust_bread_stock
 from production.tests.test_restes_journee_cloture_auto_a import CLOSURE, D, SHIFT, _now, _Base
@@ -22,14 +22,14 @@ class AutoClosedIndicatorTests(_Base):
     def test_shift_end_status_signale_la_cloture_automatique_puis_se_tait(self):
         s = self._session()
         self._sale()
-        with _now(19, 0):
+        with _now(19, 0, d=D + timedelta(days=1)):
             r1 = self.api.get(SHIFT, {'node': 'K1'})
         self.assertEqual(r1.status_code, 200, r1.data)
         self.assertEqual(r1.data['auto_closed_days'], [
             {'date': str(D), 'teams': ['A'], 'sessions': [s.pk]},
         ])
         # idempotence : rien de nouveau au second appel, corps inchangé
-        with _now(19, 5):
+        with _now(19, 5, d=D + timedelta(days=1)):
             r2 = self.api.get(SHIFT, {'node': 'K1'})
         self.assertNotIn('auto_closed_days', r2.data)
 
@@ -42,7 +42,7 @@ class AutoClosedIndicatorTests(_Base):
         self._session()
         self._sale()
         self.assertFalse(self.api.get(CLOSURE, {'date': str(D)}).data['auto_closed'])
-        with _now(19, 0):
+        with _now(19, 0, d=D + timedelta(days=1)):
             self.api.get(SHIFT, {'node': 'K1'})
         self.assertTrue(self.api.get(CLOSURE, {'date': str(D)}).data['auto_closed'])
         from core.models import SystemNotification
@@ -56,7 +56,7 @@ class AutoClosedIndicatorTests(_Base):
     def test_isolation_par_boulangerie(self):
         self._session()
         self._sale()
-        with _now(19, 0):
+        with _now(19, 0, d=D + timedelta(days=1)):
             self.api.get(SHIFT, {'node': 'K1'})
         other = make_node(code='K2')
         g2 = APIClient()

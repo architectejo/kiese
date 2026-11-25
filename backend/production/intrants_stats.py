@@ -39,7 +39,7 @@ signe de l'ecart = declare - comptable, colonne « ok » du sel ignoree, ligne T
 + D1 (ecart et reste declare totalises sur les seules lignes declarees). Renvoyees dans le JSON.
 """
 import re
-from datetime import date as date_cls
+from datetime import date as date_cls, timedelta
 from decimal import Decimal
 
 from django.db.models import Q
@@ -115,7 +115,8 @@ class CanReadIntrantsStats(BasePermission):
 def parse_day(raw):
     """AAAA-MM-JJ strict (ASCII), annee 2000-2100. Retourne (date, None) ou (None, message)."""
     if raw is None:
-        return timezone.localdate(), None
+        from core.workday import work_date_for
+        return work_date_for(None), None  # BUG-1130 : journée comptable (12:00 par défaut)
     bad = "Paramètre « date » invalide — format attendu AAAA-MM-JJ."
     if not isinstance(raw, str) or not _DATE_RE.match(raw):
         return None, bad
@@ -139,14 +140,19 @@ def compute_rows(day, code, nodes):
     exit_free = {i: ZERO for i in node_ids}
     exit_session = {i: ZERO for i in node_ids}
     net_from_day = {i: ZERO for i in node_ids}
+    from core.workday import work_date_for
+    node_by_id = {n.pk: n for n in nodes}
     movements = ConsumableMovement.objects.filter(
         stock__consumable_type=code, node_id__in=node_ids,
     ).filter(
-        Q(session__isnull=True, created_at__date__gte=day)
+        # Marge d'un jour : la journée comptable (midi à midi, BUG-1130) commence
+        # la veille du jour calendaire ; `eff` ci-dessous tranche exactement.
+        Q(session__isnull=True, created_at__date__gte=day - timedelta(days=1))
         | Q(session__isnull=False, session__date__gte=day)
     ).values('node_id', 'movement_type', 'quantity', 'created_at', 'session_id', 'session__date')
     for m in movements:
-        eff = m['session__date'] if m['session_id'] else timezone.localtime(m['created_at']).date()
+        eff = (m['session__date'] if m['session_id']
+               else work_date_for(node_by_id[m['node_id']], m['created_at']))
         if eff < day:
             continue
         qty = m['quantity']

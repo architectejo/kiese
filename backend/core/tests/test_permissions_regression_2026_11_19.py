@@ -48,8 +48,8 @@ def cl(user=None):
 class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code='P1', name='Perm K1', sac_value_fc=Dc('210000'))
-        cls.k2 = Node.objects.create(code='P2', name='Perm K2', sac_value_fc=Dc('180000'))
+        cls.k1 = Node.objects.create(code='P1', name='Perm K1', sac_value_fc=Dc('210000'), team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code='P2', name='Perm K2', sac_value_fc=Dc('180000'), team_rotation_enabled=False)
         cls.u = {}
         for r in ROLES:
             cls.u[r] = mk(f'pr_{r.lower()}', r, None if r in HQ else cls.k1)

@@ -105,15 +105,15 @@ class _Base(TestCase):
 
 class RotationLevel1And2Tests(_Base):
     def test_reports_grouped_by_calendar_day_and_closure_levels(self):
-        # BUG-247 (décision client 2026-11-12) : la date de travail est le jour
-        # CALENDAIRE, même en rotation ; la relève de 12:00 ne scinde plus le jour.
-        with Clock(J1, 3, 0) as clk:                       # 03:00 : jour calendaire J1
+        # BUG-247 (2026-11-12) puis BUG-1130 (2026-11-24, midi à midi) : la date de travail est la
+        # journée comptable ; la journée J1 court de J1 12:00 à J1+1 12:00 (minuit ne la scinde pas).
+        with Clock(J1, 13, 0) as clk:                      # 13:00 : journée J1
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)      # 1500
-            clk.set(J1, 11, 59)
+            clk.set(J1, 23, 59)
             _sale(self.node, self.facA, self.client_obj, self.bread, 2, J1)      # 600
-            clk.set(J1, 12, 0)                              # relève pile : MÊME jour calendaire
+            clk.set(J1 + timedelta(days=1), 11, 59)         # avant la clôture : MÊME journée J1
             _sale(self.node, self.facA, self.client_obj, self.bread, 3, J1)      # 900
-            clk.set(J1, 12, 0, 30)
+            clk.set(J1 + timedelta(days=1), 11, 59, 30)
             reports = self.gen()
             self.assertEqual(len(reports), 1)
             self.assertEqual(reports[0]['date'], str(J1))
@@ -155,7 +155,7 @@ class RotationLevel1And2Tests(_Base):
             self.assertEqual(Decimal(c2.json()['cash_gap']), Decimal('500') - Decimal('900'))   # écart négatif
 
     def test_zero_gap_and_gap_not_editable_once_validated(self):
-        with Clock(J1, 3, 0):
+        with Clock(J1, 13, 0):  # BUG-1130 : 13:00 = dans la journée J1
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)
             self.gen()
             r = self.closure({'date': str(J1), 'bills_1000': 1, 'bills_500': 1})   # 1500 = 1500 -> écart nul
@@ -170,14 +170,14 @@ class RotationLevel1And2Tests(_Base):
     def test_closure_recomputed_when_sale_arrives_after_preparation(self):
         """Vente livrée dans la journée après création de la clôture : rapport régénéré puis
         clôture non validée re-soumise -> totaux recalculés (BUG-034 : resoumission)."""
-        with Clock(J1, 3, 0) as clk:
+        with Clock(J1, 13, 0) as clk:  # BUG-1130 : 13:00 = dans la journée J1
             _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)
             self.gen()
             r = self.closure({'date': str(J1), 'bills_1000': 1, 'bills_500': 1})
             cid = r.json()['id']
             # autre équipe : le verrou ne concerne que (nœud, équipe, jour)
             facB = make_user('FACTURIER', node=self.node, team='B', username='fb_v1')
-            clk.set(J1, 10, 0)
+            clk.set(J1, 14, 0)
             _sale(self.node, facB, self.client_obj, self.bread, 2, J1, team='B')
             self.gen()
             self.assertEqual(self.api.patch(f'/api/treasury/closures/{cid}/', {'bills_500': 2}, format='json').status_code, 200)
@@ -209,8 +209,8 @@ class RotationCashbookTests(_Base):
         cfg = get_config()
         cfg.allow_backdated_sales = True
         cfg.save()
-        with Clock(J1, 3, 0) as clk:
-            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)      # 1500 (jour calendaire J1)
+        with Clock(J1, 13, 0) as clk:
+            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)      # 1500 (journée J1, BUG-1130)
             self.gen()
             e1 = self._closure_validated_pushed(J1, {'bills_1000': 1, 'bills_500': 1})
             self.assertEqual(e1['piece_number'], 'VC-K1-20261112')
@@ -293,17 +293,19 @@ class NoRotationEquivalenceTests(_Base):
     rotation = False
 
     def test_no_rotation_local_calendar_date_at_00_30_and_03_00(self):
+        # BUG-1130 : à 00:30 et 03:00 le J1 on est dans la journée comptable J (midi à midi),
+        # ni la date UTC ni le jour calendaire J1.
         with Clock(J1, 0, 30) as clk:
-            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)
+            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J)
             clk.set(J1, 3, 0)
             _sale(self.node, make_user('FACTURIER', node=self.node, team='B', username='fb_v2'),
-                  self.client_obj, self.bread, 2, J1, team='B')
+                  self.client_obj, self.bread, 2, J, team='B')
             reports = self.gen()
-            self.assertEqual({r['date'] for r in reports}, {str(J1)})   # jamais J (UTC / relève ignorée)
+            self.assertEqual({r['date'] for r in reports}, {str(J)})
             self.assertEqual(sum(Decimal(r['total_cash_sales']) for r in reports), Decimal('2100'))
-            c = self.closure({'date': str(J1), 'bills_1000': 2})
+            c = self.closure({'date': str(J), 'bills_1000': 2})
             self.assertEqual(c.status_code, 201, c.content)
-            self.assertEqual(c.json()['date'], str(J1))
+            self.assertEqual(c.json()['date'], str(J))
             self.assertEqual(Decimal(c.json()['net_cash']), Decimal('2100'))
 
     def test_lock_with_and_without_backdated_setting_at_00_30(self):
@@ -326,35 +328,39 @@ class NoRotationEquivalenceTests(_Base):
         with Clock(d1, 0, 30):                                  # 1er décembre 00:30 locale = 30/11 23:30 UTC
             r = self.api.get('/api/treasury/journal/monthly_report/')
             self.assertEqual(r.status_code, 200, r.content)
-            self.assertEqual((r.json()['month'], r.json()['year']), ('12', '2026'))
+            # BUG-1130 : journée comptable = 30/11 (midi à midi) -> mois par défaut = novembre
+            # (question client Q-1130-A : rapports mensuels et journée de midi à midi).
+            self.assertEqual((r.json()['month'], r.json()['year']), ('11', '2026'))
 
 
 class RotationDefaultsTests(_Base):
     def test_rotation_default_month_is_calendar_month_before_handover(self):
-        with Clock(date(2026, 12, 1), 3, 0):                   # BUG-247 : date de travail = 01/12 (calendaire)
+        with Clock(date(2026, 12, 1), 3, 0):                   # BUG-1130 : journée comptable = 30/11
             r = self.api.get('/api/treasury/journal/monthly_report/')
-            self.assertEqual((r.json()['month'], r.json()['year']), ('12', '2026'))
+            self.assertEqual((r.json()['month'], r.json()['year']), ('11', '2026'))
         with Clock(date(2026, 12, 1), 12, 0):
             r = self.api.get('/api/treasury/journal/monthly_report/')
             self.assertEqual((r.json()['month'], r.json()['year']), ('12', '2026'))
 
     def test_journal_entry_default_date_is_calendar_date_in_rotation(self):
-        with Clock(J1, 3, 0):
+        with Clock(J1, 13, 0):  # BUG-1130 : 13:00 = journée J1
             # Le serializer exige `date` : sans elle, 400 explicite (pas de date par défaut côté API).
             r = self.api.post('/api/treasury/journal/', {'imput': 'RATION', 'exit_amount': '100'}, format='json')
             self.assertEqual(r.status_code, 400, r.content)
             self.assertIn('date', r.json())
-            # Avec la date calendaire courante (03:00, avant la relève) : acceptée et conservée telle quelle.
+            # Avec la date de la journée courante (13:00, après la clôture de 12:00) : acceptée telle quelle.
             r = self.api.post('/api/treasury/journal/',
                               {'date': str(J1), 'imput': 'RATION', 'exit_amount': '100'}, format='json')
             self.assertEqual(r.status_code, 201, r.content)
             self.assertEqual(r.json()['date'], str(J1))
 
     def test_future_closure_date_refused_and_current_calendar_date_accepted(self):
-        with Clock(J1, 3, 0):
+        with Clock(J1, 13, 0):  # BUG-1130 : 13:00 = journée J1
             self.assertEqual(self.closure({'date': str(J1 + timedelta(days=1))}).status_code, 400)  # futur
-            self.assertEqual(self.closure({'date': str(J1), 'bills_50': 0}).status_code, 201)   # jour calendaire courant (03:00)
-            self.assertEqual(self.closure({'date': str(J)}).status_code, 400)    # veille : passé sans réglage
+            self.assertEqual(self.closure({'date': str(J1), 'bills_50': 0}).status_code, 201)   # journée courante (13:00)
+            # BUG-1130 : la journée comptable qui vient de se terminer (J) reste clôturable sans réglage ;
+            # l'avant-veille est refusée (passé sans réglage).
+            self.assertEqual(self.closure({'date': str(J - timedelta(days=1))}).status_code, 400)
 
 
 class NodeIsolationTests(_Base):
@@ -367,12 +373,13 @@ class NodeIsolationTests(_Base):
         f2 = make_user('FACTURIER', node=node2, team='A', username='fa_v3')
         c2 = make_client(node2)
         with Clock(J1, 8, 0):
-            # BUG-247 : même jour calendaire pour les deux boulangeries, malgré des relèves différentes.
-            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J1)
+            # BUG-1130 : à 08:00, K1 (clôture 12:00) est encore dans la journée J ; K2 (clôture
+            # 06:00) est déjà dans la journée J1 : chaque boulangerie a SA journée comptable.
+            _sale(self.node, self.facA, self.client_obj, self.bread, 5, J)
             _sale(node2, f2, c2, self.bread, 2, J1)
             r1 = self.gen()
             r2 = self.gen(api=_api(g2))
-            self.assertEqual(r1[0]['date'], str(J1))
+            self.assertEqual(r1[0]['date'], str(J))
             self.assertEqual(r2[0]['date'], str(J1))
             self.assertEqual(Decimal(r1[0]['total_cash_sales']), Decimal('1500'))
             self.assertEqual(Decimal(r2[0]['total_cash_sales']), Decimal('600'))
@@ -405,7 +412,8 @@ class RetroRotationTests(TransactionTestCase):
         }, format='json')
 
     def test_invoice_date_ceiling_is_calendar_day(self):
-        with Clock(J1, 3, 0):                                   # BUG-247 : date de travail = jour calendaire J1
+        DailyTeamAssignment.objects.create(node=self.node, work_date=J1, team='A')
+        with Clock(J1, 13, 0):                                  # BUG-1130 : date de travail = journée J1
             r = self._post_invoice(J1 + timedelta(days=1))      # futur
             self.assertEqual(r.status_code, 400, r.content)
             ok = self._post_invoice(J1)

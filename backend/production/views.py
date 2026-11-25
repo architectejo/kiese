@@ -1303,7 +1303,10 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         # l'heure de clôture de la boulangerie (si activée), au premier accès
         # lecture, sans service d'arrière-plan. Idempotent ; sans effet pour
         # une boulangerie qui n'a pas activé l'heure de clôture.
-        from .services import auto_close_due_days, summarize_auto_closed
+        from .services import auto_close_due_days, summarize_auto_closed, notify_direction_if_unattended_closure
+        # Q-021 : heure de clôture passée sans personne de la boulangerie -> direction/comptable
+        # avertis (une seule notification par boulangerie et par période, idempotent).
+        notify_direction_if_unattended_closure(node)
         # BUG-1120 : résumé additif des clôtures faites lors de CET appel
         # (`auto_closed_days`, absent s'il n'y en a pas : les corps de réponse
         # existants restent identiques).
@@ -1398,7 +1401,9 @@ class ProductionSessionViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, vie
         from core.workday import shift_period_start
 
         local_now = timezone.localtime(now)
-        today = local_now.date()
+        # BUG-1130 : « aujourd'hui » = journée comptable de midi à midi (plus de
+        # clôture silencieuse au passage de minuit : la journée traverse minuit).
+        today = business_date(node, now)
         period_start = shift_period_start(node, now)
         current_period = business_date(node, now)
         base = {'server_now': time_info['server_now'], 'current_work_date': today.isoformat()}
@@ -1734,7 +1739,7 @@ class ConsumableCountViewSet(NoNodeGuardMixin, NodeImmutableForNonHQMixin, views
         # BUG-386 : l'inventaire du jour (une saisie par jour) n'est pas contournable
         # par un comptage ligne par ligne à la même date.
         from .models import ConsumableInventory
-        if ConsumableInventory.objects.filter(node=node, inventory_date=timezone.localdate()).exists():
+        if ConsumableInventory.objects.filter(node=node, inventory_date=work_date_for(node)).exists():
             raise ValidationError({'detail': "L'inventaire physique du jour a déjà été saisi : il n'est plus modifiable aujourd'hui."})
 
         stock = ConsumableStock.objects.filter(node=node, consumable_type=consumable_type).first()

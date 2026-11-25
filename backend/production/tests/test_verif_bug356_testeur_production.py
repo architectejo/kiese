@@ -135,7 +135,12 @@ class Bug356Verification(_V):
         Invoice.objects.filter(pk=iid).update(not_served_at=datetime(2026, 3, 8, 22, 30, tzinfo=dt_utc.utc))
         self.assertEqual(self.rep(date(2026, 3, 8))['totals']['non_servi_quantity'], 10)
         self.assertEqual(self.rep(d)['totals']['non_servi_quantity'], 0)
+        # BUG-1130 (midi à midi) : 00:30 local le 9 appartient encore à la journée comptable du 8
         Invoice.objects.filter(pk=iid).update(not_served_at=datetime(2026, 3, 8, 23, 30, tzinfo=dt_utc.utc))
+        self.assertEqual(self.rep(date(2026, 3, 8))['totals']['non_servi_quantity'], 10)
+        self.assertEqual(self.rep(d)['totals']['non_servi_quantity'], 0)
+        # ... et 12:30 local le 9 (11:30 UTC) à celle du 9
+        Invoice.objects.filter(pk=iid).update(not_served_at=datetime(2026, 3, 9, 11, 30, tzinfo=dt_utc.utc))
         self.assertEqual(self.rep(date(2026, 3, 8))['totals']['non_servi_quantity'], 0)
         self.assertEqual(self.rep(d)['totals']['non_servi_quantity'], 10)
 
@@ -313,19 +318,22 @@ class Bug350Complements(TestCase):
             self.assertTrue(r['needs_confirmation'])
 
     def test_handover_time_is_ignored_without_rotation(self):
+        # BUG-1130 : hors rotation, l'heure de clôture (14:30 ici) délimite la journée comptable ;
+        # elle n'ouvre toujours PAS de seconde boîte pendant la journée (pas de « relève » d'équipe).
         self.node.handover_time = dtime(14, 30)
         self.rot(on=False)
-        with _now(14, 29):
-            before = self.get()
         with _now(14, 30):
-            after = self.get()
-        self.assertFalse(before.get('rotation', False) or after.get('rotation', False))
-        self.assertEqual(before['needs_confirmation'], after['needs_confirmation'])
-        with _now(9, 0):
             rr = self.post(team='A')
             self.assertEqual(rr.status_code, 200, rr.data)
-        with _now(14, 30):
-            self.assertFalse(self.get()['needs_confirmation'])     # pas de seconde boîte à la « relève »
+        with _now(23, 0):
+            self.assertFalse(self.get()['needs_confirmation'])
+        with _now(14, 29, d=NEXT):  # même journée comptable : pas de nouvelle boîte
+            before = self.get()
+            self.assertFalse(before['needs_confirmation'])
+        with _now(14, 30, d=NEXT):  # nouvelle journée comptable : nouvelle confirmation attendue
+            after = self.get()
+            self.assertTrue(after['needs_confirmation'])
+        self.assertFalse(before.get('rotation', False) or after.get('rotation', False))
         self.assertEqual(DailyOpeningConfirmation.objects.count(), 1)
 
     def test_team_change_mid_period_does_not_leak_to_next_period(self):

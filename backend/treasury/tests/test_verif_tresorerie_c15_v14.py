@@ -1,6 +1,12 @@
 """Cycle 15 (testeur-tresorerie, 2026-11-23-c15) : verification independante de BUG-981 a 984 (d40) et
 tests independants de BUG-973 (blocage des ventes a l'heure de cloture, d38). Donnees fictives.
 Code applicatif non modifie.
+
+BUG-1130 (Q-018, 2026-11-24) : journee comptable de midi a midi. Le verrou exige la cloture
+validee de la journee qui vient de SE TERMINER (jour de travail - 1) ; les tests de bords
+d'heure valident donc d'abord le jour de travail - 2 (bascule a l'heure de cloture : la
+journee precedente se termine, sa cloture devient exigee). Adaptation documentee dans
+docs/qa/rapports/dev-backend-2026-11-24-journee-midi.md.
 """
 import datetime as dt
 import uuid
@@ -62,12 +68,15 @@ class L973(Base13):
 
     def validated(self, node=None, day=None):
         node = node or self.n1
-        return CashClosure.objects.create(node=node, date=day or today(), is_validated=True, node_origin=node.code)
+        # BUG-1130 : par defaut, la cloture de la journee comptable qui vient de se terminer.
+        return CashClosure.objects.create(node=node, date=day or (today() - timedelta(days=1)),
+                                          is_validated=True, node_origin=node.code)
 
     # ---- bords de l'heure ---------------------------------------------------------
     def test_heure_exacte_et_bords(self):
         n = self.cfg(hour=dt.time(12, 0))
         d = today()
+        self.validated(day=d - timedelta(days=2))
         self.assertFalse(sales_blocked_for(n, at(d, 11, 59, 59, 999999)))
         self.assertTrue(sales_blocked_for(n, at(d, 12, 0, 0, 0)))
         self.assertTrue(sales_blocked_for(n, at(d, 12, 0, 0, 1)))
@@ -76,6 +85,7 @@ class L973(Base13):
     def test_heure_avec_secondes(self):
         n = self.cfg(hour=dt.time(12, 30, 45))
         d = today()
+        self.validated(day=d - timedelta(days=2))
         self.assertFalse(sales_blocked_for(n, at(d, 12, 30, 44)))
         self.assertTrue(sales_blocked_for(n, at(d, 12, 30, 45)))
 
@@ -83,7 +93,7 @@ class L973(Base13):
         n = self.cfg(hour=MIDNIGHT)
         d = today()
         self.assertTrue(sales_blocked_for(n, at(d, 0, 0, 0)))
-        self.validated(day=d)
+        self.validated(day=d - timedelta(days=1))
         self.assertFalse(sales_blocked_for(n, at(d, 23, 59, 59)))
         # la cloture validee de la veille ne debloque pas le nouveau jour
         self.assertTrue(sales_blocked_for(n, at(d + timedelta(days=1), 0, 0, 0)))
@@ -93,9 +103,12 @@ class L973(Base13):
         n = self.cfg(hour=dt.time(12, 0))
         utc = dt.timezone.utc
         inst = dt.datetime(2026, 11, 20, 23, 30, tzinfo=utc)
-        self.assertEqual(work_date_for(n, inst), dt.date(2026, 11, 21))
+        # BUG-1130 : 00:30 locale le 21/11 = journee comptable du 20/11 (midi a midi) ;
+        # la cloture a valider est celle du 19/11.
+        self.assertEqual(work_date_for(n, inst), dt.date(2026, 11, 20))
+        self.validated(day=dt.date(2026, 11, 19))
         st = closure_status(n, inst)
-        self.assertEqual(st['closure_date'], '2026-11-21')
+        self.assertEqual(st['closure_date'], '2026-11-19')
         self.assertFalse(st['blocked'])  # 00:30 locale < 12:00
         inst2 = dt.datetime(2026, 11, 21, 11, 0, tzinfo=utc)  # 12:00 locale
         self.assertTrue(sales_blocked_for(n, inst2))
@@ -104,6 +117,7 @@ class L973(Base13):
 
     def test_instant_naif_suppose_local(self):
         n = self.cfg(hour=dt.time(12, 0))
+        self.validated(day=today() - timedelta(days=2))
         self.assertFalse(sales_blocked_for(n, dt.datetime.combine(today(), dt.time(11, 0))))
         self.assertTrue(sales_blocked_for(n, dt.datetime.combine(today(), dt.time(12, 0))))
 
@@ -111,9 +125,13 @@ class L973(Base13):
         n = self.cfg(hour=dt.time(1, 0))
         d = today()
         self.validated(day=d)
-        # 00:30 UTC du jour d+1 = 01:30 locale d+1 : nouveau jour, cloture du jour d ne compte pas
+        # BUG-1130 : 00:30 UTC du jour d+1 = 01:30 locale d+1 : la journee d vient de se terminer
+        # (cloture a 01:00) et sa cloture validee debloque ; le lendemain, la journee d+1 se
+        # termine : sa cloture (non validee) est exigee.
         inst = dt.datetime.combine(d + timedelta(days=1), dt.time(0, 30), tzinfo=dt.timezone.utc)
-        self.assertTrue(sales_blocked_for(n, inst))
+        self.assertFalse(sales_blocked_for(n, inst))
+        inst2 = dt.datetime.combine(d + timedelta(days=2), dt.time(0, 30), tzinfo=dt.timezone.utc)
+        self.assertTrue(sales_blocked_for(n, inst2))
 
     # ---- interrupteur, perimetre -------------------------------------------------
     def test_interrupteur_off_aucun_blocage_et_statut(self):
@@ -141,8 +159,9 @@ class L973(Base13):
     # ---- validation direction / infirmation --------------------------------------
     def test_validation_rest_par_la_direction_debloque_et_infirmation_reste_bloquee(self):
         self.cfg()
-        self.report(self.n1, 'A', '10000')
-        c = self.close(self.g1, {'bills_10000': 1}).json()
+        veille = today() - timedelta(days=1)  # BUG-1130 : journee terminee a clôturer
+        self.report(self.n1, 'A', '10000', date=veille)
+        c = self.close(self.g1, {'bills_10000': 1}, date=str(veille)).json()
         self.assertEqual(self.sale().status_code, 403, "cloture creee par le gerant mais non validee")
         r = cl(self.dirn).post(f"/api/treasury/closures/{c['id']}/reject/", {'reason': 'recompter'}, format='json')
         self.assertEqual(r.status_code, 200, r.content)
@@ -155,8 +174,9 @@ class L973(Base13):
 
     def test_gerant_ne_peut_pas_se_debloquer_seul(self):
         self.cfg()
-        self.report(self.n1, 'A', '10000')
-        c = self.close(self.g1, {'bills_10000': 1}).json()
+        veille = today() - timedelta(days=1)  # BUG-1130 : journee terminee a clôturer
+        self.report(self.n1, 'A', '10000', date=veille)
+        c = self.close(self.g1, {'bills_10000': 1}, date=str(veille)).json()
         self.assertEqual(self.valider(c['id'], self.g1).status_code, 403)
         self.assertEqual(self.sale().status_code, 403)
 
@@ -165,8 +185,9 @@ class L973(Base13):
         debloque a la CONFIRMATION (validate), avant le versement au livre (push_to_cashbook).
         Observation documentee : ecart a faire trancher (BUG-986)."""
         self.cfg()
-        self.report(self.n1, 'A', '10000')
-        c = self.close(self.g1, {'bills_10000': 1}).json()
+        veille = today() - timedelta(days=1)  # BUG-1130 : journee terminee a clôturer
+        self.report(self.n1, 'A', '10000', date=veille)
+        c = self.close(self.g1, {'bills_10000': 1}, date=str(veille)).json()
         self.valider(c['id'], self.dirn)
         self.assertEqual(CashbookEntry.objects.count(), 0)
         self.assertEqual(self.sale().status_code, 201)
@@ -240,6 +261,7 @@ class L973(Base13):
     def test_serie_de_ventes_bascule_a_l_heure(self):
         n = self.cfg(hour=dt.time(12, 0))
         d = today()
+        self.validated(day=d - timedelta(days=2))
         res = [sales_blocked_for(n, at(d, 11, 59, 58 + i // 2, 500000 * (i % 2))) for i in range(4)]
         self.assertEqual(res, [False, False, False, True][:0] or res)  # tolere la lecture
         self.assertEqual([sales_blocked_for(n, at(d, 11, 59, 59)), sales_blocked_for(n, at(d, 12, 0, 0))],
@@ -284,7 +306,9 @@ class L973(Base13):
         self.cfg(hour=dt.time(12, 0))
         d = api(self.fac).get(STATUS).json()
         self.assertEqual(set(d), {'closure_hour', 'blocked', 'reason', 'closure_date', 'validated', 'enabled'})
-        self.assertEqual((d['closure_hour'], d['enabled'], d['closure_date']), ('12:00', True, str(today())))
+        # BUG-1130 : closure_date = journee terminee a valider (jour de travail - 1).
+        self.assertEqual((d['closure_hour'], d['enabled'], d['closure_date']),
+                         ('12:00', True, str(work_date_for(self.n1) - timedelta(days=1))))
 
     def test_noeud_avec_user_sans_noeud_status(self):
         r = api(self.dirn).get(STATUS)

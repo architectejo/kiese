@@ -7,7 +7,7 @@ même traitement est aussi déclenché paresseusement par `shift-end-status`.
 from django.core.management.base import BaseCommand
 
 from core.models import Node
-from production.services import auto_close_due_days
+from production.services import auto_close_due_days, notify_direction_if_unattended_closure
 
 
 class Command(BaseCommand):
@@ -26,7 +26,11 @@ class Command(BaseCommand):
         if options['node']:
             nodes = nodes.filter(code=options['node'])
         total = 0
+        alerts = 0
         for node in nodes:
+            # Q-021 : personne à l'heure de clôture -> direction/comptable avertis (idempotent).
+            if notify_direction_if_unattended_closure(node) is not None:
+                alerts += 1
             out = auto_close_due_days(
                 node, grace_minutes=options['grace'], require_switch=not options['ignore_switch'],
             )
@@ -37,4 +41,6 @@ class Command(BaseCommand):
                         f"{node.code} {day} : {len(res['closed'])} clôturée(s), "
                         f"{len(res['skipped'])} laissée(s) ouverte(s)."
                     )
+        if alerts:
+            self.stdout.write(f"{alerts} alerte(s) « clôture sans personne connectée » envoyée(s) à la direction.")
         self.stdout.write(self.style.SUCCESS(f"{total} fournée(s) clôturée(s) automatiquement."))

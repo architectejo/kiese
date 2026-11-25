@@ -77,8 +77,9 @@ class SessionDefaultsTests(_Base):
             r = self._declare()
         self.assertEqual(r.status_code, 201, r.data)
         session = ProductionSession.objects.get(pk=r.data['id'])
-        # BUG-247 : date calendaire ; équipe = celle de la période en cours (démarrée le 11/11).
-        self.assertEqual(session.date, D)
+        # BUG-1130 (midi à midi) : 09:00 le 12/11 = journée du 11/11 ; équipe = celle de la
+        # période en cours (démarrée le 11/11) : date ET équipe de la même période.
+        self.assertEqual(session.date, PREV)
         self.assertEqual(session.team, 'B')
 
     def test_rotation_new_work_day_at_12_00(self):
@@ -116,40 +117,40 @@ class SessionDefaultsTests(_Base):
         self.assertIn('team', r.data)
 
     def test_without_rotation_explicit_payload_unchanged(self):
-        with _now(0, 30):
-            r = self._declare(date='2026-11-12', team='A')
+        with _now(0, 30):  # BUG-1130 : journée comptable = 11/11 (le 12/11 serait futur)
+            r = self._declare(date='2026-11-11', team='A')
         self.assertEqual(r.status_code, 201, r.data)
 
 
 class BreadStockByDateTests(_Base):
-    def test_without_rotation_today_is_local_date_at_00_30(self):
+    def test_without_rotation_today_is_business_day_at_00_30(self):
         BreadStock.objects.create(node=self.node, bread_price=self.bp)
-        with _now(0, 30):
-            r = self.api.get(BY_DATE, {'date': '2026-11-12'})
+        with _now(0, 30):  # BUG-1130 : journée comptable = 11/11
+            r = self.api.get(BY_DATE, {'date': '2026-11-11'})
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data['source'], 'live')
-        self.assertEqual(r.data['work_date'], '2026-11-12')
+        self.assertEqual(r.data['work_date'], '2026-11-11')
         self.assertTrue(r.data['server_now'].startswith('2026-11-12T00:30'))
 
     def test_rotation_live_for_current_work_date_snapshot_before(self):
         self._rotation()
-        with _now(3, 0):
-            live = self.api.get(BY_DATE, {'date': '2026-11-12'})
-            future = self.api.get(BY_DATE, {'date': '2026-11-13'})
-            past = self.api.get(BY_DATE, {'date': '2026-11-11'})
+        with _now(3, 0):  # BUG-1130 : journée comptable = 11/11
+            live = self.api.get(BY_DATE, {'date': '2026-11-11'})
+            future = self.api.get(BY_DATE, {'date': '2026-11-12'})
+            past = self.api.get(BY_DATE, {'date': '2026-11-10'})
             default = self.api.get(BY_DATE)
         self.assertEqual(live.data['source'], 'live')
-        self.assertEqual(live.data['work_date'], '2026-11-12')
+        self.assertEqual(live.data['work_date'], '2026-11-11')
         self.assertEqual(future.status_code, 400)
         self.assertEqual(past.data['source'], 'snapshot')
-        self.assertEqual(default.data['date'], '2026-11-12')
+        self.assertEqual(default.data['date'], '2026-11-11')
         with _now(12, 0):
             self.assertEqual(self.api.get(BY_DATE, {'date': '2026-11-12'}).data['source'], 'live')
 
 
 class OpeningConfirmationTests(_Base):
     def test_get_default_date_without_rotation_is_local(self):
-        with _now(0, 30):
+        with _now(12, 30):  # BUG-1130 : avant 12:00 la journée serait celle de la veille
             r = self.api.get(OPENING)
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data['date'], '2026-11-12')
@@ -158,10 +159,10 @@ class OpeningConfirmationTests(_Base):
 
     def test_get_default_date_rotation_is_work_date(self):
         self._rotation()
-        with _now(9, 0):
+        with _now(9, 0):  # BUG-1130 : 09:00 = journée du 11/11
             r = self.api.get(OPENING)
-        self.assertEqual(r.data['date'], '2026-11-12')
-        self.assertEqual(r.data['work_date'], '2026-11-12')
+        self.assertEqual(r.data['date'], '2026-11-11')
+        self.assertEqual(r.data['work_date'], '2026-11-11')
         with _now(12, 0):
             self.assertEqual(self.api.get(OPENING).data['date'], '2026-11-12')
 
@@ -172,9 +173,9 @@ class OpeningConfirmationTests(_Base):
         with _now(9, 0):
             r = self.api.post(OPENING, self._opening_payload(), format='json')
         self.assertEqual(r.status_code, 200, r.data)
-        self.assertEqual(r.data['date'], '2026-11-12')
-        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=D).exists())
-        self.assertFalse(DailyOpeningConfirmation.objects.filter(node=self.node, date=PREV).exists())
+        self.assertEqual(r.data['date'], '2026-11-11')  # BUG-1130 : 09:00 = journée du 11/11
+        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=PREV).exists())
+        self.assertFalse(DailyOpeningConfirmation.objects.filter(node=self.node, date=D).exists())
 
     def test_post_past_date_rejected_in_rotation(self):
         self._rotation()
@@ -186,16 +187,16 @@ class OpeningConfirmationTests(_Base):
         self.assertFalse(BreadStock.objects.exists())
 
     def test_post_calendar_date_after_midnight_accepted_in_rotation(self):
-        # BUG-247 : 03:00 le 12/11 : la date de travail est le 12/11 (calendaire),
+        # BUG-1130 : 03:00 le 12/11 : la date de travail est le 11/11 (midi à midi),
         # l'équipe de service est celle de la période démarrée le 11/11 à 12:00.
         self._rotation()
         DailyTeamAssignment.objects.create(node=self.node, work_date=PREV, team='A')
         with _now(3, 0):
-            ok = self.api.post(OPENING, self._opening_payload(date='2026-11-12'), format='json')
-            past = self.api.post(OPENING, self._opening_payload(date='2026-11-11'), format='json')
+            ok = self.api.post(OPENING, self._opening_payload(date='2026-11-11'), format='json')
+            past = self.api.post(OPENING, self._opening_payload(date='2026-11-10'), format='json')
         self.assertEqual(ok.status_code, 200, ok.data)
         self.assertEqual(past.status_code, 400)
-        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=D).exists())
+        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=PREV).exists())
 
     def test_post_current_explicit_date_accepted_in_rotation(self):
         self._rotation()
@@ -212,7 +213,7 @@ class OpeningConfirmationTests(_Base):
         self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, date=PREV).exists())
 
     def test_post_default_date_without_rotation_is_local_at_00_30(self):
-        with _now(0, 30):
+        with _now(12, 30):  # BUG-1130 : avant 12:00 la journée serait celle de la veille
             r = self.api.post(OPENING, self._opening_payload(), format='json')
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data['date'], '2026-11-12')
@@ -239,10 +240,10 @@ class OpeningConfirmationTests(_Base):
 class ClosureAndShiftTests(_Base):
     def test_closure_report_default_date_is_work_date(self):
         self._rotation()
-        with _now(9, 0):
+        with _now(9, 0):  # BUG-1130 : 09:00 = journée du 11/11
             report = _build_daily_closure_report(self.node)
-        self.assertEqual(report['date'], '2026-11-12')
-        self.assertEqual(report['work_date'], '2026-11-12')
+        self.assertEqual(report['date'], '2026-11-11')
+        self.assertEqual(report['work_date'], '2026-11-11')
 
     def test_closure_report_contains_the_day_of_the_previous_work_date(self):
         self._rotation()
@@ -250,7 +251,7 @@ class ClosureAndShiftTests(_Base):
             node=self.node, team='B', date=PREV, declared_by=self.gerant, node_origin='K1',
         )
         ProductionSessionLine.objects.create(session=session, bread_price=self.bp, quantity=12)
-        with _now(9, 0):
+        with _now(13, 0):  # BUG-1130 : à 09:00 le 11/11 serait la journée courante
             r = self.api.get(CLOSURE, {'date': '2026-11-11'})
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data['date'], '2026-11-11')
@@ -258,7 +259,7 @@ class ClosureAndShiftTests(_Base):
         self.assertIn('server_now', r.data)
 
     def test_closure_report_without_rotation_has_local_work_date(self):
-        with _now(0, 30):
+        with _now(12, 30):  # BUG-1130 : avant 12:00 la journée serait celle de la veille
             r = self.api.get(CLOSURE, {'date': '2026-11-11'})
         self.assertEqual(r.data['date'], '2026-11-11')
         self.assertEqual(r.data['work_date'], '2026-11-12')
@@ -271,5 +272,5 @@ class ClosureAndShiftTests(_Base):
         with _now(9, 0):
             rot = self.api.get(SHIFT, {'node': 'K1'})
         self.assertEqual(rot.data['pending_validation'], False)
-        self.assertEqual(rot.data['work_date'], '2026-11-12')
+        self.assertEqual(rot.data['work_date'], '2026-11-11')  # BUG-1130 : 09:00 = journée du 11/11
         self.assertIn('server_now', rot.data)

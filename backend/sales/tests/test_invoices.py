@@ -754,7 +754,7 @@ class ReceiptNumberTests(TransactionTestCase):
     """Numéro de reçu unique, même en créations simultanées (CLAUDE.md §5.2)."""
 
     def setUp(self):
-        self.node = Node.objects.create(code='K1', name='K1 - TABORA')
+        self.node = Node.objects.create(code='K1', name='K1 - TABORA', team_rotation_enabled=False)  # Q-017 : scénario historique hors rotation
         self.bp = BreadPrice.objects.create(category='MOYEN', label='Pain 500 FC', unit_price=500)
         self.facturier = __import__('core.models', fromlist=['User']).User.objects.create_user(
             username='fact_concurrency', password='x', role='FACTURIER', node=self.node, team='A'
@@ -802,7 +802,7 @@ class ConcurrentInvoiceBPTests(TransactionTestCase):
     """Concurrence : deux factures simultanées pour le même client -> BP finale correcte."""
 
     def setUp(self):
-        self.node = Node.objects.create(code='K1')
+        self.node = Node.objects.create(code='K1', team_rotation_enabled=False)  # Q-017 : scénario historique hors rotation
         self.bp = BreadPrice.objects.create(category='MOYEN', label='Pain 500 FC', unit_price=500)
         from core.models import User
         self.facturier = User.objects.create_user(

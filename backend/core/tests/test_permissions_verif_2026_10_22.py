@@ -30,8 +30,8 @@ def make_user(role, node=None, username=None, **extra):
 class VerifBase(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code="K1", name="DEMO K1 TABORA")
-        cls.k2 = Node.objects.create(code="K2", name="DEMO K2 COQ")
+        cls.k1 = Node.objects.create(code="K1", name="DEMO K1 TABORA", team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code="K2", name="DEMO K2 COQ", team_rotation_enabled=False)
         cls.gerant_k1 = make_user("GERANT", node=cls.k1)
         cls.gerant_k2 = make_user("GERANT", node=cls.k2)
         cls.comptable = make_user("COMPTABLE", node=None)
@@ -128,7 +128,7 @@ class BreadTransferForgedIdTests(VerifBase):
     deux AUTRES boulangeries (K2<->K3) que celle de l'attaquant (K1)."""
 
     def test_unrelated_gerant_gets_404_not_a_leak(self):
-        k3 = Node.objects.create(code="K3", name="DEMO K3 ATHENEE")
+        k3 = Node.objects.create(code="K3", name="DEMO K3 ATHENEE", team_rotation_enabled=False)
         bp = BreadPrice.objects.filter(is_active=True).first() or BreadPrice.objects.create(
             category="DEMO", label="DEMO 200", unit_price=200,
         )

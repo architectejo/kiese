@@ -19,10 +19,11 @@ class Bug286ClotureDateLivraison(Base):
         self.assertEqual(r.status_code, 200, r.data)
         return r.data['totals']
 
-    def test_vente_facturee_la_veille_livree_apres_minuit_tombe_au_jour_de_livraison(self):
-        with _now(23, 55, PREV):
+    def test_vente_facturee_la_veille_livree_apres_la_cloture_tombe_au_jour_de_livraison(self):
+        # BUG-1130 : la journee comptable change a midi (plus a minuit) : livraison a 12:10 = jour D.
+        with _now(11, 55):  # journee comptable PREV (avant la cloture de 12:00)
             iid = self.sale(qty=10, pay=2000).data['id']  # 5000 FC, 2000 verses
-        with _now(0, 10):
+        with _now(12, 10):
             self.assertEqual(self.deliver(iid).status_code, 200)
             avant = self._closure(PREV)
             apres = self._closure(D)

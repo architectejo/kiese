@@ -117,8 +117,8 @@ class TeamAssignmentApiTests(TestCase):
         with _now(11, 59, NEXT):
             g = self.api.get(URL)
             self.assertEqual(g.data['team'], 'A')
-            # BUG-247 : `work_date` = date calendaire ; `shift_date` = période de service.
-            self.assertEqual(g.data['work_date'], '2026-11-12')
+            # BUG-1130 : `work_date` = journée comptable (midi à midi) = période de service.
+            self.assertEqual(g.data['work_date'], '2026-11-11')
             self.assertEqual(g.data['shift_date'], '2026-11-11')
         with _now(12, 0, NEXT):
             r = self.api.get(URL)

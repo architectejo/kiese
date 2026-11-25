@@ -200,7 +200,8 @@ def _valid_cursor_value(value) -> bool:
         parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=_tz.utc)
-        return parsed <= datetime.now(_tz.utc) + timedelta(minutes=5)
+        from django.utils import timezone as _dj_tz
+        return parsed <= _dj_tz.now() + timedelta(minutes=5)
     except (ValueError, OverflowError, OSError):
         return False
 
