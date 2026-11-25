@@ -20,7 +20,7 @@ Frontend : `npx tsc --noEmit` propre ; `npx vitest run` 10/10 OK ; `npm run buil
 - BUG-1301 (verrou de vente sans clôture la veille) : À CLARIFIER (client) — **reproduit en réel** sur installation neuve : interrupteur coché -> K1 bloqué car le 24 n'a aucune clôture.
 - BUG-1302 (runner de test / throttle DRF, 28 erreurs) : CORRIGÉ (`5e12db5`), à vérifier par dev-b.
 - BUG-1303 (message de blocage « direction » au lieu de « direction ou le comptable ») : CORRIGÉ (`bb887aa`), à vérifier par dev-b.
-- BUG-1304 (page Clôture Journalière positionnée sur la journée en cours au lieu de la journée terminée que le verrou exige) : OUVERT, correction en cours (dev-frontend).
+- BUG-1304 (page Clôture Journalière positionnée sur la journée en cours au lieu de la journée terminée que le verrou exige ; clôture en attente invisible des valideurs) : CORRIGÉ (dev-frontend), contrôlé dans Chrome par dev-a, à vérifier par dev-b.
 
 ## 4. Contrôles API et Chrome (instance jetable 8001 / 5174, base neuve `seed_kiese`, comptes fictifs)
 
@@ -32,8 +32,9 @@ Frontend : `npx tsc --noEmit` propre ; `npx vitest run` 10/10 OK ; `npm run buil
 | Alerte « Clôture sans personne connectée » : 1 seule notification après 2 appels direction ; visible du comptable ; invisible du gérant K1 ; pas d'alerte quand le facturier K1 appelle (BUG-1125 + BUG-1300) | API + Chrome (cloche, bureau) | OK — orange, 3 lignes lisibles |
 | Blocage immédiat des ventes (interrupteur coché, clôture de la veille non validée) puis déblocage (BUG-1123) | facturier K1, API | OK (403 puis 201) ; texte corrigé par BUG-1303 |
 | Comptable : section « Versement » en lecture seule, menu Caisse / Clôture (BUG-1126) | comptable, Chrome bureau | OK |
-| Clôture Journalière côté gérant après midi | gérant K1, Chrome bureau | **KO -> BUG-1304** |
+| Clôture Journalière côté gérant après midi | gérant K1, Chrome bureau | **KO -> BUG-1304** ; après correction : bandeau « Clôture à faire : journée du 24/11/2026 », bouton « Valider la clôture de la journée du 24/11/2026 », clôture créée datée 2026-11-24 EN ATTENTE — OK |
+| Valideur : section « Clôtures en attente de validation » (toutes dates), fiche, Confirmer (BUG-1124 + BUG-1304) | comptable, Chrome bureau | OK : K1 journée du 24 listée, confirmée, liste vide ensuite ; `closure-status` K1 -> `validated: true`, `blocked: false` |
 | Modale « Stock de départ du jour » (libellé, « clôture à 12:00 ») | gérant K1, Chrome bureau + POS 360 px | OK |
 | « Stock Pains du Jour » (stock de départ, vendu, envoyés, reçu, TOTAL) | gérant K1, Chrome bureau | OK |
 
-Reste à voir à l'écran : boutons confirmer / infirmer du comptable sur une clôture réelle (après BUG-1304), bannière de blocage au POS.
+Reste à voir à l'écran : bannière de blocage au POS (360 px).

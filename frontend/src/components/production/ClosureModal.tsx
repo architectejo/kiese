@@ -6,6 +6,7 @@ import {
   coreApi, productionApi, BreadDisposal, BreadPrice, ProductionSession, ServiceTeam, TeamAssignment,
 } from '@/api/services';
 import { DISPOSAL_LABELS } from './productionHelpers';
+import { closureDayRange, formatDayFr } from '@/utils/closureDay';
 
 // BUG-973 (remarque.md demande 3) : boîte de clôture du gérant à l'heure de clôture.
 // Montée UNE SEULE fois par `DashboardLayout` (comme la boîte « stock de départ »). Elle reprend les
@@ -131,7 +132,7 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
       isOpen={true}
       onClose={onLater}
       title="Clôture de la journée"
-      subtitle={`Heure de clôture${closureHour ? ` : ${closureHour.replace(':', 'h')}` : ''} — saisissez les sorties non valorisées`}
+      subtitle={`Journée du ${formatDayFr(closureDate)} (${closureDayRange(closureDate, closureHour)}) — saisissez les sorties non valorisées`}
       maxWidth="640px"
       closeOnBackdropClick={false}
       footer={

@@ -9,7 +9,12 @@ import type { BillKey } from '@/components/treasury/treasuryShared';
 export type BillCounts = Record<BillKey, number>;
 
 interface Props {
+  /** Journée sur laquelle porte la clôture (AAAA-MM-JJ) — BUG-1304 : peut être la veille terminée. */
   today: string;
+  /** Borne haute du sélecteur de date rétroactive (journée en cours). */
+  maxDate: string;
+  /** Journée au format JJ/MM/AAAA, pour les libellés. */
+  dayLabel: string;
   editingClosure: CashClosure | null;
   todayClosure: CashClosure | undefined;
   selectedNodeLabel: string | null;
@@ -42,7 +47,7 @@ interface Props {
 
 /** §5.2 — Billetage physique (« Versement ») : saisie du gérant uniquement. */
 export const BilletageForm: React.FC<Props> = ({
-  today, editingClosure, todayClosure, selectedNodeLabel, bills, onBillsChange,
+  today, maxDate, dayLabel, editingClosure, todayClosure, selectedNodeLabel, bills, onBillsChange,
   closureNotes, onNotesChange, closureDate, onClosureDateChange, allowBackdatedSales,
   closureError, closureInfo, closureBlockedByTransferGap, closuresLoading, billTotalShown,
   reportsReady, reportsProgress, reportsCount, theoreticalCash, totalExpenses, expensesReady,
@@ -141,11 +146,11 @@ export const BilletageForm: React.FC<Props> = ({
             Date de la clôture (optionnel)
           </label>
           <span style={{ display: 'block', fontSize: '0.58rem', color: 'hsl(var(--text-muted))', marginBottom: '4px' }}>
-            Laisser vide = aujourd'hui. Jamais une date future.
+            Laisser vide = journée du {dayLabel}. Jamais une date future.
           </span>
           <input
             type="date"
-            max={today}
+            max={maxDate}
             value={closureDate}
             onChange={e => onClosureDateChange(e.target.value)}
             className="form-input"
@@ -185,7 +190,7 @@ export const BilletageForm: React.FC<Props> = ({
             ? 'Corriger et Re-soumettre'
             : (allowBackdatedSales && closureDate && closureDate !== today)
               ? `Valider la Clôture du ${new Date(closureDate).toLocaleDateString('fr-FR')}`
-              : 'Valider la Clôture de Caisse du Jour'}
+              : `Valider la clôture de la journée du ${dayLabel}`}
         </button>
       )}
       {todayClosure && !editingClosure && (

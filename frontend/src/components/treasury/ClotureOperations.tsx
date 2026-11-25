@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import {
-  FiRefreshCw, FiAlertTriangle, FiLock, FiFileText, FiDollarSign, FiPrinter,
+  FiRefreshCw, FiAlertTriangle, FiLock, FiFileText, FiDollarSign, FiPrinter, FiCalendar,
 } from 'react-icons/fi';
 import {
   treasuryApi, salesApi, productionApi, coreApi,
@@ -17,6 +17,8 @@ import {
 } from '@/components/treasury/treasuryShared';
 import { useAuthStore } from '@/store/authStore';
 import { useWorkDate } from '@/store/workDateStore';
+import { useClosureStatusStore } from '@/store/closureStatusStore';
+import { closureDayRange, formatDayFr, pendingClosureDay } from '@/utils/closureDay';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
 import { ExpenseHistoryModal } from '@/components/treasury/ExpenseHistoryModal';
 import { ClosureDetailModal } from '@/components/treasury/ClosureDetailModal';
@@ -27,6 +29,7 @@ import { LocalExpensesCard } from '@/components/treasury/LocalExpensesCard';
 import { BilletageSummaryTable, ClosuresList } from '@/components/treasury/ClosuresPanels';
 import { FacturierReportsTable, PastReportsTable } from '@/components/treasury/FacturierReportsTables';
 import { ProductionRecapPanel } from '@/components/treasury/ProductionRecapPanel';
+import { PendingClosuresPanel } from '@/components/treasury/PendingClosuresPanel';
 import { computeProductionRecap, print511, printPastReport } from '@/components/treasury/clotureRecap';
 import type { BreadSoldSummary } from '@/components/treasury/clotureRecap';
 
@@ -40,7 +43,32 @@ import type { BreadSoldSummary } from '@/components/treasury/clotureRecap';
  */
 export const ClotureOperations: React.FC = () => {
   const { user } = useAuthStore();
-  const today = useWorkDate();
+  // BUG-1134 : journée EN COURS (date de travail serveur, de midi à midi).
+  const workDate = useWorkDate();
+
+  // BUG-1304 : après la bascule de midi, la journée qui VIENT DE SE TERMINER
+  // (`closure-status.closure_date`) doit être clôturée tant qu'elle n'est pas validée par la
+  // direction ou le comptable : la section se positionne sur elle par défaut. Profils d'une
+  // boulangerie uniquement (le Siège reçoit `closure_date: null`). Retour possible à la journée en cours.
+  const closureStatus = useClosureStatusStore(s => s.status);
+  const tracksNodeClosure = !!user?.node && !user.can_access_all_nodes;
+  const refreshClosureStatus = useCallback(async (): Promise<void> => {
+    if (!tracksNodeClosure) return;
+    try {
+      const { data } = await treasuryApi.closureStatus.get();
+      useClosureStatusStore.getState().setStatus(data);
+    } catch (err) {
+      console.error('Statut de clôture indisponible :', getErrorDetail(err, 'Statut de clôture indisponible.'));
+    }
+  }, [tracksNodeClosure]);
+  useEffect(() => { void refreshClosureStatus(); }, [refreshClosureStatus]);
+  const pendingDay = tracksNodeClosure ? pendingClosureDay(closureStatus, workDate) : null;
+  const [showCurrentDay, setShowCurrentDay] = useState(false);
+  // Nouvelle journée à clôturer (ou plus rien à clôturer) : retour au choix par défaut.
+  useEffect(() => { setShowCurrentDay(false); }, [pendingDay]);
+  /** Journée sur laquelle portent les opérations ci-dessous (AAAA-MM-JJ). */
+  const today = pendingDay && !showCurrentDay ? pendingDay : workDate;
+  const dayLabel = formatDayFr(today);
 
   const [extraReports, setExtraReports] = useState<FacturierReport[]>([]);
   const [nodeFilter, setNodeFilter] = useState('');
@@ -133,14 +161,17 @@ export const ClotureOperations: React.FC = () => {
   const reloadReports = reportsQ.reload;
   const reloadClosures = closuresQ.reload;
   const reloadExpenses = expensesQ.reload;
+  // BUG-1304 (valideurs) : relecture de la file « Clôtures en attente de validation ».
+  const [pendingTick, setPendingTick] = useState(0);
   // Rechargement complet après une action (valider, clôturer, dépense…).
   const loadData = useCallback(async () => {
     // BUG-175 : les rapports rétroactifs ajoutés localement ne survivent pas au rechargement
     // (la liste serveur fait alors foi, comme avant BUG-164).
     setExtraReports([]);
     reloadReports(); reloadClosures(); reloadExpenses();
-    await loadAux();
-  }, [reloadReports, reloadClosures, reloadExpenses, loadAux]);
+    setPendingTick(t => t + 1);
+    await Promise.all([loadAux(), refreshClosureStatus()]);
+  }, [reloadReports, reloadClosures, reloadExpenses, loadAux, refreshClosureStatus]);
 
   useEffect(() => { loadAux(); }, [loadAux]);
 
@@ -416,18 +447,60 @@ export const ClotureOperations: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '0.85rem' }}>
       {/* En-tête des opérations de clôture du jour (ex « Clôture & Caisse ») */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-        <h2 style={{ fontSize: '1rem', fontWeight: 800 }}>Opérations de clôture du jour — {today}</h2>
+        <h2 style={{ fontSize: '1rem', fontWeight: 800 }}>
+          Opérations de clôture — journée du {dayLabel}
+          {today === workDate && <span style={{ fontWeight: 600, color: 'hsl(var(--text-muted))' }}> (en cours)</span>}
+        </h2>
         <button onClick={loadData} disabled={isLoading} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
           <FiRefreshCw style={{ animation: isLoading ? 'spin 1s linear infinite' : 'none' }} />
           <span>Actualiser les opérations</span>
         </button>
       </div>
 
+      {/* BUG-1304 : journée terminée à clôturer (de midi à midi) — accès direct et retour à la journée en cours. */}
+      {pendingDay && (
+        <div
+          role="status"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px',
+            padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+            backgroundColor: `hsl(var(--color-${showCurrentDay ? 'warning' : 'info'}) / 0.1)`,
+            border: `1px solid hsl(var(--color-${showCurrentDay ? 'warning' : 'info'}) / 0.35)`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, flex: '1 1 220px' }}>
+            <FiCalendar style={{ flexShrink: 0, marginTop: '2px', color: `hsl(var(--color-${showCurrentDay ? 'warning' : 'info'}))` }} />
+            <span style={{ fontWeight: 700 }}>
+              Clôture à faire : journée du {formatDayFr(pendingDay)} ({closureDayRange(pendingDay, closureStatus?.closure_hour)}).
+              {showCurrentDay && (
+                <span style={{ fontWeight: 500 }}> Vous consultez la journée en cours ({formatDayFr(workDate)}), qui n'est pas terminée.</span>
+              )}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCurrentDay(v => !v)}
+            className="btn btn-secondary"
+            style={{ minHeight: '36px', padding: '6px 12px', fontSize: '0.75rem' }}
+          >
+            {showCurrentDay
+              ? `Revenir à la clôture du ${formatDayFr(pendingDay)}`
+              : `Voir la journée en cours (${formatDayFr(workDate)})`}
+          </button>
+        </div>
+      )}
+
+      {/* BUG-1304 (valideurs) : la clôture à confirmer est celle de la journée TERMINÉE (souvent la
+          veille), absente de « Clôtures du Jour » : file de toutes les clôtures en attente, toutes dates. */}
+      {canConfirm && (
+        <PendingClosuresPanel nodeFilter={nodeFilter} refreshKey={pendingTick} onOpenDetail={setDetailClosure} />
+      )}
+
       {/* KPI Bar */}
       <div className="kpi-grid" style={{ gap: '12px' }}>
         {[
-          { label: 'TOTAL CASH DU JOUR', value: reportsReady ? `${fmt(totalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-success)', icon: <FiDollarSign /> },
-          { label: 'TOTAL CRÉDIT DU JOUR', value: reportsReady ? `${fmt(totalCredit)} FC` : progressLabel(reportsQ), color: 'var(--color-info)', icon: <FiFileText /> },
+          { label: 'TOTAL CASH DE LA JOURNÉE', value: reportsReady ? `${fmt(totalCash)} FC` : progressLabel(reportsQ), color: 'var(--color-success)', icon: <FiDollarSign /> },
+          { label: 'TOTAL CRÉDIT DE LA JOURNÉE', value: reportsReady ? `${fmt(totalCredit)} FC` : progressLabel(reportsQ), color: 'var(--color-info)', icon: <FiFileText /> },
           { label: 'SOLDE COMPTABLE CAISSE', value: (reportsReady || closureRecorded) ? `${fmt(soldeComptable)} FC` : progressLabel(reportsQ), color: 'var(--color-warning)', icon: <FiLock /> },
           { label: 'ÉCART BILLETAGE', value: dayReady ? `${ecartCaisse >= 0 ? '+' : ''}${fmt(ecartCaisse)} FC` : 'calcul en cours…', color: !dayReady ? 'var(--text-muted)' : ecartCaisse === 0 ? 'var(--color-success)' : 'var(--color-danger)', icon: <FiAlertTriangle /> },
         ].map((k, i) => (
@@ -449,7 +522,7 @@ export const ClotureOperations: React.FC = () => {
             §5.1.1 — Niveau 1 · Rapports Journaliers des Facturiers
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>Aujourd'hui : {today}</span>
+            <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))' }}>Journée du {dayLabel}</span>
             {user?.can_access_all_nodes && allNodes.length > 0 && (
               <select
                 value={nodeFilter}
@@ -467,7 +540,7 @@ export const ClotureOperations: React.FC = () => {
             {allowBackdatedSales && (
               <input
                 type="date"
-                max={today}
+                max={workDate}
                 value={reportDate}
                 onChange={e => setReportDate(e.target.value)}
                 title="Date du rapport (optionnel — vide = aujourd'hui, jamais une date future)"
@@ -496,7 +569,7 @@ export const ClotureOperations: React.FC = () => {
                 ? 'Génération...'
                 : (allowBackdatedSales && reportDate && reportDate !== today)
                   ? `Générer Rapport du ${new Date(reportDate).toLocaleDateString('fr-FR')}`
-                  : 'Générer Rapport du Jour'}
+                  : `Générer le rapport de la journée du ${dayLabel}`}
             </button>
           </div>
         </div>
@@ -544,6 +617,8 @@ export const ClotureOperations: React.FC = () => {
         {!user?.can_access_all_nodes && (
           <BilletageForm
             today={today}
+            maxDate={workDate}
+            dayLabel={dayLabel}
             editingClosure={editingClosure}
             todayClosure={todayClosure}
             selectedNodeLabel={selectedNodeLabel}
