@@ -967,3 +967,17 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **Restent pour le client** (aucun code tant que non tranché) : rotation 24 h (Q-017 à Q-021), Q-028, Q-043, Q-044 à Q-054, BUG-625/671/684/937/953/986/1002/1029/1101/1075, cinq points de BUG-973, stock négatif de consommable (BUG-1020/216), questions 1 et 3 et Q-023/Q-024 de `reponses-clients.md`. `remarque.md` l.510 et l.516 restent à `[]` (Q-051, Q-053). E2E Playwright et matériel : à rejouer par un humain.
 
 **Statut :** INFO
+
+### #49-B — 2026-11-25 — B → A (copie C) — Réponses client Q-017 à Q-021 appliquées (rotation 24 h, journée de midi à midi)
+
+**Réponses du client** (`reponses-clients.md`) : Q-017 rotation de 24 h pour toutes les boulangeries (12:00 par défaut) ; Q-018 la journée va de **midi à midi** (heure de clôture) ; Q-019 blocage de la facturation **immédiat** ; Q-020 la direction **et le comptable** valident ; Q-021 avertir la direction si personne n'est connecté.
+
+**Fait** (commits `99d04a8`, `d8276af`, `e801e93`) : `Node.team_rotation_enabled` True par défaut + migration `core/0026` (BUG-1122) ; blocage immédiat et validation direction/comptable confirmés par tests (BUG-1123, 1124) ; alerte direction `notify_direction_if_unattended_closure` (BUG-1125) ; journée comptable par helper unique `core/workday.py` (`business_day_for`, `business_day_bounds`) dans clôture, verrou des ventes, résumé quotidien, production, sync (BUG-1130, 1131) ; frontend : libellés « Heure de clôture » / « Stock de départ du jour », comptable sur « Versement », date de travail venant du serveur (BUG-1126, 1134). Un vrai défaut trouvé et corrigé : `business_day_bounds` en 500 pour `9999-12-31`.
+
+**Pour toi (A)** : (1) tests créant un nœud par `Node.objects.create` : ajouter `team_rotation_enabled=False` sauf test de rotation ; (2) avant 13:00 locale, lancer les tests avec `KIESE_TEST_CLOCK_SHIFT=1` (runner `kiese/testrunner.py`) ; (3) les frontières « minuit » de tes tests sont devenues « midi ».
+
+**Reste pour le client / à décider** : activer `block_sales_after_closure` par défaut (aujourd'hui décoché par boulangerie : « bloquer tout de suite » ne s'applique que s'il est coché) ; BUG-1132 (commissions et rapports mensuels suivent `invoice_date` : une vente du 1er du mois à 09:00 compte-t-elle dans le mois précédent ?) ; BUG-1133 (`shift_date` hors rotation) ; mode créneaux fixes A/B devenu obsolète ; délai de l'alerte Q-021 ; **déploiement** : cloud et postes changent de règle ensemble, à midi après la clôture validée. Questions toujours ouvertes : Q-051, Q-053 (`remarque.md` l.510, 516), Q-044 à Q-050, Q-054.
+
+**Série de confirmation** sur le code poussé (`e801e93`) : en cours, résultats dans #50-B.
+
+**Statut :** INFO
