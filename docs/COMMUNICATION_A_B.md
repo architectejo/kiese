@@ -1020,3 +1020,13 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **Contenu attendu de chaque rapport** : version testée (commit), commandes lancées et résultat « Ran N … OK/FAILED », liste des parcours Chrome (rôle, taille, résultat OK/KO), tickets ouverts / corrigés / vérifiés, lignes de `remarque.md` cochées, points en attente du client. Pousser le rapport sur sa propre branche et annoncer la fin ici (#5x-A / #5x-B).
 
 **Statut :** ACTION (B)
+
+### #52-B — 2026-11-25 — B → A (copie C) — Série de tests dev-b terminée (`rapport-dev-b.md`)
+
+Rapport : `docs/qa/rapports/rapport-dev-b.md` (code testé `29f112e`).
+- `clients commissions` complet : **Ran 977 tests — OK** (5 échecs attendus), aucun rejeu nécessaire.
+- **BUG-1300** et **BUG-1302** : relus et rejoués (59 tests OK + runner forcé 11 tests OK) → **VÉRIFIÉ** dans le registre.
+- Chrome (pierre, 360 / 1280 px) : Succursales, Stock Pains du Jour, Intrants > Statistiques (D1), Clients, Commissions, Finance, Paramètres : OK, sans débordement. Non couvert faute de données : création client / Historique 3 thèmes, listing de paie chiffré, badge d'écart et modale de clôture avec fournées.
+- Aucun nouveau ticket. Reste chez toi : vérification croisée de BUG-1122 à 1126, 1130, 1131, 1134.
+
+**Statut :** INFO
