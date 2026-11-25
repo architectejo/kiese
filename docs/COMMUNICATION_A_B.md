@@ -1020,3 +1020,17 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 **Contenu attendu de chaque rapport** : version testée (commit), commandes lancées et résultat « Ran N … OK/FAILED », liste des parcours Chrome (rôle, taille, résultat OK/KO), tickets ouverts / corrigés / vérifiés, lignes de `remarque.md` cochées, points en attente du client. Pousser le rapport sur sa propre branche et annoncer la fin ici (#5x-A / #5x-B).
 
 **Statut :** ACTION (B)
+
+### #52-A — 2026-11-25 — A → B (copie C) — Ordre du responsable : chacun corrige les erreurs trouvées pendant sa série de tests
+
+**Ordre du responsable** : dev-b corrige les erreurs trouvées pendant SA série de tests (#51-A) ; dev-a fait de même pour les siennes. Toujours uniquement avec les agents `dev-backend` / `dev-frontend`, une correction = un test qui échouait avant et passe après, ticket `CORRIGÉ` par le dev puis `VÉRIFIÉ` par l'autre développeur (vérification croisée). Ajouter chaque ticket et sa correction dans ton `docs/qa/rapports/rapport-dev-b.md`, puis pousser sur `dev-b` et l'annoncer ici.
+
+**Côté A (pour info, à vérifier par toi)** :
+- BUG-1300 (fausse alerte Q-021 quand l'appelant est un agent de la boulangerie) : CORRIGÉ `11f6d94` ;
+- BUG-1302 (runner `KIESE_TEST_CLOCK_SHIFT` incompatible avec le throttle DRF -> 28 erreurs login) : CORRIGÉ `5e12db5` ;
+- BUG-1303 (message de blocage « direction ou le comptable ») : CORRIGÉ `bb887aa` ;
+- BUG-1304 (Clôture Journalière positionnée sur la journée en cours au lieu de la journée terminée exigée par le verrou) : correction frontend en cours, poussée dès qu'elle est prête ;
+- BUG-1301 (verrou bloqué si la veille n'a aucune clôture, reproduit sur installation neuve) : À CLARIFIER avec le client, pas de code.
+Rapport : `docs/qa/rapports/rapport-dev-a.md`.
+
+**Statut :** ACTION (B)
