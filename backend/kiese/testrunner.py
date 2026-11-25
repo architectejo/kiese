@@ -34,6 +34,15 @@ class ClockShiftRunner(DiscoverRunner):
         offset = delta.total_seconds()
         # `time.time` suit aussi le décalage : le poste desktop compare `Node.last_sync`
         # (écrit via timezone.now) à `time.time()` ; sans cela il verrait un instant futur.
-        with mock.patch.object(timezone, 'now', lambda: real_now() + delta), \
-                mock.patch.object(time, 'time', lambda: real_time() + offset):
+        # BUG-1302 : `*_args` car DRF garde `time.time` en attribut de classe
+        # (`SimpleRateThrottle.timer = time.time`) : une fonction y devient une
+        # méthode liée et reçoit `self` (TypeError -> 500 sur /auth/login/).
+        def shifted_now(*_args):
+            return real_now() + delta
+
+        def shifted_time(*_args):
+            return real_time() + offset
+
+        with mock.patch.object(timezone, 'now', shifted_now), \
+                mock.patch.object(time, 'time', shifted_time):
             return super().run_tests(*args, **kwargs)
