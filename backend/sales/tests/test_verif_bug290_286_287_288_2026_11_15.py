@@ -220,16 +220,16 @@ class Reports290(RotBase):
     def test_cloture_286_jour_de_livraison_coherent_avec_daily_summary(self):
         self.assign(PREV, 'A')
         self.assign(D, 'A')
-        with _now(23, 55, PREV):
+        with _now(11, 55):  # BUG-1130 : journee comptable PREV (avant la cloture de 12:00)
             iid = self.sale(qty=10, pay=2000).data['id']
-        with _now(0, 10):
+        with _now(12, 10):  # livree apres la cloture : journee D
             self.deliver(iid)
 
         def tot(d):
             r = _api(self.gerant).get('/api/production/daily-closure/', {'date': str(d)})
             self.assertEqual(r.status_code, 200, r.data)
             return r.data['totals']
-        with _now(9, 0):
+        with _now(13, 0):
             self.assertEqual(Dc(tot(PREV)['ecart_facture_fc']), 0)
             self.assertEqual(Dc(tot(D)['ecart_facture_fc']), Dc('3000'))
             self.assertEqual(self._summary(PREV)[0], 0)

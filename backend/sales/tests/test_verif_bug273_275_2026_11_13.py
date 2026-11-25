@@ -20,9 +20,9 @@ class Verif273275(Base):
 
     def test_cash_credit_remboursement_ns_rg_coherents_avec_rapports_et_cloture(self):
         other = __import__('core.testing', fromlist=['x']).make_client(self.node)
-        with _now(23, 55, PREV):
+        with _now(11, 55):  # BUG-1130 : journee comptable PREV (avant la cloture de 12:00)
             a = self.sale(qty=2, pay=400).data['id']          # 1000, 400 cash, 600 credit
-        with _now(0, 10):
+        with _now(12, 10):  # apres la cloture : journee D
             self.assertEqual(self.deliver(a).status_code, 200)
             b = self.sale(user=self.fb, qty=4, pay=2000).data['id']   # tout cash
             self.deliver(b)

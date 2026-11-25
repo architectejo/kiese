@@ -25,7 +25,9 @@ class Base14(PageBase):
 
     def setUp(self):
         super().setUp()
-        self.k2 = Node.objects.get_or_create(code='K2', defaults={'name': 'K2 COQ'})[0]
+        # Q-017 : rotation 24 h par défaut ; ce scénario facture sans désignation d'équipe.
+        Node.objects.filter(code='K1').update(team_rotation_enabled=False)
+        self.k2 = Node.objects.get_or_create(code='K2', defaults={'name': 'K2 COQ', 'team_rotation_enabled': False})[0]
 
     def row_of(self, payload, c):
         return {x['id']: x for x in payload['clients']}.get(str(c.id))

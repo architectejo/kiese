@@ -101,20 +101,23 @@ class Verrou(Base13):
                                        'lines': [{'bread_price': self.bpx.pk, 'quantity': 1}]}, format='json')
 
     def test_bloque_jusqu_a_la_confirmation_meme_apres_infirmation_et_resoumission(self):
-        self.report(self.n1, 'A', '10000')
+        # BUG-1130 : la cloture exigee est celle de la journee comptable terminee (jour - 1).
+        veille = today() - __import__('datetime').timedelta(days=1)
+        self.report(self.n1, 'A', '10000', date=veille)
         self.assertEqual(self.sale().status_code, 403)               # pas de cloture
-        cid = self.close(self.g1, {'bills_10000': 1}).json()['id']
+        cid = self.close(self.g1, {'bills_10000': 1}, date=str(veille)).json()['id']
         self.assertEqual(self.sale().status_code, 403)               # en attente
         cl(self.dirn).post(f'/api/treasury/closures/{cid}/reject/', {'reason': 'x'}, format='json')
         self.assertEqual(self.sale().status_code, 403)               # infirmee
-        body = {'date': str(today()), **{b: 0 for b in BILLS}, 'bills_10000': 1}
+        body = {'date': str(veille), **{b: 0 for b in BILLS}, 'bills_10000': 1}
         self.assertEqual(cl(self.g1).put(f'/api/treasury/closures/{cid}/', body, format='json').status_code, 200)
         self.assertEqual(self.sale().status_code, 403)               # resoumise
         self.assertEqual(self.valider(cid).status_code, 200)
         self.assertEqual(self.sale().status_code, 201)               # confirmee (BUG-986 : a clarifier)
 
     def test_cloture_confirmee_d_un_autre_poste_ne_debloque_pas(self):
-        CashClosure.objects.create(node=self.n2, date=today(), is_validated=True, node_origin='C2')
+        CashClosure.objects.create(node=self.n2, date=today() - __import__('datetime').timedelta(days=1),
+                                   is_validated=True, node_origin='C2')
         self.assertEqual(self.sale().status_code, 403)
 
 

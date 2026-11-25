@@ -30,7 +30,7 @@ class SendBase(Base):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.k3 = Node.objects.create(code='P3', name='Perm K3')
+        cls.k3 = Node.objects.create(code='P3', name='Perm K3', team_rotation_enabled=False)
         cls.u3 = mk('pr3_gerant_c', 'GERANT', cls.k3)
 
     def setUp(self):
@@ -81,7 +81,7 @@ class DirectSendAttacks(SendBase):
         self.assertEqual(avail(self.k1, self.bp), 50)
 
     def test_BUG_540_send_to_inactive_node_refused(self):
-        k9 = Node.objects.create(code='P9', name='Ferme', is_active=False)
+        k9 = Node.objects.create(code='P9', name='Ferme', is_active=False, team_rotation_enabled=False)
         r = self.send(self.u['GERANT'], to=k9.pk)
         self.assertEqual(r.status_code, 400, r.content)
 
@@ -206,7 +206,7 @@ class CB(Base):
                                   ('SALT', 'Sel', 'g'), ('OIL', 'Huile', 'L')]:
             ConsumableType.objects.get_or_create(code=code, defaults={'label': label, 'unit': unit})
         cls.siege = Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege', 'is_active': False})[0]
-        cls.k3 = Node.objects.create(code='P3', name='Perm K3')
+        cls.k3 = Node.objects.create(code='P3', name='Perm K3', team_rotation_enabled=False)
         cls.u3 = mk('pr3_gerant_cc', 'GERANT', cls.k3)
         cls.ssiege = cls.stock(cls.siege, 'FLOUR', '100')
         cls.s1 = cls.stock(cls.k1, 'FLOUR', '5')
@@ -240,7 +240,7 @@ class GlobalIsolation(CB):
             self.assertEqual(cl(self.u[role]).get(G).status_code, 200, role)
 
     def test_inactive_node_and_siege_excluded_from_rows_decimal_strings(self):
-        Node.objects.create(code='P9', name='Ferme', is_active=False)
+        Node.objects.create(code='P9', name='Ferme', is_active=False, team_rotation_enabled=False)
         r = cl(self.u['DIRECTION']).get(G)
         codes = [n['code'] for n in r.data['nodes']]
         self.assertNotIn('SIEGE', codes)
@@ -307,7 +307,7 @@ class DispatchAttacks(CB):
         for node in ('SIEGE', 'ZZZ', 99999, None, '', [], {}):
             r = self.go([{'node': node, 'quantity': '1'}])
             self.assertEqual(r.status_code, 400, (node, r.status_code))
-        k9 = Node.objects.create(code='P9', name='Ferme', is_active=False)
+        k9 = Node.objects.create(code='P9', name='Ferme', is_active=False, team_rotation_enabled=False)
         self.assertEqual(self.go([{'node': k9.pk, 'quantity': '1'}]).status_code, 400)
         self.assertEqual(self.go([{'node': 'P1', 'quantity': '1'}, {'node': self.k1.pk, 'quantity': '1'}]
                                  ).status_code, 400)

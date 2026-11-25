@@ -96,8 +96,8 @@ class BreadSummaryTests(Vague1Base):
         self.assertEqual(resp.status_code, 403)
         self.assertNotIn('grand_total_qty', resp.data)
 
-    def test_bread_summary_suit_le_jour_calendaire_en_rotation(self):
-        """BUG-247 : rotation, relève 12:00 : une livraison de 03:00 est du jour calendaire (pas de la veille)."""
+    def test_bread_summary_suit_la_journee_midi_a_midi_en_rotation(self):
+        """BUG-1130 (remplace BUG-247) : rotation, relève 12:00 : une livraison de 03:00 est de la journée de la veille."""
         from datetime import time, datetime
         self.node.team_rotation_enabled = True
         self.node.handover_time = time(12, 0)
@@ -112,6 +112,8 @@ class BreadSummaryTests(Vague1Base):
         self.assertEqual(r.status_code, 201, r.data)
         Invoice.objects.filter(pk=r.data['id']).update(status='DELIVERED', delivered_at=inst, invoice_date=wd)
         resp = self.api.get(INV + 'bread_summary/', {'date': str(wd)})
+        self.assertEqual(resp.data['grand_total_qty'], 0)
+        resp = self.api.get(INV + 'bread_summary/', {'date': str(wd - timedelta(days=1))})
         self.assertEqual(resp.data['grand_total_qty'], 2)
 
 

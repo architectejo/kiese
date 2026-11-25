@@ -332,3 +332,6 @@ KIESE_ANNUAL_BONUS_RATE = 0.025
 
 # Bill denominations for cash counting (FC)
 KIESE_BILL_DENOMINATIONS = [20000, 10000, 5000, 1000, 500, 200, 100, 50]
+
+# Tests : lanceur optionnel qui stabilise l'horloge avant 13:00 (KIESE_TEST_CLOCK_SHIFT=1).
+TEST_RUNNER = 'kiese.testrunner.ClockShiftRunner'

@@ -243,7 +243,8 @@ class R987_988(Base13):
         """Verrou ON, cloture du jour confirmee : la vente du jour est acceptee (deblocage a la
         confirmation, BUG-986 a clarifier) et n'entre dans aucune cloture. Observation, non ticket."""
         self.cfg()
-        self.validated(today())
+        # BUG-1130 : la cloture exigee est celle de la journee comptable terminee (jour - 1).
+        self.validated(today() - __import__('datetime').timedelta(days=1))
         self.assertEqual(self.sale().status_code, 201)
 
 

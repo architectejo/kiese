@@ -60,7 +60,7 @@ class ReportDateRejectedWhenBackdatedSalesDisabledTests(TestCase):
         config.allow_backdated_sales = False
         config.save(update_fields=['allow_backdated_sales'])
         self.api_gerant = _api_for(self.gerant)
-        self.yesterday = date.today() - timedelta(days=1)
+        self.yesterday = date.today() - timedelta(days=2)  # BUG-1130 : la veille (journee terminee) est desormais acceptee ; le refus s'applique des l'avant-veille
 
     def test_gerant_cannot_generate_report_for_a_past_date_when_setting_disabled(self):
         resp = self.api_gerant.post('/api/treasury/reports/generate/', {
@@ -131,7 +131,7 @@ class ReportOnPastDateUsesThatDaysOwnInvoicesTests(TestCase):
         from datetime import datetime, time
         from django.utils import timezone as djtz
 
-        past_dt = djtz.make_aware(datetime.combine(self.past_day, time(10, 0)))
+        past_dt = djtz.make_aware(datetime.combine(self.past_day, time(13, 0)))  # BUG-1130 : midi à midi
         today_dt = djtz.make_aware(datetime.combine(date.today(), time(10, 0)))
 
         # Facture livrée le jour PASSÉ (celle qu'on veut voir dans le rapport).

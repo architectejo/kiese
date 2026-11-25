@@ -30,8 +30,8 @@ def client_for(user):
 class ChatBase(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code='K1', name='DEMO K1')
-        cls.k2 = Node.objects.create(code='K2', name='DEMO K2')
+        cls.k1 = Node.objects.create(code='K1', name='DEMO K1', team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code='K2', name='DEMO K2', team_rotation_enabled=False)
         cls.admin = mk('admin1', 'ADMIN')
         cls.dir = mk('dir1', 'DIRECTION')
         cls.compta = mk('compta1', 'COMPTABLE')

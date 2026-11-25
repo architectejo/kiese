@@ -54,7 +54,7 @@ def _deliver_same_day(node, facturier, client_obj, bread, qty, day):
     inv.payment_amount = inv.order_total
     inv.compute_debt_after()
     inv.save()
-    delivered_at = tz.make_aware(datetime(day.year, day.month, day.day, 9, 0, 0))
+    delivered_at = tz.make_aware(datetime(day.year, day.month, day.day, 13, 0, 0))
     inv.deliver(livreur=facturier, delivered_at=delivered_at)
     return inv
 
@@ -341,7 +341,7 @@ class BackdatedSalesDisabledNonRegressionTests(TransactionTestCase):
         second.compute_debt_after()
         second.save()
 
-        delivered_at = tz.make_aware(datetime(self.day.year, self.day.month, self.day.day, 10, 0, 0))
+        delivered_at = tz.make_aware(datetime(self.day.year, self.day.month, self.day.day, 14, 0, 0))
         with self.assertRaises(ValidationError):
             second.deliver(livreur=self.facA, delivered_at=delivered_at)
 

@@ -324,7 +324,10 @@ class Bug227Tests(TestCase):
         self.api = _api(make_user('GERANT', node=self.node))
 
     def test_hors_rotation_post_utilise_la_date_calendaire(self):
-        with patch('django.utils.timezone.now', return_value=_at(2026, 11, 12, 5, 0)):
+        # BUG-1130 : 13:00 (apres la cloture de 12:00) : journee comptable = jour calendaire. Avant
+        # midi, hors rotation, la designation reste calendaire alors que la journee comptable est
+        # celle de la veille (point laisse a l'agent `team_rotation_enabled`, voir rapport).
+        with patch('django.utils.timezone.now', return_value=_at(2026, 11, 12, 13, 0)):
             r = self.api.post('/api/production/team-assignment/', {'team': 'B'}, format='json')
             g = self.api.get('/api/production/team-assignment/').json()
         self.assertEqual(r.status_code, 200, r.content)
@@ -338,6 +341,6 @@ class Bug227Tests(TestCase):
         self.node.save(update_fields=['team_rotation_enabled'])
         with patch('django.utils.timezone.now', return_value=_at(2026, 11, 12, 5, 0)):
             g = self.api.get('/api/production/team-assignment/').json()
-        # BUG-247 : `work_date` calendaire ; la désignation reste rattachée à la période de relève.
-        self.assertEqual(g['work_date'], '2026-11-12')
+        # BUG-1130 : `work_date` = journée comptable (midi à midi) = période de relève.
+        self.assertEqual(g['work_date'], '2026-11-11')
         self.assertEqual(g['shift_date'], '2026-11-11')

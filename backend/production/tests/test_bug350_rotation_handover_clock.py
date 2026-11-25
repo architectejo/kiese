@@ -87,7 +87,7 @@ class HandoverClockTests(_Base):
             r = self._get()
         self.assertEqual(r.data['team'], 'A')
         self.assertTrue(r.data['needs_confirmation'])
-        self.assertEqual(r.data['date'], '2026-11-12')
+        self.assertEqual(r.data['date'], '2026-11-11')  # BUG-1130 : journée comptable (midi à midi)
 
     def test_before_handover_previous_period_confirmed_no_box(self):
         self._assign(PREV, 'A')
@@ -146,8 +146,8 @@ class HandoverClockTests(_Base):
             self.assertFalse(self._needs())
         with _now(0, 0, d=NEXT):
             r = self._get()
-        self.assertEqual(r.data['date'], '2026-11-13')       # le jour calendaire change...
-        self.assertEqual(r.data['team'], 'A')                # ...pas l'équipe
+        self.assertEqual(r.data['date'], '2026-11-12')       # BUG-1130 : minuit ne change pas la journée...
+        self.assertEqual(r.data['team'], 'A')                # ...ni l'équipe
         self.assertFalse(r.data['needs_confirmation'])       # ...ni la confirmation
 
     def test_midnight_unconfirmed_period_still_pending_after_midnight(self):
@@ -156,11 +156,10 @@ class HandoverClockTests(_Base):
             self.assertTrue(self._needs())
         with _now(0, 5, d=NEXT):
             self.assertTrue(self._needs())
-            # La confirmation d'après minuit est datée du nouveau jour calendaire
-            # mais couvre bien la période en cours.
+            # BUG-1130 : la confirmation d'après minuit reste datée de la journée comptable en cours (D).
             self.assertEqual(self._post().status_code, 200)
             self.assertFalse(self._needs())
-        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, team='A', date=NEXT).exists())
+        self.assertTrue(DailyOpeningConfirmation.objects.filter(node=self.node, team='A', date=D).exists())
 
     def test_same_team_redesignated_on_consecutive_periods_same_calendar_day(self):
         # Période PREV (B) confirmée le matin de D (clé [B, D]) ; à 12:00 la
@@ -311,11 +310,15 @@ class WithoutRotationCharacterizationTests(TestCase):
                 self.assertTrue(r.data['needs_confirmation'], f'{h}:{m}')
 
     def test_no_new_box_at_noon_or_second_slot_after_morning_confirmation(self):
-        with _now(6, 10):
+        # BUG-1130 : hors rotation aussi, la journée change à 12:00 (heure de clôture, midi à midi) ;
+        # une confirmation faite après 12:00 vaut jusqu'à la clôture du lendemain, sans nouvelle boîte.
+        with _now(12, 10):
             self.assertEqual(self._post('A').status_code, 200)
-        for h, m in ((11, 59), (12, 0), (12, 30), (14, 30), (23, 59)):
-            with _now(h, m):
+        for h, m, d in ((12, 30, D), (14, 30, D), (23, 59, D), (0, 5, NEXT), (11, 59, NEXT)):
+            with _now(h, m, d=d):
                 self.assertFalse(self._get().data['needs_confirmation'], f'{h}:{m}')
+        with _now(12, 0, d=NEXT):
+            self.assertTrue(self._get().data['needs_confirmation'])
 
     def test_second_team_confirmation_does_not_replace_first_slot(self):
         with _now(14, 40):
@@ -323,9 +326,9 @@ class WithoutRotationCharacterizationTests(TestCase):
             self.assertTrue(self._get().data['needs_confirmation'])   # A n'a pas confirmé
 
     def test_new_day_asks_again(self):
-        with _now(6, 10):
+        with _now(12, 10):
             self._post('A')
-        with _now(6, 0, d=NEXT):
+        with _now(12, 10, d=NEXT):  # BUG-1130 : nouvelle journée comptable à 12:00
             self.assertTrue(self._get().data['needs_confirmation'])
 
     def test_team_is_required_without_rotation(self):

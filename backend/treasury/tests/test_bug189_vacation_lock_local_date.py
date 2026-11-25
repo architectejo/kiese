@@ -75,8 +75,9 @@ class VacationLockLocalDateTests(TestCase):
     def test_lock_blocks_second_sale_at_00_30_local(self):
         with _now(0, 30):
             self._assert_second_sale_blocked()
-            # le rapport porte la date LOCALE (12/11), pas la date UTC (11/11)
-            self.assertEqual(FacturierReport.objects.get(node=self.node).date, D)
+            # BUG-1130 (Q-018, midi à midi) : à 00:30 locale on est encore dans la journée
+            # comptable du 11/11 (12:00 -> 12:00) ; ni la date UTC ni la date calendaire.
+            self.assertEqual(FacturierReport.objects.get(node=self.node).date, PREV)
 
     def test_lock_blocks_second_sale_at_noon(self):
         with _now(12, 0):
@@ -113,7 +114,8 @@ class VacationLockLocalDateTests(TestCase):
             first.deliver(livreur=self.fact)
             self._generate()
             report = FacturierReport.objects.get(node=self.node, team='A')
-            self.assertEqual(report.date, D)
+            # BUG-1130 : 03:00 le 12/11 = journée comptable du 11/11 (midi à midi).
+            self.assertEqual(report.date, PREV)
             second = self._delivered_sale(invoice_date=D)
             with self.assertRaises(ValidationError):
                 second.deliver(livreur=self.fact)
@@ -130,8 +132,9 @@ class VacationLockLocalDateTests(TestCase):
             inv = self._delivered_sale(invoice_date=D)
             inv.deliver(livreur=self.fact)
         from treasury.services import regenerate_facturier_reports
-        self.assertEqual(len(regenerate_facturier_reports(self.node, D)), 1)
-        self.assertEqual(regenerate_facturier_reports(self.node, PREV), [])
+        # BUG-1130 : livraison à 03:00 le 12/11 = journée comptable du 11/11 (midi à midi).
+        self.assertEqual(len(regenerate_facturier_reports(self.node, PREV)), 1)
+        self.assertEqual(regenerate_facturier_reports(self.node, D), [])
 
     def test_report_generation_without_rotation_uses_local_calendar_day(self):
         """Hors rotation : livraison à 00:30 locale -> jour calendaire local (12/11), pas UTC."""
@@ -139,5 +142,6 @@ class VacationLockLocalDateTests(TestCase):
             inv = self._delivered_sale()
             inv.deliver(livreur=self.fact)
         from treasury.services import regenerate_facturier_reports
-        self.assertEqual(len(regenerate_facturier_reports(self.node, D)), 1)
-        self.assertEqual(regenerate_facturier_reports(self.node, PREV), [])
+        # BUG-1130 : 00:30 le 12/11 = journée comptable du 11/11 (ni UTC ni calendaire).
+        self.assertEqual(len(regenerate_facturier_reports(self.node, PREV)), 1)
+        self.assertEqual(regenerate_facturier_reports(self.node, D), [])

@@ -449,7 +449,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Au niveau de "Production & Stocks" section "§3.3 — Transferts Inter-Boulangeries (Règle d'Or Comptable)", on doit donner à un gérant la possibilité d'envoyer les pains à une autre boulangerie sans avoir réçu la demande de cette autre boulangarie
 
-[] Au niveau de "Configuration" les valaure du formulaire "§2.3 — Algorithme des Commissions (CM)" sont propre à chaque boulangerie, le frais de carte est à prendre à compte dans les commussions des clients
+[c] Au niveau de "Configuration" les valaure du formulaire "§2.3 — Algorithme des Commissions (CM)" sont propre à chaque boulangerie, le frais de carte est à prendre à compte dans les commussions des clients
 
 [c] Dans "Commissions CM" on doit prendre en compte les valeurs de carte et cotisation social qui dependent de la boulangerie à deduire de la commussion de chaque client, le filtre doit aussi se faire sur le mois de l'année.
 
@@ -459,7 +459,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [] la boite nodal "Stock de départ du jour" doit apparaittre lors des heures de rotations des équipes pour demander les stocks de départ.
 
-[] J'ai déclaré une facture "Non Servi" mais il n'a pas été comptabilisé dans la Cloture Journalière, en ne donne pas la possibilité d'être régularisée
+[c] J'ai déclaré une facture "Non Servi" mais il n'a pas été comptabilisé dans la Cloture Journalière, en ne donne pas la possibilité d'être régularisée
 
 [] Dans chaque boulangerie le calcule des restes du jour lors de la cloture journalière doivent se faire automatiquement aux heures de rotation des équipes  une boite nodal doit s'ouvrir avec le formulaire demandant au gerant la confirmation de la cloture en completant les informations manquantes comme ces qu'on remplie dans "Production & Stocks" section "§3.4 — Réconciliation & Pains Non Valorisés" selon la "Nature de la Sortie", cette boite s'ouvre à chaque page comme pour le stock de depart, les restes du jours (aujourd'hui) deviendrons le sock de depart demain, la modification ne changera pas la cloture, il y a pas "Heure de relève des équipes" c'est en réalité "l'heure de cloture", une fois cette heure arrivé on bloque les ventes des pains (facturation) dans cette boulangerie jusqu'à ce que la direction valide dans "Clôture & Caisse" le "Versement" de cette boulangerie alors les ventes seront autorisés dans cette boulangerie, les nouvelles seront prises en compte pour la cloture de la journée suivante
 
@@ -503,7 +503,7 @@ Et ainsi de suite pour les autres sucursalles,@pierre pour la direction, valeur 
 
 [c] Au niveau de "Historique du client" le mois courant est visible que sur le theme light
 
-[] Au niveau de "Commissions CM" la valeur de "Carte / Frais d'imprimé (FC)" est celle de la boulanérie "Carte / frais d'imprimé (FC)", il n'y a pas des taux de cotisation "Taux de commission par défaut" il y a que la "Cotisation sociale mensuelle par client (FC)" qui est par défaut de 2000Fc
+[c] Au niveau de "Commissions CM" la valeur de "Carte / Frais d'imprimé (FC)" est celle de la boulanérie "Carte / frais d'imprimé (FC)", il n'y a pas des taux de cotisation "Taux de commission par défaut" il y a que la "Cotisation sociale mensuelle par client (FC)" qui est par défaut de 2000Fc
 
 [c] Un client qui vient d'être enregistrer ne doit pas avoir le statut "SUSPENDU"
 

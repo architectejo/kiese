@@ -8,7 +8,7 @@ import { commissionsApi, coreApi, ClientCommission, BakeryNode, CommissionSummar
 import { CommissionsTotalsRow, CommissionTotals, formatFc } from '@/components/commissions/CommissionsTotalsRow';
 import { getErrorDetail } from '@/api/errors';
 import { useAuthStore } from '@/store/authStore';
-import { localIsoDate } from '@/store/workDateStore';
+import { getWorkDate, workDateMonthYear } from '@/store/workDateStore';
 import { Modal } from '@/components/shared/Modal';
 import { ClientHistoryModal } from '@/components/clients/ClientHistoryModal';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
@@ -37,16 +37,16 @@ export const Commissions: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Unpaid'>('All');
   const [nodeFilter, setNodeFilter] = useState('');
   // BUG-412 : filtre mois/année (défaut = mois courant ; '' = tous). Indépendant de la fenêtre « Générer ».
-  const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
-  const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+  // BUG-1134 : mois/année par défaut = ceux de la journée de travail du serveur (midi à midi).
+  const [filterMonth, setFilterMonth] = useState<string>(() => String(workDateMonthYear(getWorkDate()).month));
+  const [filterYear, setFilterYear] = useState<string>(() => String(workDateMonthYear(getWorkDate()).year));
 
   // Generate period modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
   const [nodesList, setNodesList] = useState<BakeryNode[]>([]);
-  const today = new Date();
   const [genNode, setGenNode] = useState('');
-  const [genMonth, setGenMonth] = useState(today.getMonth() + 1);
-  const [genYear, setGenYear] = useState(today.getFullYear());
+  const [genMonth, setGenMonth] = useState(() => workDateMonthYear(getWorkDate()).month);
+  const [genYear, setGenYear] = useState(() => workDateMonthYear(getWorkDate()).year);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateResult, setGenerateResult] = useState<string | null>(null);
@@ -89,7 +89,7 @@ export const Commissions: React.FC = () => {
   const periodLabel = filterMonth || filterYear
     ? `${filterMonth ? MONTHS_FR[Number(filterMonth) - 1] : 'Tous les mois'} ${filterYear || '(toutes années)'}`
     : 'Toutes les périodes';
-  const currentYear = new Date().getFullYear();
+  const currentYear = workDateMonthYear(getWorkDate()).year;
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear + 1 - i);
   if (filterYear && !yearOptions.includes(Number(filterYear))) yearOptions.push(Number(filterYear));
   // BUG-412 : mois de départ de l'historique client = mois filtré (seulement si mois ET année choisis).
@@ -290,7 +290,7 @@ export const Commissions: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ristournes_${filterYear || 'tous'}${filterMonth ? '-' + filterMonth.padStart(2, '0') : ''}_${localIsoDate()}.csv`;
+    a.download = `ristournes_${filterYear || 'tous'}${filterMonth ? '-' + filterMonth.padStart(2, '0') : ''}_${getWorkDate()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

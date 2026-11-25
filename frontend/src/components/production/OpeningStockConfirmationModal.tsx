@@ -327,12 +327,12 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
       isOpen={isOpen}
       suspended={suspended}
       onClose={handleDismiss}
-      title={isRotation ? 'Stock de départ de la relève' : 'Stock de départ du jour'}
+      title={'Stock de départ du jour'}
       subtitle={
         isManualMode
           ? `Confirmation volontaire du reste d'hier pour l'équipe ${selectedTeam} (demande manuelle depuis Production & Stocks).`
           : isRotation
-            ? `Équipe de service : ${selectedTeam}${handoverTime ? ` — relève de ${handoverTime}` : ''}. Confirmez ou corrigez le reste de l'équipe précédente pour démarrer ce service.`
+            ? `Équipe de service : ${selectedTeam}${handoverTime ? ` — clôture à ${handoverTime}` : ''}. Confirmez ou corrigez le reste de l'équipe précédente pour démarrer ce service.`
             : "Confirmez ou corrigez le nombre de pains restants par catégorie pour démarrer la journée."
       }
       maxWidth="560px"
@@ -416,7 +416,7 @@ export const OpeningStockConfirmationModal: React.FC<OpeningStockConfirmationMod
         <>
           {isRotation && !isManualMode ? (
             <div style={{ marginBottom: '16px', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid hsl(var(--border-color))', fontSize: '0.85rem' }}>
-              <strong>Équipe de service de la période : {selectedTeam}{handoverTime ? ` (relève de ${handoverTime})` : ''}</strong>
+              <strong>Équipe de service de la période : {selectedTeam}{handoverTime ? ` (clôture à ${handoverTime})` : ''}</strong>
               <div style={{ fontSize: '0.75rem', color: 'hsl(var(--text-muted))', marginTop: '4px' }}>
                 Les quantités proposées sont le reste de l'équipe précédente.
               </div>

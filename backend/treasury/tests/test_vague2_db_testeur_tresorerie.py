@@ -266,9 +266,10 @@ class DisputedTransferBlocksClosureTests(TestCase):
 
 
 class MidnightWindowTests(TestCase):
-    """Entre 00:00 et 01:00 (Africa/Kinshasa = UTC+1) la date UTC est celle de la veille."""
+    """Q-018 (journée de midi à midi) : à 00:30 local (= 23:30 UTC la veille), la journée
+    comptable est celle de la VEILLE calendaire locale (début à 12:00), rotation ou non."""
 
-    NOW_UTC = datetime(2026, 11, 12, 23, 30, tzinfo=dt_timezone.utc)  # = 2026-11-13 00:30 local
+    NOW_UTC = datetime(2026, 11, 12, 23, 30, tzinfo=dt_timezone.utc)  # = 2026-11-13 00:30 local -> journée comptable du 2026-11-12
 
     def _setup(self, rotation):
         cfg = Config.get_instance()
@@ -285,26 +286,26 @@ class MidnightWindowTests(TestCase):
             r = _api(gerant).post('/api/treasury/reports/generate/', {}, format='json')
         return node, gerant, r
 
-    def test_no_rotation_report_dated_local_day(self):
+    def test_no_rotation_report_dated_business_day(self):
         node, gerant, r = self._setup(False)
         self.assertEqual(r.status_code, 200, r.content)
         reps = r.json()
         self.assertTrue(reps, r.content)
-        self.assertEqual(reps[0]['date'], '2026-11-13')
+        self.assertEqual(reps[0]['date'], '2026-11-12')
         self.assertEqual(Decimal(reps[0]['total_cash_sales']), Decimal('1000'))
 
-    def test_rotation_report_is_dated_calendar_day(self):  # décision client 2026-11-12 : date de travail = jour calendaire local, rotation ou non
+    def test_rotation_report_is_dated_business_day(self):  # Q-018 : journée de midi à midi, rotation ou non
         node, gerant, r = self._setup(True)
         self.assertEqual(r.status_code, 200, r.content)
         reps = r.json()
         self.assertTrue(reps, r.content)
-        self.assertEqual(reps[0]['date'], '2026-11-13')
+        self.assertEqual(reps[0]['date'], '2026-11-12')
         self.assertEqual(Decimal(reps[0]['total_cash_sales']), Decimal('1000'))
 
-    def test_closure_of_calendar_day_has_same_cash(self):
+    def test_closure_of_business_day_has_same_cash(self):
         node, gerant, r = self._setup(True)
         with mock.patch('django.utils.timezone.now', return_value=self.NOW_UTC):
-            r = _api(gerant).post('/api/treasury/closures/', {'date': '2026-11-13', 'bills_50': 0}, format='json')
+            r = _api(gerant).post('/api/treasury/closures/', {'date': '2026-11-12', 'bills_50': 0}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(Decimal(r.json()['total_entries']), Decimal('1000'))
 

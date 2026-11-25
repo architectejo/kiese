@@ -329,7 +329,8 @@ def record_backdated_correction(closure, delta, invoice, acting_user=None):
     plus récent). La date d'origine de la clôture corrigée reste traçable
     via `correction_reason`/`correction_source_invoice`/`source_closure`.
     """
-    today = timezone.localdate()
+    from core.workday import work_date_for
+    today = work_date_for(closure.node)  # BUG-1130 : journée comptable (midi à midi)
     # BUG-204 : n° <= 30 caractères (max_length de `piece_number`) et distinct
     # à chaque correction : `CORR-<nœud>-<date clôture AAAAMMJJ>-<rang>` où
     # <rang> = n° de la correction de cette clôture (01, 02...). Les numéros

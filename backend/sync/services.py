@@ -16,6 +16,7 @@ from django.db.models import Sum
 
 from core.models import Node
 from core.numeric import parse_ascii_decimal, parse_ascii_int
+from core.workday import work_date_for
 from .models import DebtMovement, SyncConflictLog
 
 # Même logique que `treasury.views._APPEND_MAX_RETRIES` : sous SQLite (dev/
@@ -2623,7 +2624,7 @@ def _check_production_session(node, record):
         from django.utils import timezone
         try:
             moment = _parse_aware_datetime(record['closed_at'])
-            _sync_not_future_date(node, timezone.localtime(moment).date(), 'closed_at')
+            _sync_not_future_date(node, work_date_for(node, moment), 'closed_at')
         except (ValueError, TypeError, OverflowError) as exc:
             return str(exc) or "« closed_at » invalide"
     return None
@@ -2743,7 +2744,7 @@ def _check_invoice(node, record):
             continue
         try:
             moment = _parse_aware_datetime(record[name])
-            _sync_not_future_date(node, timezone.localtime(moment).date(), name)
+            _sync_not_future_date(node, work_date_for(node, moment), name)
         except ValueError as exc:
             return str(exc)
     # BUG-927 : équipes A et B uniquement (CLAUDE.md 5.2).

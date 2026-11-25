@@ -163,18 +163,18 @@ class FullRotationDayTests(_Base):
         self.assertEqual(sess_j.date, J, 'fournée de 14:00 (J) rattachée à J')
         self.assertFalse(sess_j.is_closed)
 
-        # ---- J+1 : passage de minuit (reste du jour J, session J1 ouverte pour A),
-        # puis relève : annonce à 12:10, clôture forcée à 12:30
+        # ---- J+1 : BUG-1130 (midi à midi) : rien à minuit ni avant 12:00 (la journée J se
+        # poursuit) ; puis relève : annonce à 12:10, clôture forcée à 12:30
         with _now(11, 59, d=J1):
             r = self.g.get(SHIFT)
             self.assertFalse(r.data['pending_validation'])
-            self.assertTrue(r.data['auto_closed'])  # reste du jour J enregistré
+            self.assertNotIn('auto_closed', r.data)
             self.assertEqual(r.data['work_date'], '2026-11-12')
         with _now(12, 10, d=J1):
             r = self.g.get(SHIFT)
             self.assertTrue(r.data['pending_validation'])
             self.assertEqual(r.data['team'], 'A')
-            self.assertEqual(r.data['work_date'], '2026-11-13')
+            self.assertEqual(r.data['work_date'], '2026-11-12')  # la session annoncée est celle de la journée J
             rem = {x['bread_price']: x['quantity_suggested'] for x in r.data['remaining']}
             self.assertEqual(rem[bp5.pk], 45)
             self.assertEqual(rem[bp3.pk], -30)
@@ -249,10 +249,11 @@ class FullRotationDayTests(_Base):
         self.assertEqual(r5['facture_jr']['fc'], '10000.00')
         # BUG-247 : début de journée porté UNE seule fois, par l'équipe en service à minuit (A) :
         # reste de A (45) corrigé de l'écart constaté par B à la relève (40 confirmé : -5).
-        self.assertEqual(r5['reste_du_hier'], {'A': -40, 'B': 0})
+        # (BUG-1130 : la journée J1 démarre à 12:00 avec l'équipe B, qui porte l'écart.)
+        self.assertEqual(r5['reste_du_hier'], {'A': 0, 'B': -40})
         self.assertEqual(r5['non_servi']['fc'], '2500.00')
         self.assertEqual(r5['facture_mvm_interne']['fc'], str(Decimal('-20000') - Decimal('2500')) + '.00')
-        self.assertEqual(rows[bp3.pk]['reste_du_hier'], {'A': 30, 'B': 0})
+        self.assertEqual(rows[bp3.pk]['reste_du_hier'], {'A': 0, 'B': 30})
         # total = facture + mvm_interne = 10000 + (-22500) + (0 sans reste du jour) ...
         # reste du jour non encore clôturé -> on contrôle la formule après clôture ci-dessous.
 
@@ -368,43 +369,43 @@ class MidnightTests(_Base):
         api3 = APIClient()
         api3.force_authenticate(g3)
         with _utc(2026, 11, 11, 23, 30):  # = 2026-11-12 00:30 à Kinshasa
+            # BUG-1130 : 00:30 locale = journée comptable du 11/11 (midi à midi), ni UTC ni calendaire.
             o = self.g.get(OPENING)
-            self.assertEqual(o.data['work_date'], '2026-11-12')  # BUG-247 : jour calendaire local, même en rotation
+            self.assertEqual(o.data['work_date'], '2026-11-11')
             self.assertTrue(o.data['server_now'].startswith('2026-11-12T00:30'), o.data['server_now'])
             s = self.g.get(SHIFT)
-            self.assertEqual(s.data['current_work_date'], '2026-11-12')
+            self.assertEqual(s.data['current_work_date'], '2026-11-11')
             self.assertTrue(s.data['server_now'].startswith('2026-11-12T00:30'))
-            b = self.g.get(BYDATE, {'date': '2026-11-12'})
-            self.assertEqual(b.data['work_date'], '2026-11-12')
+            b = self.g.get(BYDATE, {'date': '2026-11-11'})
+            self.assertEqual(b.data['work_date'], '2026-11-11')
             rep = self.g.get(CLOSURE, {'date': '2026-11-11'})
-            self.assertEqual(rep.data['work_date'], '2026-11-12')
-            # nœud SANS rotation : date calendaire LOCALE (12/11), jamais la date UTC (11/11)
+            self.assertEqual(rep.data['work_date'], '2026-11-11')
+            # nœud SANS rotation : même règle (12:00 par défaut), jamais la date UTC ni calendaire
             o3 = api3.get(OPENING)
-            self.assertEqual(o3.data['work_date'], '2026-11-12')
-            self.assertEqual(o3.data['date'], '2026-11-12')
+            self.assertEqual(o3.data['work_date'], '2026-11-11')
+            self.assertEqual(o3.data['date'], '2026-11-11')
             self.assertNotIn('rotation', o3.data)
             s3 = api3.get(SHIFT)
             self.assertEqual(s3.data, {'pending_validation': False})
             c3 = api3.post(OPENING, {'team': 'A', 'lines': [{'bread_price': self.bp500.pk, 'qty': 3}]}, format='json')
             self.assertEqual(c3.status_code, 200, c3.data)
-        self.assertEqual(DailyOpeningConfirmation.objects.get(node=k3).date, date(2026, 11, 12))
+        self.assertEqual(DailyOpeningConfirmation.objects.get(node=k3).date, date(2026, 11, 11))
 
-    def test_rotation_just_after_midnight_rolls_the_calendar_day_not_the_handover(self):
+    def test_rotation_just_after_midnight_changes_nothing_midi_a_midi(self):
         self._rotation()
         s = ProductionSession.objects.create(
             node=self.node, team='A', date=J, declared_by=self.gerant, node_origin='K1')
         DailyTeamAssignment.objects.create(node=self.node, work_date=J, team='A')
-        # BUG-247 : 00:30 locale le 13/11 : minuit a changé la date de travail ; l'équipe A
-        # (période démarrée le 12/11 à 12:00) continue : session du 12/11 clôturée (reste du
-        # jour 12/11), session du 13/11 ouverte pour A — pas de validation de relève.
+        # BUG-1130 : 00:30 locale le 13/11 = encore la journée du 12/11 (midi à midi) ; l'équipe A
+        # continue : minuit ne clôture plus rien et n'ouvre pas de session du 13/11.
         with _utc(2026, 11, 12, 23, 30):
             r = self.g.get(SHIFT)
         self.assertFalse(r.data['pending_validation'])
-        self.assertTrue(r.data['auto_closed'])
-        self.assertEqual(r.data['current_work_date'], '2026-11-13')
+        self.assertNotIn('auto_closed', r.data)
+        self.assertEqual(r.data['current_work_date'], '2026-11-12')
         s.refresh_from_db()
-        self.assertTrue(s.is_closed)
-        self.assertTrue(ProductionSession.objects.filter(node=self.node, team='A', date=J1, is_closed=False).exists())
+        self.assertFalse(s.is_closed)
+        self.assertFalse(ProductionSession.objects.filter(node=self.node, team='A', date=J1).exists())
 
 
 class SeveralOpenDaysTests(_Base):
@@ -478,18 +479,20 @@ class TwoNodesTests(_Base):
             self.assertTrue(r1.data['pending_validation'])
             self.assertEqual(r1.data['current_work_date'], '2026-11-13')
             self.assertFalse(r2.data['pending_validation'])
-            self.assertEqual(r2.data['current_work_date'], '2026-11-13')  # BUG-247 : date calendaire commune
+            # BUG-1130 : chaque boulangerie a SA journée (clôture 12:00 / 18:30) : à 12:10 K2 est
+            # encore dans la journée du 12/11 ; K1 et K3 (12:00 par défaut) sont dans celle du 13/11.
+            self.assertEqual(r2.data['current_work_date'], '2026-11-12')
             self.assertEqual(r3.data, {'pending_validation': False})
             self.assertEqual(self.g.get(OPENING).data['date'], '2026-11-13')
-            self.assertEqual(a2.get(OPENING).data['date'], '2026-11-13')  # date calendaire ; équipe de la période en cours
+            self.assertEqual(a2.get(OPENING).data['date'], '2026-11-12')
             self.assertEqual(a3.get(OPENING).data['date'], '2026-11-13')
         with _now(18, 45, d=J1):
             self.assertTrue(a2.get(SHIFT).data['pending_validation'])
             self.assertTrue(self.g.get(SHIFT).data['auto_closed'])  # K1 : 6 h après sa relève
-        # K2 : la session du 12/11 a été clôturée au passage de minuit (reste du 12/11) ;
-        # celle du 13/11 (même équipe) est ouverte, en grâce depuis sa relève de 18:30.
-        self.assertTrue(ProductionSession.objects.get(node=k2, date=J).is_closed)
-        self.assertFalse(ProductionSession.objects.get(node=k2, date=J1).is_closed)
+        # BUG-1130 : K2 : la session du 12/11 n'a pas été clôturée à minuit ; elle est en grâce
+        # depuis sa relève de 18:30 (annonce, pas encore de clôture forcée) ; pas de session du 13/11.
+        self.assertFalse(ProductionSession.objects.get(node=k2, date=J).is_closed)
+        self.assertFalse(ProductionSession.objects.filter(node=k2, date=J1).exists())
         # La désignation d'un nœud ne remplit pas l'autre
         with _now(18, 40, d=J1):
             self.assertTrue(a2.get(OPENING).data['team_assignment_required'])
@@ -577,20 +580,21 @@ class ReportAttributionTests(_Base):
             self.assertEqual(r.status_code, 200, r.data)
 
     def test_bug193_transfer_confirmed_before_handover_belongs_to_the_work_day(self):
-        """BUG-193 / BUG-247 : appro reçu à 03:00 compté sur la date CALENDAIRE J+1 (décision 2026-11-12)."""
+        """BUG-193 / BUG-1130 : appro reçu à 03:00 le J+1 compté sur la journée comptable J (midi à midi)."""
         self._rotation()
         self._transfer_confirmed_at_0300()
         with _now(14, 0, d=J1):
             rj = self._rows(self.g.get(CLOSURE, {'date': str(J)}))[self.bp300.pk]
             rj1 = self._rows(self.g.get(CLOSURE, {'date': str(J1)}))[self.bp300.pk]
-        self.assertEqual(rj['appro_recu']['quantity'], 0)
-        self.assertEqual(rj1['appro_recu']['quantity'], 15)
+        self.assertEqual(rj['appro_recu']['quantity'], 15)
+        self.assertEqual(rj1['appro_recu']['quantity'], 0)
 
     def test_without_rotation_transfer_follows_calendar_date(self):
+        # BUG-1130 : même règle sans rotation (journée de midi à midi pour toutes les boulangeries).
         self._transfer_confirmed_at_0300()
         with _now(14, 0, d=J1):
-            rj1 = self._rows(self.g.get(CLOSURE, {'date': str(J1)}))[self.bp300.pk]
-        self.assertEqual(rj1['appro_recu']['quantity'], 15)
+            rj = self._rows(self.g.get(CLOSURE, {'date': str(J)}))[self.bp300.pk]
+        self.assertEqual(rj['appro_recu']['quantity'], 15)
 
 
 class StaleRestCharacterizationTests(_Base):

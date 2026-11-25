@@ -44,7 +44,7 @@ class IsoBase(Base):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.k3 = Node.objects.create(code='P3', name='Perm K3', sac_value_fc=Dc('200000'))
+        cls.k3 = Node.objects.create(code='P3', name='Perm K3', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
         cls.u3 = mk('pr3_gerant', 'GERANT', cls.k3)
         cls.cat = ExpenseCategory.objects.get_or_create(code='ISOC', defaults={'label': 'Cat iso C'})[0]
         cls.st1 = _stock(cls.k1)

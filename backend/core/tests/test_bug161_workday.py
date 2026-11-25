@@ -188,3 +188,12 @@ class NodeHandoverSerializerTests(TestCase):
         resp = self.client_as(self.gerant).get(f"/api/core/nodes/{self.k1.id}/")
         for f in ("team_a_start_time", "team_a_end_time", "team_b_start_time", "team_b_end_time"):
             self.assertIn(f, resp.json())
+
+
+class ExtremeDatesTests(TestCase):
+    """Une date extrême (9999-12-31) ne doit jamais provoquer d'OverflowError (500)."""
+
+    def test_bounds_of_max_date_do_not_overflow(self):
+        node = Node.objects.create(code="K1", name="DEMO K1")
+        start, end = workday_bounds(node, date(9999, 12, 31))
+        self.assertLess(start, end)

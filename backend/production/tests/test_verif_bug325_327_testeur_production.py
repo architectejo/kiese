@@ -156,7 +156,7 @@ class _Base(TestCase):
         self.alice = make_client(self.node, last_name='Alpha', first_name='Anne', current_debt=Decimal('7000'))
         self.bob = make_client(self.node, last_name='Beta', first_name='Bob', current_debt=Decimal('-500'))
 
-    def inv(self, client, order='1000', paid='0', before='0', hour=10, day=D1, status=Invoice.Status.DELIVERED,
+    def inv(self, client, order='1000', paid='0', before='0', hour=14, day=D1, status=Invoice.Status.DELIVERED,
             node=None, team='A', rate='0.25', delivered=None, **kw):
         _Base._seq += 1
         node = node or self.node
@@ -200,8 +200,8 @@ class Bug327ContenuTests(_Base):
 
     def test_bp_before_est_la_premiere_facture_chronologique(self):
         # Créée dans le désordre : la livraison de 8h porte le BP avant du jour.
-        self.inv(self.alice, '1000', '0', before='3000', hour=15)
-        self.inv(self.alice, '2000', '0', before='1000', hour=8)
+        self.inv(self.alice, '1000', '0', before='3000', hour=17)
+        self.inv(self.alice, '2000', '0', before='1000', hour=13)
         r = self.get().data['results'][0]
         self.assertEqual(r['bp_before'], Decimal('1000.00'))
         self.assertEqual(r['bp_current'], Decimal('7000.00'))
@@ -251,7 +251,7 @@ class Bug327ContenuTests(_Base):
     def test_not_served_et_ns_hors_totaux(self):
         self.inv(self.alice, '3000', '0')
         ns = self.inv(self.bob, '9999', '0', status=Invoice.Status.NOT_SERVED)
-        Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 11))
+        Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 16))
         self.inv(self.bob, '7777', '7777', status=Invoice.Status.PENDING, special_code='NS')
         self.inv(self.bob, '5555', '0', special_code='NS')  # NS livrée : exclue des servis
         r = self.get()
@@ -268,9 +268,9 @@ class Bug327ContenuTests(_Base):
 
     def test_non_servi_autre_jour_ou_autre_equipe(self):
         a = self.inv(self.bob, '0', '0', status=Invoice.Status.NOT_SERVED, team='A')
-        Invoice.objects.filter(pk=a.pk).update(not_served_at=_aware(D1, 9))
+        Invoice.objects.filter(pk=a.pk).update(not_served_at=_aware(D1, 14))
         b = self.inv(self.alice, '0', '0', status=Invoice.Status.NOT_SERVED, team='B')
-        Invoice.objects.filter(pk=b.pk).update(not_served_at=_aware(D1, 9))
+        Invoice.objects.filter(pk=b.pk).update(not_served_at=_aware(D1, 14))
         self.assertEqual(self.get(team='B').data['non_servis']['count'], 1)
         self.assertEqual(self.get(team='A').data['non_servis']['count'], 1)
         self.assertEqual(self.get(date=str(D2)).data['non_servis']['count'], 0)
@@ -304,9 +304,10 @@ class Bug327ContenuTests(_Base):
         self.assertEqual(self.get().data['totals']['order_value'], Decimal('3000.00'))
         self.assertIsNone(self.get().data['team'])
 
-    def test_jour_de_travail_frontiere_minuit(self):
-        self.inv(self.alice, '100', delivered=_aware(D1, 23, 59))
-        self.inv(self.bob, '200', delivered=_aware(D2, 0, 1))
+    def test_jour_de_travail_frontiere_midi(self):
+        # Q-018 : frontiere de la journee = midi (et non plus minuit).
+        self.inv(self.alice, '100', delivered=_aware(D2, 11, 59))
+        self.inv(self.bob, '200', delivered=_aware(D2, 12, 1))
         self.assertEqual([x['client_name'] for x in self.get().data['results']], ['Anne Alpha'])
         self.assertEqual([x['client_name'] for x in self.get(date=str(D2)).data['results']], ['Bob Beta'])
 
@@ -419,7 +420,7 @@ class Bug327PerformanceEtCoherenceTests(_Base):
             self.inv(c, '1000', '500', special_code='')
             self.inv(c, '0', '100', is_debt_repayment=True, rate='0.00')
             ns = self.inv(c, '0', '0', status=Invoice.Status.NOT_SERVED)
-            Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 9))
+            Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 14))
         self.assertEqual(self._queries(), base)
 
     def test_coherence_avec_daily_closure_ecart_facture(self):
@@ -429,7 +430,7 @@ class Bug327PerformanceEtCoherenceTests(_Base):
         self.inv(self.bob, '0', '3000')  # épargne
         self.inv(None, '500', '500')
         ns = self.inv(self.bob, '4000', '0', status=Invoice.Status.NOT_SERVED)
-        Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 9))
+        Invoice.objects.filter(pk=ns.pk).update(not_served_at=_aware(D1, 14))
         cl = self.api.get(CLOSURE, {'node': 'K1', 'date': str(D1)})
         self.assertEqual(cl.status_code, 200, cl.data)
         t = self.get().data['totals']

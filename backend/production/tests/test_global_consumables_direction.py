@@ -198,8 +198,9 @@ class InventoryTests(B):
 
     def test_next_day_allowed(self):
         self.assertEqual(self.post().status_code, 201)
-        tomorrow = timezone.localdate() + timedelta(days=1)
-        with mock.patch('production.consumables_direction.timezone.localdate', return_value=tomorrow):
+        from core.workday import work_date_for
+        tomorrow = work_date_for(self.k1) + timedelta(days=1)
+        with mock.patch('core.workday.work_date_for', return_value=tomorrow):  # Q-018 : journee de midi a midi
             r = self.post(lines=self.lines('3'))
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.data['inventory_date'], tomorrow.isoformat())

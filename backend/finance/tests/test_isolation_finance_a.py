@@ -38,8 +38,8 @@ def _body(resp):
 class FinanceIsolationTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code='F1', name='Fin K1', sac_value_fc=Dc('200000'))
-        cls.k2 = Node.objects.create(code='F2', name='Fin K2', sac_value_fc=Dc('200000'))
+        cls.k1 = Node.objects.create(code='F1', name='Fin K1', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code='F2', name='Fin K2', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
         mk = lambda name, role, node=None: User.objects.create(
             username=name, role=role, node=node, first_name=name, last_name='Qa')
         cls.hq = {r: mk(f'fi_{r.lower()}', r) for r in HQ_ROLES}

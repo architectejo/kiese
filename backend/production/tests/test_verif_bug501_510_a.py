@@ -234,7 +234,7 @@ class Bug508CounterTests(R._ReportBase):
     def test_rg_soldee_with_price_150_stable_after_tariff_change(self):
         """150 FC -> prix figé 113 (112,5 arrondi) ; 113/0,75 = 150,67 -> 151 si le tarif a changé."""
         bp = make_bread_price('VR_150', 'Pain 150 VR', 150)
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(bp, 50)])
             self._inv([(bp, 10)], code='RG', soldee=True)
             before = self._cat(self._report(R.J), bp)['regularisation']['fc']
@@ -246,7 +246,7 @@ class Bug508CounterTests(R._ReportBase):
 
     def test_rg_soldee_with_price_50_stable_after_tariff_change(self):
         bp = make_bread_price('VR_50', 'Pain 50 VR', 50)
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(bp, 50)])
             self._inv([(bp, 10)], code='RG', soldee=True)
             before = self._cat(self._report(R.J), bp)['regularisation']['fc']
@@ -257,7 +257,7 @@ class Bug508CounterTests(R._ReportBase):
         self.assertEqual(after, before)
 
     def test_rg_soldee_multiple_tariff_changes_300_stable(self):
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 50)])
             self._inv([(self.bp300, 7)], code='RG', soldee=True)
             vals = []
@@ -268,7 +268,7 @@ class Bug508CounterTests(R._ReportBase):
         self.assertEqual(set(vals), {'2100.00'}, vals)
 
     def test_rg_soldee_without_tariff_change_is_full_price_and_plain_rg_unchanged(self):
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp500, 50)])
             self._inv([(self.bp500, 4)], code='RG', soldee=True)
             self._inv([(self.bp500, 2)], code='RG')
@@ -278,7 +278,7 @@ class Bug508CounterTests(R._ReportBase):
     def test_soldee_loss_of_past_day_stable_after_tariff_change(self):
         """Vente soldée 10 x 300 : prix figé 225, perte 750. Après passage du tarif à 400,
         `InvoiceLine.loss` relit le catalogue : perte = (400-225) x 10 = 1750."""
-        with R._now(10):
+        with R._now(13):
             self._session('A', R.J, [(self.bp300, 50)])
             self._inv([(self.bp300, 10)], soldee=True)
             before = self._cat(self._report(R.J), self.bp300)['vente_cash_soldee']['perte_fc']

@@ -29,9 +29,9 @@ def cl(user):
 class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.k1 = Node.objects.create(code='Q1', name='Q K1', sac_value_fc=Dc('200000'))
-        cls.k2 = Node.objects.create(code='Q2', name='Q K2', sac_value_fc=Dc('200000'))
-        cls.k3 = Node.objects.create(code='Q3', name='Q K3', sac_value_fc=Dc('200000'))
+        cls.k1 = Node.objects.create(code='Q1', name='Q K1', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
+        cls.k2 = Node.objects.create(code='Q2', name='Q K2', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
+        cls.k3 = Node.objects.create(code='Q3', name='Q K3', sac_value_fc=Dc('200000'), team_rotation_enabled=False)
         cls.g1 = mk('q_g1', 'GERANT', cls.k1)
         cls.g2 = mk('q_g2', 'GERANT', cls.k2)
         cls.g3 = mk('q_g3', 'GERANT', cls.k3)

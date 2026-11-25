@@ -9,7 +9,7 @@ import {
 import { getErrorDetail, isTeamNotAssignedError, isSalesBlockedError } from '@/api/errors';
 import { useClosureStatusStore } from '@/store/closureStatusStore';
 import { useAuthStore } from '@/store/authStore';
-import { useWorkDate } from '@/store/workDateStore';
+import { getWorkDate, useWorkDate, workDateMonthYear } from '@/store/workDateStore';
 import { TEAM_NOT_ASSIGNED_MESSAGE, useTeamAssignmentStore } from '@/store/teamAssignmentStore';
 import { ThermalReceipt, ReceiptData } from '@/components/shared/ThermalReceipt';
 import { ClientHistoryModal } from '@/components/clients/ClientHistoryModal';
@@ -237,14 +237,15 @@ export const Clients: React.FC = () => {
   const [clientDetailTab, setClientDetailTab] = useState<ClientDetailTab>('info');
   const [clientInvoices, setClientInvoices] = useState<Invoice[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(false);
-  const [historyYear, setHistoryYear] = useState(() => new Date().getFullYear());
-  const [historyMonth, setHistoryMonth] = useState(() => new Date().getMonth() + 1);
+  // BUG-1134 : mois/année par défaut = ceux de la journée de travail du serveur (midi à midi).
+  const [historyYear, setHistoryYear] = useState(() => workDateMonthYear(getWorkDate()).year);
+  const [historyMonth, setHistoryMonth] = useState(() => workDateMonthYear(getWorkDate()).month);
 
   // §6 Caisse Sociale
   const [socialTab, setSocialTab]               = useState<'cotisations' | 'distribution'>('cotisations');
   const [socialNode, setSocialNode]             = useState('');
-  const [socialMonth, setSocialMonth]           = useState(() => new Date().getMonth() + 1);
-  const [socialYear, setSocialYear]             = useState(() => new Date().getFullYear());
+  const [socialMonth, setSocialMonth]           = useState(() => workDateMonthYear(getWorkDate()).month);
+  const [socialYear, setSocialYear]             = useState(() => workDateMonthYear(getWorkDate()).year);
   const [contributions, setContributions]       = useState<SocialContribution[]>([]);
   const [socialLoading, setSocialLoading]       = useState(false);
   const [bulkMsg, setBulkMsg]                   = useState<string | null>(null);
@@ -285,8 +286,8 @@ export const Clients: React.FC = () => {
 
   // §7 BASSINS
   const [bassinNode, setBassinNode]   = useState('');
-  const [bassinMonth, setBassinMonth] = useState(() => new Date().getMonth() + 1);
-  const [bassinYear, setBassinYear]   = useState(() => new Date().getFullYear());
+  const [bassinMonth, setBassinMonth] = useState(() => workDateMonthYear(getWorkDate()).month);
+  const [bassinYear, setBassinYear]   = useState(() => workDateMonthYear(getWorkDate()).year);
   const [bassinRows, setBassinRows]   = useState<BassinRow[]>([]);
   const [bassinThresholds, setBassinThresholds] = useState<Record<string, number>>({});
   const [bassinLoading, setBassinLoading] = useState(false);
@@ -856,8 +857,8 @@ export const Clients: React.FC = () => {
     setSelectedClient(client);
     setClientDetailTab('info');
     setClientInvoices([]);
-    setHistoryYear(new Date().getFullYear());
-    setHistoryMonth(new Date().getMonth() + 1);
+    setHistoryYear(workDateMonthYear(getWorkDate()).year);
+    setHistoryMonth(workDateMonthYear(getWorkDate()).month);
   };
 
   // Ouvre le formulaire de remboursement / dépôt depuis la fiche client (qui se ferme).

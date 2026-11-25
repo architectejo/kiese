@@ -136,14 +136,14 @@ def _combine_date_with_now_time(target_date, node=None):
     BUG-247 (décision client 2026-11-12) : la date est le JOUR CALENDAIRE
     local, avec ou sans rotation d'équipes.
     """
-    # Décision client 2026-11-12 : jour calendaire local, avec ou sans
-    # rotation d'équipes (`node` n'influe plus sur le résultat).
-    from datetime import datetime
-    now = timezone.localtime(timezone.now())
-    if target_date == now.date():
+    # BUG-1130 (Q-018, 2026-11-24) : `target_date` est une date de JOURNÉE
+    # COMPTABLE (midi à midi). L'instant est placé dans CETTE journée, au même
+    # décalage depuis l'heure de clôture que maintenant (jamais « date + heure
+    # courante », qui retomberait dans la journée voisine avant midi).
+    from core.workday import instant_in_business_day
+    if target_date == work_date_for(node):
         return timezone.now()
-    combined = datetime.combine(target_date, now.time())
-    return timezone.make_aware(combined, now.tzinfo)
+    return instant_in_business_day(node, target_date)
 
 
 def _strict_whole_number(raw, maximum):
@@ -610,7 +610,8 @@ class InvoiceViewSet(
                 # n'est pas lue (un POS qui re-tente ne doit pas inonder le centre d'alertes).
                 from core.models import SystemNotification
                 blocked_title = f"Ventes bloquées — {node.code}"
-                day_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+                from core.workday import business_day_bounds
+                day_start = business_day_bounds(node, work_date_for(node))[0]
                 if not SystemNotification.objects.filter(
                         title=blocked_title, node_origin=node.code, is_read=False,
                         created_at__gte=day_start).exists():
@@ -1403,10 +1404,16 @@ class InvoiceViewSet(
         # calendaire), comme bread_summary, le rapport facturier et la clôture.
         # BUG-670 : le versement CONSERVÉ d'une facture « Non servi » (BUG-318/320) est un
         # encaissement réel, daté du jour du « non servi » (commande 0 -> CREDIT négatif).
-        qs = self.get_queryset().filter(
-            Q(delivered_at__date=target_date, status=Invoice.Status.DELIVERED)
-            | Q(not_served_at__date=target_date, status=Invoice.Status.NOT_SERVED, payment_amount__gt=0)
-        )
+        # BUG-1130 : « ce jour » = journée comptable de midi à midi, par boulangerie.
+        from core.workday import delivered_on_work_date_filter
+        day_cond = Q(pk__in=[])
+        for n in Node.objects.all():
+            day_cond |= (
+                Q(node=n, status=Invoice.Status.DELIVERED, **delivered_on_work_date_filter(n, _d))
+                | Q(node=n, status=Invoice.Status.NOT_SERVED, payment_amount__gt=0,
+                    **delivered_on_work_date_filter(n, _d, 'not_served_at'))
+            )
+        qs = self.get_queryset().filter(day_cond)
         # Décote d'une VENTE SOLDE/CASH : jamais une créance, exclue du CREDIT
         # (cohérent avec debt_delta = 0 pour is_soldee).
         per_node = qs.values('node__code').annotate(

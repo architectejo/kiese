@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ShiftEndRemainingLine, ShiftEndTeam } from '@/api/services';
-import { localIsoDate } from '@/store/workDateStore';
+import { getWorkDate } from '@/store/workDateStore';
 
 /**
  * BUG-156 (docs/qa/REGISTRE_BUGS.md, volet frontend de BUG-155) : petit état
@@ -154,7 +154,7 @@ export const useShiftEndStore = create<ShiftEndStoreState>((set) => ({
   notifyAutoClosed: (nodeKey, team, workDate, midnight = false) => set((state) => {
     const notice: AutoClosedNotice = workDate
       ? { team, date: workDate, rotation: true, ...(midnight ? { midnight: true } : {}) }
-      : { team, date: localIsoDate() };
+      : { team, date: getWorkDate() }; // BUG-1134 : journée comptable, pas la date du calendrier
     // Relit le stockage (source de vérité partagée entre onglets) avant
     // d'ajouter, pour ne perdre aucune annonce déjà en attente.
     const notices = readNotices(nodeKey);

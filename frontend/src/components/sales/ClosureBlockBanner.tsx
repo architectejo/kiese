@@ -3,7 +3,7 @@ import { FiLock } from 'react-icons/fi';
 import { useClosureStatusStore } from '@/store/closureStatusStore';
 
 // BUG-973 : bannière affichée sur les pages de vente quand la clôture du jour attend la
-// validation de la direction. Les boutons de création sont désactivés par la page (`useSalesBlocked`) ;
+// validation de la direction ou du comptable. Les boutons de création sont désactivés par la page (`useSalesBlocked`) ;
 // la règle reste appliquée côté serveur (403).
 export const ClosureBlockBanner: React.FC = () => {
   const blocked = useClosureStatusStore((s) => !!s.status?.blocked);
@@ -19,7 +19,7 @@ export const ClosureBlockBanner: React.FC = () => {
       <FiLock style={{ flexShrink: 0, marginTop: '2px' }} />
       <div style={{ fontSize: '0.85rem' }}>
         <strong>Ventes bloquées{hour ? ` depuis ${hour.replace(':', 'h')}` : ''}</strong>
-        <div>{reason || 'Clôture du jour en attente de validation par la direction.'}</div>
+        <div>{reason || "Clôture du jour en attente : ventes bloquées jusqu'à validation par la direction ou le comptable."}</div>
       </div>
     </div>
   );

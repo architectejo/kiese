@@ -182,7 +182,7 @@ class Sync519(TestCase):
 
 
 # --------------------------------------------------------------------------- BUG-197
-def _now(d, h=10):
+def _now(d, h=13):  # BUG-1130 : 13:00 = dans la journee comptable d (10:00 serait la veille)
     aware = timezone.make_aware(datetime(d.year, d.month, d.day, h, 0), timezone.get_current_timezone())
     return patch('django.utils.timezone.now', return_value=aware.astimezone(dt_timezone.utc))
 

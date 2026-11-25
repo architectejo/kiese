@@ -76,12 +76,13 @@ class _Base(TestCase):
 class HandoverDetectionTests(_Base):
     def test_before_handover_nothing_pending(self):
         self._rotation()
-        # Session du jour calendaire D, équipe A de la période démarrée le 11/11 à 12:00.
-        s = self._session(D, 'A', period=PREV, created=_at(D, 3))
+        # BUG-1130 : session de la journée comptable du 11/11 (midi à midi), équipe A de la
+        # période démarrée le 11/11 à 12:00, créée à 03:00 le 12/11.
+        s = self._session(PREV, 'A', period=PREV, created=_at(D, 3))
         with _now(11, 59):
             r = self._status()
         self.assertFalse(r.data['pending_validation'])
-        self.assertEqual(r.data['work_date'], '2026-11-12')
+        self.assertEqual(r.data['work_date'], '2026-11-11')
         self.assertIn('server_now', r.data)
         self.assertFalse(ProductionSession.objects.get(pk=s.pk).is_closed)
 
@@ -98,24 +99,19 @@ class HandoverDetectionTests(_Base):
         self.assertEqual(r.data['current_work_date'], '2026-11-12')
         self.assertEqual(len(r.data['remaining']), 1)
 
-    def test_midnight_rolls_serving_team_session_silently(self):
-        # BUG-247 : la date de travail change à minuit, pas à la relève : la
-        # session du 11/11 de l'équipe encore en service est clôturée au passage
-        # de minuit (reste du 11/11), sans validation ni délai de grâce.
+    def test_midnight_does_not_roll_session_handover_does(self):
+        # BUG-1130 (Q-018, midi à midi) : minuit ne change plus la journée (avant BUG-247 :
+        # clôture silencieuse à minuit). La session du 11/11 reste ouverte jusqu'à la relève.
         self._rotation()
         s = self._session(PREV, 'A', qty=10)
         with _now(0, 0):
             r = self._status()
         self.assertFalse(r.data['pending_validation'])
-        self.assertTrue(r.data['auto_closed'])
+        self.assertNotIn('auto_closed', r.data)
         self.assertEqual(r.data['work_date'], '2026-11-11')
         s.refresh_from_db()
-        self.assertTrue(s.is_closed)
-        self.assertEqual(DailyBreadStockSnapshot.objects.get(node=self.node, date=PREV, team='A').qty_at_close, 10)
-        # La même équipe reprend sur le nouveau jour calendaire : session ouverte,
-        # prête à être validée à la relève ; le prochain appel ne fait rien.
-        cont = ProductionSession.objects.get(node=self.node, team='A', date=D)
-        self.assertFalse(cont.is_closed)
+        self.assertFalse(s.is_closed)
+        self.assertFalse(DailyBreadStockSnapshot.objects.filter(node=self.node, date=PREV, team='A').exists())
         with _now(0, 5):
             again = self._status()
         self.assertFalse(again.data['pending_validation'])
@@ -123,8 +119,9 @@ class HandoverDetectionTests(_Base):
         with _now(12, 10):
             at_handover = self._status()
         self.assertTrue(at_handover.data['pending_validation'])
-        self.assertEqual(at_handover.data['session'], cont.pk)
-        self.assertEqual(at_handover.data['work_date'], '2026-11-12')
+        self.assertEqual(at_handover.data['session'], s.pk)
+        self.assertEqual(at_handover.data['work_date'], '2026-11-11')
+        self.assertEqual(at_handover.data['current_work_date'], '2026-11-12')
 
     def test_window_midnight_to_one_uses_local_date(self):
         # 00:30 locale = 23:30 UTC la veille : la session du jour D n'est jamais roulée.

@@ -101,11 +101,12 @@ class RotationEdges(Base):
         with _now(0, 10, D + timedelta(days=1)):
             DailyTeamAssignment.objects.get_or_create(node=self.node, work_date=D, defaults={'team': 'A'})
             r3 = self.sale()
-        # BUG-247 : la date est calendaire ; seule l'équipe change à la relève.
+        # BUG-1130 (midi à midi) : la relève (23:30 ici) change l'équipe ET la journée comptable ;
+        # 00:10 le lendemain est encore dans la journée D.
         i1, i2, i3 = (Invoice.objects.get(pk=r.data['id']) for r in (r1, r2, r3))
-        self.assertEqual((i1.invoice_date, i1.team), (D, 'B'))
+        self.assertEqual((i1.invoice_date, i1.team), (PREV, 'B'))
         self.assertEqual((i2.invoice_date, i2.team), (D, 'A'))
-        self.assertEqual((i3.invoice_date, i3.team), (D + timedelta(days=1), 'A'))
+        self.assertEqual((i3.invoice_date, i3.team), (D, 'A'))
 
     def test_deliver_with_explicit_past_delivered_at_stays_in_work_day(self):
         self.rot()
@@ -116,7 +117,7 @@ class RotationEdges(Base):
         with _now(3, 0):
             r = self.sale()
             inv = Invoice.objects.get(pk=r.data['id'])
-            self.assertEqual(inv.invoice_date, D)
+            self.assertEqual(inv.invoice_date, PREV)  # BUG-1130 : 03:00 = journée comptable de la veille
             d = self.deliver(inv.pk, delivered_at=str(PREV - timedelta(days=1)))
         self.assertIn(d.status_code, (200, 400), d.data)
         if d.status_code == 200:
@@ -131,7 +132,7 @@ class RotationEdges(Base):
             d = self.deliver(r.data['id'])
         self.assertEqual(d.status_code, 200, d.data)
         inv = Invoice.objects.get(pk=r.data['id'])
-        self.assertEqual(work_date_for(self.node, inv.delivered_at), D)
+        self.assertEqual(work_date_for(self.node, inv.delivered_at), PREV)  # BUG-1130 : midi à midi
 
     def test_summaries_default_to_work_date_of_user_node(self):
         self.rot()
@@ -164,14 +165,14 @@ class NoRotationMidnight(Base):
             self.deliver(r.data['id'])
             inv = Invoice.objects.get(pk=r.data['id'])
             s = self.g.get(INV + 'daily_summary/')
-        self.assertEqual(inv.invoice_date, D)
-        self.assertTrue(inv.receipt_number.startswith('V1-20261112-'), inv.receipt_number)
+        self.assertEqual(inv.invoice_date, PREV)  # BUG-1130 : 00:30 = journée comptable de la veille
+        self.assertTrue(inv.receipt_number.startswith('V1-20261111-'), inv.receipt_number)
         self.assertEqual(s.status_code, 200)
 
     def test_future_refused_and_nothing_changed_for_past(self):
         with _now(0, 30):
             f = self.sale(invoice_date=str(D + timedelta(days=1)))
-            p = self.sale(invoice_date=str(PREV))
+            p = self.sale(invoice_date=str(PREV - timedelta(days=1)))  # BUG-1130 : PREV = journée courante
         self.assertEqual(f.status_code, 400)
         self.assertEqual(p.status_code, 400)  # allow_backdated_sales faux par défaut
 
@@ -197,7 +198,7 @@ class DebtConsistency(Base):
         stored = self.debt()
         self.assertEqual(recompute_client_debt(self.cl.pk).current_debt, stored)
         dates = sorted(Invoice.objects.values_list('invoice_date', flat=True))
-        self.assertEqual(dates, [D, D, D])  # BUG-247 : jour calendaire
+        self.assertEqual(dates, [PREV, D, D])  # BUG-1130 : la relève de 12:00 change la journée comptable
 
     def test_credit_block_unchanged_in_rotation(self):
         self.rot()

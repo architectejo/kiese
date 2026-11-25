@@ -1,28 +1,28 @@
 """
-Dates de travail et rotation d'équipes (BUG-161, décision client du 2026-11-12).
+Journée comptable de MIDI À MIDI (BUG-1130, réponse client Q-018 du 2026-11-24).
 
-DÉCISION CLIENT (2026-11-12, remplace « journée de travail de relève à
-relève ») : la date de travail d'une boulangerie est TOUJOURS le JOUR
-CALENDAIRE local, de minuit à minuit (`TIME_ZONE`, `Africa/Kinshasa`),
-même quand `Node.team_rotation_enabled` est actif. Une vente à 03:00 est du
-jour calendaire, pas de la veille. Un jour calendaire = UN SEUL rapport de
-clôture journalier par boulangerie, partagé par les deux équipes, et UNE
-clôture de caisse par nœud et par date.
+DÉCISION CLIENT (2026-11-24, remplace celle du 2026-11-12 « jour calendaire ») :
+la journée (clôture, rapport, versement, restes) va de l'HEURE DE CLÔTURE de la
+boulangerie (`Node.handover_time`, 12:00 par défaut) au jour D à la même heure
+au jour D+1, pour toutes les boulangeries (rotation de 24 h, Q-017).
 
-La ROTATION reste un concept d'ÉQUIPE seulement : à l'heure de relève
-(`Node.handover_time`) l'équipe de service change. Une « période de service »
-court de la relève du jour J (incluse) à la relève du jour J+1 (exclue) ; elle
-est identifiée par sa « date de période » (`business_date`/`shift_date` = date
-locale de sa relève de début). La désignation manuelle d'équipe
-(`DailyTeamAssignment.work_date`) est rattachée à cette date de période : la
-colonne `work_date` du modèle porte donc la date de la RELÈVE, pas la date de
-travail. Aucune migration de données n'est nécessaire (c'est la sémantique
-historique de la colonne).
+« DATE DE JOURNÉE COMPTABLE » = date calendaire locale du DÉBUT de période : la
+journée D court de D 12:00 (incluse) à D+1 12:00 (exclue) ; une vente à D+1 09:00
+appartient à la journée D. Toute date « du jour » côté serveur (facture,
+rapport facturier, clôture de caisse, session de production, dépense...) passe
+par `business_day_for` / `work_date_for` ; toute fenêtre horaire d'une journée
+par `business_day_bounds` / `delivered_on_work_date_filter`. Un nœud absent
+(utilisateur siège) ou sans heure de clôture valide utilise 12:00.
 
-Toutes les fonctions raisonnent en heure locale du projet et ne dépendent que
-du nœud. Ce module est purement fonctionnel (aucune écriture en base).
+La désignation d'équipe (`DailyTeamAssignment.work_date`) garde sa colonne :
+elle porte la date de la période de service, qui coïncide désormais avec la
+journée comptable. Aucune réécriture des données passées (voir
+docs/qa/CONCEPTION_JOURNEE_MIDI_A_MIDI_2026-11-24.md).
+
+Toutes les fonctions raisonnent en heure locale du projet (`TIME_ZONE`,
+`Africa/Kinshasa`) et ne dépendent que du nœud. Module purement fonctionnel.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from django.utils import timezone
 
@@ -43,6 +43,43 @@ def _at(work_date, node_time):
     )
 
 
+DEFAULT_CLOSURE_TIME = time(12, 0)
+
+
+def closure_time_for(node):
+    """Heure de clôture (début de journée comptable) du nœud ; 12:00 si absente/invalide."""
+    value = getattr(node, 'handover_time', None) if node is not None else None
+    if isinstance(value, datetime):
+        value = value.time()
+    if not isinstance(value, time):
+        return DEFAULT_CLOSURE_TIME
+    return value.replace(tzinfo=None)
+
+
+def business_day_for(node, instant=None):
+    """
+    DATE DE JOURNÉE COMPTABLE de `node` à `instant` (défaut : maintenant) :
+    date locale du début de la période de midi à midi qui contient l'instant.
+    08:59 le 25 -> journée du 24 ; 12:00 le 25 -> journée du 25.
+    """
+    local = _local_instant(instant)
+    if local.time() < closure_time_for(node):
+        return local.date() - timedelta(days=1)
+    return local.date()
+
+
+def business_day_bounds(node, work_date):
+    """(début inclus, fin exclue) de la journée comptable `work_date` (aware, local)."""
+    closure = closure_time_for(node)
+    try:
+        end = _at(work_date + timedelta(days=1), closure)
+    except OverflowError:
+        # 9999-12-31 : pas de lendemain représentable ; borne haute = fin des temps
+        # (jamais de 500 sur une date extrême saisie dans une URL).
+        end = timezone.make_aware(datetime.max, timezone.get_current_timezone())
+    return _at(work_date, closure), end
+
+
 def business_date(node, instant=None):
     """
     DATE DE PÉRIODE DE SERVICE (et non date de travail) de `node` à l'instant
@@ -50,10 +87,7 @@ def business_date(node, instant=None):
     démarrée la veille. Sert uniquement à rattacher la désignation d'équipe.
     Si la relève est à 00:00, c'est la date calendaire locale.
     """
-    local = _local_instant(instant)
-    if local.time() < node.handover_time:
-        return local.date() - timedelta(days=1)
-    return local.date()
+    return business_day_for(node, instant)
 
 
 def shift_date(node, instant=None):
@@ -69,13 +103,12 @@ def shift_date(node, instant=None):
 
 def work_date_for(node, instant=None):
     """
-    SOURCE UNIQUE de la « date de travail » côté serveur : la DATE LOCALE
-    calendaire (`TIME_ZONE`), avec ou sans rotation d'équipes (décision client
-    2026-11-12). Jamais de `.date()` sur un datetime aware non converti
-    (BUG-189). `node` est conservé dans la signature pour les appelants ;
-    `node=None` (utilisateur HQ sans boulangerie) donne le même résultat.
+    SOURCE UNIQUE de la « date de travail » côté serveur : la date de JOURNÉE
+    COMPTABLE de midi à midi (`business_day_for`). Jamais de `.date()` sur un
+    datetime aware non converti (BUG-189). `node=None` (utilisateur siège) :
+    heure de clôture par défaut 12:00.
     """
-    return _local_instant(instant).date()
+    return business_day_for(node, instant)
 
 
 def work_time_info(node, instant=None):
@@ -95,22 +128,29 @@ def work_time_info(node, instant=None):
 def delivered_on_work_date_filter(node, work_date, field='delivered_at'):
     """
     Filtre ORM (dict de lookups) des enregistrements dont `field` (datetime
-    aware) tombe dans la date calendaire locale `work_date` (conversion
-    locale par Django). Identique avec ou sans rotation (décision 2026-11-12).
+    aware) tombe dans la journée comptable `work_date` de `node` : de l'heure
+    de clôture du jour D (incluse) à celle du jour D+1 (exclue).
     """
-    return {f'{field}__date': work_date}
+    start, end = business_day_bounds(node, work_date)
+    return {f'{field}__gte': start, f'{field}__lt': end}
 
 
 def workday_bounds(node, work_date):
+    """Alias historique de `business_day_bounds` (début inclus, fin exclue)."""
+    return business_day_bounds(node, work_date)
+
+
+def instant_in_business_day(node, work_date, now=None):
     """
-    (début, fin) de la PÉRIODE DE SERVICE de date `work_date` : début inclus
-    (relève de `work_date`), fin exclue (relève de `work_date` + 1 jour).
-    Datetimes aware, fuseau local du projet. Invariant :
-    business_date(node, t) == work_date  <=>  début <= t < fin.
+    Instant (aware) de la journée comptable `work_date` situé au MÊME décalage
+    depuis le début de journée que `now` dans la journée courante. Sert aux
+    ventes rétroactives sans heure explicite : `delivered_at` doit tomber dans
+    la journée demandée (jamais `date + heure courante`, qui peut tomber dans
+    la journée voisine).
     """
-    start = _at(work_date, node.handover_time)
-    end = _at(work_date + timedelta(days=1), node.handover_time)
-    return start, end
+    local = _local_instant(now)
+    offset = local - business_day_bounds(node, business_day_for(node, local))[0]
+    return business_day_bounds(node, work_date)[0] + offset
 
 
 def shift_period_start(node, instant=None):
@@ -121,9 +161,9 @@ def shift_period_start(node, instant=None):
 def next_handover(node, instant=None):
     """Prochain instant de relève strictement postérieur à `instant` (aware, local)."""
     local = _local_instant(instant)
-    candidate = _at(local.date(), node.handover_time)
+    candidate = _at(local.date(), closure_time_for(node))
     if candidate <= local:
-        candidate = _at(local.date() + timedelta(days=1), node.handover_time)
+        candidate = _at(local.date() + timedelta(days=1), closure_time_for(node))
     return candidate
 
 
@@ -161,21 +201,14 @@ def team_for_work_date(node, work_date):
     )
 
 
-def team_at_day_start(node, calendar_date):
+def team_at_day_start(node, work_date):
     """
-    Équipe de service à 00:00 du jour calendaire `calendar_date` : celle de la
-    période démarrée la veille si la relève est après minuit, sinon celle de
-    la période démarrée ce jour-là (relève à 00:00). `None` sans désignation.
-    C'est l'équipe qui porte le « reste du hier » du rapport journalier.
+    Équipe de service au DÉBUT de la journée comptable `work_date` (midi à midi,
+    BUG-1130) : celle de la période de service qui démarre à l'heure de clôture
+    de ce jour. `None` sans désignation. C'est l'équipe qui porte le « reste
+    d'hier » du rapport journalier.
     """
-    if node.handover_time == datetime.min.time():
-        return team_for_work_date(node, calendar_date)
-    # Période démarrée la veille ; à défaut (pas de désignation à cette date,
-    # ex. première mise en rotation), équipe de la première période du jour.
-    return (
-        team_for_work_date(node, calendar_date - timedelta(days=1))
-        or team_for_work_date(node, calendar_date)
-    )
+    return team_for_work_date(node, work_date)
 
 
 def suggested_team(node, instant=None):

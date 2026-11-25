@@ -47,7 +47,7 @@ class ReceiptUniqueTests(TestCase):
         return Invoice.objects.get(pk=r.data['id']).receipt_number
 
     def test_backdated_then_today_are_unique_and_prefix_follows_invoice_date(self):
-        with _now(10):
+        with _now(13):
             past = self._sale(invoice_date=str(PREV))
             today = self._sale()
             past2 = self._sale(invoice_date=str(PREV))
@@ -60,14 +60,14 @@ class ReceiptUniqueTests(TestCase):
         self.assertEqual(len(numbers), len(set(numbers)))
 
     def test_today_then_backdated_unique(self):
-        with _now(10):
+        with _now(13):
             today = self._sale()
             past = self._sale(invoice_date=str(PREV))
         self.assertEqual((today, past), ('V7-20261112-0001', 'V7-20261111-0001'))
 
     def test_legacy_duplicate_prefix_is_skipped(self):
         """Un numéro déjà émis (ancien préfixe incohérent) n'est jamais réutilisé."""
-        with _now(10):
+        with _now(13):
             Invoice.objects.create(
                 node=self.node, client=self.cl, facturier=self.fact, team='A', payment_type='CASH',
                 payment_amount=0, order_total=0, node_origin='V7',
@@ -76,6 +76,6 @@ class ReceiptUniqueTests(TestCase):
         self.assertEqual(number, 'V7-20261112-0002')
 
     def test_format_unchanged_and_default_date(self):
-        with _now(10):
+        with _now(13):
             self.assertEqual(_make_receipt_number('V7', D), 'V7-20261112-0001')
             self.assertEqual(_make_receipt_number('V7'), 'V7-20261112-0001')

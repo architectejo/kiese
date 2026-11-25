@@ -32,7 +32,7 @@ export interface ClosureModalProps {
   rotationEnabled: boolean;
   /** Reporte la boîte (la bannière de blocage reste affichée). */
   onLater: () => void;
-  /** Saisie envoyée : la boîte se ferme jusqu'à la validation par la direction. */
+  /** Saisie envoyée : la boîte se ferme jusqu'à la validation par la direction ou le comptable. */
   onDone: () => void;
 }
 
@@ -150,7 +150,7 @@ export const ClosureModal: React.FC<ClosureModalProps> = ({ closureDate, closure
     >
       <p style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '0.8rem', lineHeight: 1.4, color: 'hsl(var(--text-secondary))', marginBottom: '12px' }}>
         <FiLock style={{ flexShrink: 0, marginTop: '2px' }} />
-        <span>Les ventes sont bloquées jusqu'à la validation de la clôture par la direction. Laissez vide ce qui ne concerne pas votre journée. Le reste de la journée (un seul par catégorie, pas par équipe) se déclare à la clôture de la fournée ; à défaut, il est repris automatiquement du stock physique.</span>
+        <span>Les ventes sont bloquées jusqu'à la validation de la clôture par la direction ou le comptable. Laissez vide ce qui ne concerne pas votre journée. Le reste de la journée (un seul par catégorie, pas par équipe) se déclare à la clôture de la fournée ; à défaut, il est repris automatiquement du stock physique.</span>
       </p>
 
       {loading && <p role="status" style={{ fontSize: '0.85rem' }}>Chargement...</p>}

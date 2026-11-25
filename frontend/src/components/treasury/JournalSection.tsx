@@ -5,6 +5,7 @@ import type { JournalEntry, SuggestedCa } from '@/api/services';
 import { treasuryErrorMessage } from '@/components/treasury/treasuryRules';
 import { PAGE_SIZE, progressLabel, fmt } from '@/components/treasury/treasuryShared';
 import { useAuthStore } from '@/store/authStore';
+import { workDateMonthYear } from '@/store/workDateStore';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
 
 const JOURNAL_IMPUT = [
@@ -34,8 +35,9 @@ interface Props {
 export const JournalSection: React.FC<Props> = ({ today, nodeFilter, isHq, canWriteTreasury }) => {
   const { user } = useAuthStore();
   const nodeParam: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
-  const [journalMonth, setJournalMonth] = useState(() => new Date().getMonth() + 1);
-  const [journalYear, setJournalYear]   = useState(() => new Date().getFullYear());
+  // BUG-1134 : mois/année par défaut = ceux de la journée de travail du serveur (midi à midi).
+  const [journalMonth, setJournalMonth] = useState(() => workDateMonthYear(today).month);
+  const [journalYear, setJournalYear]   = useState(() => workDateMonthYear(today).year);
   const [journalReport, setJournalReport] = useState<{
     month_carried: string; total_entries: string; total_exits: string; final_balance: string;
   } | null>(null);

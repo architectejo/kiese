@@ -52,7 +52,7 @@ class ClosureDateRejectedWhenBackdatedSalesDisabledTests(TestCase):
 
         self.api_gerant = _api_for(self.gerant)
         self.api_hq = _api_for(self.hq)
-        self.yesterday = date.today() - timedelta(days=1)
+        self.yesterday = date.today() - timedelta(days=2)  # BUG-1130 : la veille (journee terminee) est desormais acceptee ; le refus s'applique des l'avant-veille
 
     def test_gerant_cannot_close_a_past_date_when_setting_disabled(self):
         resp = self.api_gerant.post('/api/treasury/closures/', {

@@ -77,7 +77,7 @@ export const ClotureOperations: React.FC = () => {
   // BUG-231 / BUG-200 : confirmer, infirmer et inscrire au Livre de Caisse = siège (COMPTABLE/DIRECTION/ADMIN) ;
   // jamais le gérant. Le serveur reste l'autorité (403 affiché).
   const canConfirm = canConfirmClosures(user);
-  const canViewVersementReadOnly = !!user && ['ADMIN', 'DIRECTION'].includes(user.role);
+  const canViewVersementReadOnly = !!user && ['ADMIN', 'DIRECTION', 'COMPTABLE'].includes(user.role);
   const nodeParam: Record<string, string> = nodeFilter ? { node: nodeFilter } : {};
 
   const reportsQ = useProgressiveList<FacturierReport>({
@@ -575,9 +575,9 @@ export const ClotureOperations: React.FC = () => {
           />
         )}
 
-        {/* remarque.md : la section « Versement » est aussi visible par la direction centrale (ADMIN, DIRECTION),
-            en lecture seule, par boulangerie (filtre de succursale). Le COMPTABLE n'y est pas ajouté : un retour
-            précédent l'en avait retiré (à confirmer, voir rapport). Saisie réservée au gérant (formulaire ci-dessus). */}
+        {/* remarque.md : la section « Versement » est aussi visible par la direction centrale et le comptable (ADMIN, DIRECTION, COMPTABLE),
+            en lecture seule, par boulangerie (filtre de succursale). Décision client 2026-11-24 : le COMPTABLE valide aussi
+            la clôture (BUG-1126). Saisie réservée au gérant (formulaire ci-dessus). */}
         {canViewVersementReadOnly && (
           <ClosureVersementReadOnly
             nodeFilter={nodeFilter}

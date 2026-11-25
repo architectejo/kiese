@@ -430,20 +430,20 @@ class ObservationsTests(_Base):
 
     def test_snapshot_chain_next_day_opening_and_stale_remaining(self):
         # J1 : reste 30 ; J2 : vendu sans reste -> instantané 0 ; J3 : pas de reste périmé
-        with at(D1):
+        with at(D1, 13):  # BUG-1130 : 11:00 serait la journee comptable precedente
             s1 = self.sacs('1.00', d=D1)
             self.sell([(self.bp5, 100)])
             self.close(s1, [(self.bp5, 30)])
         snap1 = DailyBreadStockSnapshot.objects.get(node=self.node, bread_price=self.bp5, date=D1)
         self.assertEqual(snap1.qty_at_close, 30)
-        with at(D2):
+        with at(D2, 13):  # BUG-1130 : 11:00 serait la journee comptable precedente
             s2 = self.sacs('1.00', d=D2)
             self.sell([(self.bp5, 50)])
             self.close(s2, [(self.bp5, 10)])
             c = self.cat(self.by_date(D2), self.bp5)
             # R1 : reste d'hier = dernier reste déclaré (30) -> 50 + 10 - 30 = 30
             self.assertEqual(c['produced_total'], 30)
-        with at(D3):
+        with at(D3, 13):  # BUG-1130 : 11:00 serait la journee comptable precedente
             s3 = self.sacs('1.00', d=D3)
             self.sell([(self.bp5, 20), (self.bp10, 4)])
             self.close(s3, [])
@@ -569,7 +569,7 @@ class ClotureForceeTests(_Base):
             return (api or self.g).get('/api/production/sessions/shift-end-status/', {'node': 'K1'})
 
     def test_forced_closure_auto_batch_capped_at_zero(self):
-        with at(D1, 9):
+        with at(D1, 12, 10):  # BUG-1130 : 09:00 serait la journee comptable precedente
             sid = self.sacs('1.00', d=D1)
             self.sell([(self.bp5, 10)])
         stock = BreadStock.objects.get(node=self.node, bread_price=self.bp5)
@@ -587,7 +587,7 @@ class ClotureForceeTests(_Base):
         self.assertFalse(SystemNotification.objects.filter(title__startswith='Stock de pain négatif').exists())
 
     def test_pending_validation_suggests_zero_for_auto_negative_for_classic(self):
-        with at(D1, 9):
+        with at(D1, 12, 10):  # BUG-1130 : 09:00 serait la journee comptable precedente
             sid = self.sacs('1.00', d=D1)
             self.sell([(self.bp5, 10)])
         r = self._status(13, 10)  # 10 min : dans le délai de grâce
@@ -598,7 +598,7 @@ class ClotureForceeTests(_Base):
         # fournée classique (BUG-158) : valeur réelle négative conservée
         ProductionSession.objects.filter(pk=sid).delete()
         BreadStock.objects.all().update(qty_produced=0)
-        with at(D1, 9):
+        with at(D1, 12, 10):  # BUG-1130 : 09:00 serait la journee comptable precedente
             c = self.g.post('/api/production/sessions/', {
                 'team': 'A', 'date': str(D1), 'flour_sacks_used': '1.00',
                 'lines': [{'bread_price': self.bp5.pk, 'quantity': 2}]}, format='json')
@@ -610,7 +610,7 @@ class ClotureForceeTests(_Base):
     def test_forced_closure_with_confirmed_opening_balances_out(self):
         _adjust_bread_stock(self.node, self.bp5, produced=30)
         self.confirm_opening([(self.bp5, 30)], d=D1)
-        with at(D1, 9):
+        with at(D1, 12, 10):  # BUG-1130 : 09:00 serait la journee comptable precedente
             sid = self.sacs('1.00', d=D1)
             self.sell([(self.bp5, 10)])
         r = self._status(14)
@@ -622,7 +622,7 @@ class ClotureForceeTests(_Base):
 
     def test_next_morning_proposal_reuses_declared_remaining(self):
         """Hors rotation, `qty_proposed` du lendemain doit reprendre le reste du jour déclaré."""
-        with at(D1, 9):
+        with at(D1, 12, 10):  # BUG-1130 : 09:00 serait la journee comptable precedente
             sid = self.sacs('1.00', d=D1)
             self.sell([(self.bp5, 100)])
             self.close(sid, [(self.bp5, 30)])

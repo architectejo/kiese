@@ -20,7 +20,7 @@ D = date(2026, 12, 1)           # lendemain d'une fin de mois
 EOM = date(2026, 11, 30)
 
 
-def _now(h=10, d=D):
+def _now(h=13, d=D):
     aware = timezone.make_aware(datetime(d.year, d.month, d.day, h, 0), timezone.get_current_timezone())
     return patch('django.utils.timezone.now', return_value=aware.astimezone(dt_timezone.utc))
 

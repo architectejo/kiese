@@ -123,7 +123,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
       isOpen={true}
       onClose={() => { if (dismissible) onClose(); }}
       title={assignment.team === null ? 'Équipe de service' : "Changer l'équipe de service"}
-      subtitle={`Service du ${formatWorkDate(assignment.shift_date ?? assignment.work_date)} (relève de ${formatHandover(assignment.handover_time)})`}
+      subtitle={`Service du ${formatWorkDate(assignment.shift_date ?? assignment.work_date)} (clôture à ${formatHandover(assignment.handover_time)})`}
       maxWidth="460px"
       closeOnBackdropClick={dismissible}
       showCloseButton={dismissible}
@@ -153,7 +153,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
     >
       <p style={{ fontSize: '0.85rem', lineHeight: 1.45, color: 'hsl(var(--text-primary))', marginBottom: '14px' }}>
         {assignment.team === null
-          ? "Choisissez l'équipe qui assure le service jusqu'à la prochaine relève. La facturation reste bloquée tant que l'équipe n'est pas désignée."
+          ? "Choisissez l'équipe qui assure le service jusqu'à la prochaine clôture. La facturation reste bloquée tant que l'équipe n'est pas désignée."
           : `Équipe actuellement désignée : ${assignment.team}. Utilisez ce choix pour corriger une erreur de désignation.`}
       </p>
 
@@ -167,7 +167,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
 
       <p style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'hsl(var(--text-secondary))', marginTop: '8px' }}>
         <FiClock />
-        Relève des équipes à {formatHandover(assignment.handover_time)} chaque jour (la date, elle, change à minuit).
+        Heure de clôture : {formatHandover(assignment.handover_time)} chaque jour (la journée va de midi à midi).
       </p>
 
       {blockedMessage && (

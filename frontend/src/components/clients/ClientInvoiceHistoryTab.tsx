@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Invoice } from '@/api/services';
+import { getWorkDate, workDateMonthYear } from '@/store/workDateStore';
 
 interface ClientInvoiceHistoryTabProps {
   clientInvoices: Invoice[];
@@ -18,8 +19,9 @@ export const ClientInvoiceHistoryTab: React.FC<ClientInvoiceHistoryTabProps> = (
   canAdjustInvoice, openAdjustModal,
 }) => {
                 const MOIS_FR = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-                const now = new Date();
-                const isCurrentMonth = historyYear === now.getFullYear() && historyMonth === now.getMonth() + 1;
+                // BUG-1134 : mois courant = mois de la journée de travail du serveur.
+                const current = workDateMonthYear(getWorkDate());
+                const isCurrentMonth = historyYear === current.year && historyMonth === current.month;
                 const goToPrev = () => {
                   if (historyMonth === 1) { setHistoryMonth(12); setHistoryYear(y => y - 1); }
                   else setHistoryMonth(m => m - 1);

@@ -40,3 +40,22 @@
 ## Q-027 (BUG-411, BUG-253) : quels écrans pour le livreur ?
 
 **Réponse : Les mêmes que le facturier
+## Q-017 : toutes les boulangeries passent-elles en rotation de 24 h ?
+
+**Réponse : Oui, maintenant, pour toutes les boulangeries ; heure par défaut 12h00.**
+
+## Q-018 : la « journée » (clôture, rapport, versement) va de minuit à minuit ou de midi à midi ?
+
+**Réponse : de midi à midi (l'heure de clôture).**
+
+## Q-019 : à l'heure de clôture, bloquer la facturation tout de suite ou après un délai ?
+
+**Réponse : bloquer la facturation tout de suite.**
+
+## Q-020 : qui peut débloquer les ventes en validant le versement ?
+
+**Réponse : la direction et aussi le comptable.**
+
+## Q-021 : si personne n'est connecté à l'heure de clôture, avertir la direction ?
+
+**Réponse : Oui.**

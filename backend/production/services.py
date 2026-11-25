@@ -370,14 +370,14 @@ def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_s
         clôture (`block_sales_after_closure`, l'interrupteur par boulangerie de
         BUG-973), sinon l'heure de relève par défaut (12:00) clôturerait des
         boulangeries qui ne l'ont pas configurée (`require_switch=False` pour passer outre) ;
-      - jour courant : seules les fournées créées avant l'heure de clôture sont
-        concernées (une fournée de l'équipe entrante après la relève ne l'est pas).
+      - BUG-1130 : la journée `day` (midi à midi) se termine à l'heure de clôture du
+        lendemain ; toutes ses fournées ouvertes sont alors concernées.
     Retourne `{'due': bool, 'closed': [pk], 'skipped': [{'session','team','reason'}]}`.
     """
     from datetime import timedelta
     from sales.models import Invoice
     from core.utils import log_activity
-    from core.workday import _at, _local_instant
+    from core.workday import business_day_bounds, work_date_for as _work_date_for, _local_instant
     from .views import (  # import local : views importe ce module
         SHIFT_END_GRACE_MINUTES, _close_production_session, _current_bread_stocks, _suggested_qty,
     )
@@ -388,9 +388,11 @@ def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_s
     if require_switch and not node.block_sales_after_closure:
         return result
     local_now = _local_instant(now)
-    if day > local_now.date():
+    # BUG-1130 (journée de midi à midi) : la journée `day` se termine à l'heure de
+    # clôture du lendemain ; ce n'est qu'alors que ses fournées ouvertes sont dues.
+    if day > _work_date_for(node, local_now):
         return result
-    closure_at = _at(day, node.handover_time)
+    closure_at = business_day_bounds(node, day)[1]
     grace = SHIFT_END_GRACE_MINUTES if grace_minutes is None else grace_minutes
     if local_now < closure_at + timedelta(minutes=grace):
         return result
@@ -399,8 +401,6 @@ def auto_close_day(node, day, now=None, user=None, grace_minutes=None, require_s
     candidates = list(
         ProductionSession.objects.filter(node=node, date=day, is_closed=False).order_by('team', 'created_at')
     )
-    if day == local_now.date():
-        candidates = [s for s in candidates if s.created_at <= closure_at]
     if not candidates:
         return result
 
@@ -524,11 +524,86 @@ def is_day_auto_closed(node, day):
 
 def auto_close_due_days(node, now=None, user=None, **kwargs):
     """Applique `auto_close_day` à chaque jour (<= aujourd'hui) ayant encore une fournée ouverte."""
-    from core.workday import _local_instant
+    from core.workday import work_date_for as _work_date_for
 
-    today = _local_instant(now).date()
+    today = _work_date_for(node, now)  # BUG-1130 : journée comptable de midi à midi
     days = sorted(set(
         ProductionSession.objects.filter(node=node, is_closed=False, date__lte=today)
         .values_list('date', flat=True)
     ))
     return {d: auto_close_day(node, d, now=now, user=user, **kwargs) for d in days}
+
+
+# ---------------------------------------------------------------------------
+# Q-021 (réponse client 2026-11-24) : personne à l'heure de clôture -> direction avertie
+# ---------------------------------------------------------------------------
+
+UNATTENDED_CLOSURE_TITLE = "Clôture sans personne connectée"
+UNATTENDED_CLOSURE_ACTION = "Alerte clôture sans personne connectée"
+
+
+def _node_staff_present_since(node, since):
+    """Vrai si un agent de la boulangerie (rôle non-siège) a été actif depuis `since` :
+    action journalisée ou connexion (`last_login`)."""
+    from core.models import ActivityLog, User
+
+    if ActivityLog.objects.filter(user__node=node, created_at__gte=since).exists():
+        return True
+    return User.objects.filter(node=node, is_active=True, last_login__gte=since).exists()
+
+
+def notify_direction_if_unattended_closure(node, now=None):
+    """
+    Q-021 : à l'heure de clôture (`Node.handover_time`, rotation de 24 h), si personne de la
+    boulangerie n'a été actif depuis cet instant et que la clôture de la période écoulée n'est pas
+    validée, la direction ET le comptable (rôles siège) reçoivent UNE notification
+    (`create_notification`, visible de tout le siège puisque filtrée par `node_origin`).
+
+    IDEMPOTENTE : une seule notification par boulangerie et par période (clé = instant de
+    clôture), même lue ou supprimée du côté lu ; aucun doublon quels que soient le nombre
+    d'appels, la commande `auto_close_sessions` et `shift-end-status` partageant cette fonction.
+    Sans effet : nœud SIEGE/inactif/hors rotation, heure non atteinte, clôture déjà validée.
+    Retourne la notification créée ou `None`.
+    """
+    from datetime import date
+    from core.models import SystemNotification
+    from core.utils import create_notification, log_activity
+    from core.workday import shift_period_start, _local_instant
+    from treasury.closure_lock import closure_status
+    from treasury.models import CashClosure
+
+    if node is None or getattr(node, 'code', None) == 'SIEGE' or not node.is_active:
+        return None
+    if not node.team_rotation_enabled:
+        return None
+    local_now = _local_instant(now)
+    closure_at = shift_period_start(node, local_now)  # dernier instant de clôture/relève atteint
+    if local_now < closure_at:
+        return None
+    # Journée comptable qui vient de s'achever = celle dont la direction doit valider la clôture
+    # (même source que le verrou de vente, `closure_lock.closure_status`, BUG-973/BUG-1130).
+    ended_day = date.fromisoformat(closure_status(node, closure_at)['closure_date'])
+    if CashClosure.objects.filter(node=node, date=ended_day, is_validated=True).exists():
+        return None
+    if _node_staff_present_since(node, closure_at):
+        return None
+
+    title = f"{UNATTENDED_CLOSURE_TITLE} — {node.code} {closure_at.strftime('%Y-%m-%d %H:%M')}"
+    with transaction.atomic():
+        if SystemNotification.objects.filter(title=title, node_origin=node.code).exists():
+            return None
+        notification = create_notification(
+            title=title,
+            message=(
+                f"{node.code} : l'heure de clôture ({closure_at.strftime('%H:%M')}) est passée et personne de la "
+                f"boulangerie n'est connecté ni actif. La clôture du {ended_day} et la relève des équipes "
+                "attendent la boulangerie ; la direction et le comptable valident ensuite la clôture."
+            ),
+            severity='WARNING', node_origin=node.code,
+        )
+        log_activity(
+            None, UNATTENDED_CLOSURE_ACTION,
+            f"{node.code} : clôture de {closure_at.strftime('%H:%M')} ({ended_day}) sans personne connectée, direction avertie.",
+            node_origin=node.code,
+        )
+    return notification

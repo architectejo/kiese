@@ -1,9 +1,10 @@
 """
-BUG-247 (décision client 2026-11-12, remplace « journée de travail de relève à
-relève » de BUG-161) : le Rapport Journalier suit le JOUR CALENDAIRE (minuit à
-minuit, heure locale du nœud), même en rotation d'équipes. UN SEUL rapport par
-boulangerie et par date, partagé par les deux équipes ; la relève ne change que
-l'équipe de service.
+BUG-247 (décision client 2026-11-12) puis BUG-1130 (décision client Q-018 du
+2026-11-24, qui la REMPLACE) : le Rapport Journalier suit la JOURNÉE COMPTABLE de
+midi à midi (heure de clôture du nœud, 12:00 par défaut), plus le jour calendaire.
+UN SEUL rapport par boulangerie et par date de journée ; une vente à 03:00 est de
+la journée de la veille ; minuit ne change rien (ni date, ni équipe, ni clôture).
+Tests de datation et de passage de minuit adaptés en BUG-1130.
 """
 from datetime import date, datetime, time, timedelta
 from datetime import timezone as dt_timezone
@@ -97,8 +98,9 @@ class OneReportPerCalendarDayTests(_Base):
         # Production des DEUX équipes dans le même rapport.
         self.assertEqual(row['produit']['quantity'], 15)
         self.assertEqual(r.data['date'], '2026-11-12')
-        # Début de journée porté par l'équipe en service à minuit (A), une seule fois.
-        self.assertEqual(row['reste_du_hier'], {'A': -7, 'B': 0})
+        # Début de journée porté par l'équipe en service au début de la journée (BUG-1130 :
+        # midi, relève du 12/11 = équipe B ; avant, à minuit : A), une seule fois.
+        self.assertEqual(row['reste_du_hier'], {'A': 0, 'B': -7})
         # Fin de journée = dernier reste déclaré (B), pas la somme A + B ; le reste de
         # A à la relève est le départ de B (transfert interne, jamais additionné).
         self.assertEqual(row['reste_du_jour'], {'A': 3, 'B': 4})
@@ -112,8 +114,9 @@ class OneReportPerCalendarDayTests(_Base):
         DailyOpeningConfirmationLine.objects.create(confirmation=c, bread_price=self.bp, qty_confirmed=9)
         report = _build_daily_closure_report(self.node, D)
         row = next(c for c in report['categories'] if c['bread_price'] == self.bp.pk)
-        # L'écart constaté par B (9 trouvés, 7 déclarés par A) est porté au départ de journée.
-        self.assertEqual(row['reste_du_hier'], {'A': -9, 'B': 0})
+        # L'écart constaté par B (9 trouvés, 7 déclarés par A) est porté au départ de journée
+        # (BUG-1130 : la journée du 12/11 démarre à 12:00 avec l'équipe B).
+        self.assertEqual(row['reste_du_hier'], {'A': 0, 'B': -9})
 
     def test_node_without_rotation_keeps_per_team_sum(self):
         # CHANGEMENT DE SPECIFICATION VOULU (client, 2026-11-24, remarque.md
@@ -136,53 +139,60 @@ class OneReportPerCalendarDayTests(_Base):
 
 
 class CalendarDatingTests(_Base):
-    def test_sale_at_03_00_is_dated_calendar_day(self):
+    """Nom de classe conservé pour la traçabilité (BUG-247) ; règle BUG-1130 : midi à midi."""
+
+    def test_sale_at_03_00_is_dated_previous_business_day(self):
         with _now(3, 0):
             inv = self._sale()
-        self.assertEqual(inv.invoice_date, D)
+        self.assertEqual(inv.invoice_date, PREV)  # BUG-1130 : 03:00 = journée de la veille
         self.assertEqual(inv.team, 'A')  # équipe de la période démarrée le 11/11
 
-    def test_team_change_at_noon_keeps_the_report_date(self):
+    def test_team_and_report_date_change_together_at_noon(self):
         with _now(11, 59):
             before = self._sale()
         with _now(12, 0):
             after = self._sale()
-        self.assertEqual((before.invoice_date, before.team), (D, 'A'))
+        self.assertEqual((before.invoice_date, before.team), (PREV, 'A'))
         self.assertEqual((after.invoice_date, after.team), (D, 'B'))
-        self.assertEqual(before.receipt_number[:12], after.receipt_number[:12])
+        self.assertNotEqual(before.receipt_number[:12], after.receipt_number[:12])
 
     def test_window_midnight_to_one_o_clock_local_date(self):
-        # 00:30 locale = 23:30 UTC la veille : jour calendaire LOCAL.
+        # 00:30 locale = 23:30 UTC la veille : jamais la date UTC ; journée comptable du 11/11.
         with _now(0, 30):
             inv = self._sale()
-        self.assertEqual(inv.invoice_date, D)
+        self.assertEqual(inv.invoice_date, PREV)
         self.assertEqual(inv.team, 'A')
 
-    def test_sales_of_both_teams_land_in_one_report(self):
-        with _now(3, 0):
+    def test_sales_across_midnight_land_in_one_report(self):
+        # BUG-1130 : une vente à 13:00 et une vente à 03:00 le lendemain sont dans le même rapport.
+        with _now(13, 0, PREV):
             a = self._sale(qty=2)
-        with _now(13, 0):
+        with _now(3, 0):
             b = self._sale(qty=3)
         for inv in (a, b):
             Invoice.objects.filter(pk=inv.pk).update(status=Invoice.Status.DELIVERED, delivered_at=inv.created_at)
-        report = _build_daily_closure_report(self.node, D)
+        report = _build_daily_closure_report(self.node, PREV)
         row = next(c for c in report['categories'] if c['bread_price'] == self.bp.pk)
         self.assertEqual(row['facture_jr']['quantity'], 5)
         self.assertEqual(row['facture_jr']['fc'], '2500.00')
 
 
 class SingleReportAcrossMidnightTests(_Base):
-    def test_midnight_closes_one_day_and_continues_team_on_next_date(self):
+    def test_midnight_closes_nothing_handover_closes_the_day(self):
+        # BUG-1130 : plus de clôture silencieuse à minuit ; la journée (et la fournée) se
+        # termine à l'heure de clôture (relève de 12:00).
         s = self._session('A', 10, _at(PREV, 14), closed=False)
         ProductionSession.objects.filter(pk=s.pk).update(date=PREV)
         BreadStock.objects.filter(node=self.node).delete()
         BreadStock.objects.create(node=self.node, bread_price=self.bp, qty_produced=10, qty_disposed=4)
         with _now(0, 10):
             r = self.api.get(SHIFT, {'node': 'K1'})
+        self.assertFalse(r.data.get('auto_closed'))
+        self.assertTrue(ProductionSession.objects.filter(pk=s.pk, is_closed=False).exists())
+        self.assertFalse(DailyBreadStockSnapshot.objects.filter(node=self.node, date=PREV, team='A').exists())
+        # Après la relève et le délai de grâce : clôture forcée, reste du jour enregistré.
+        with _now(12, 40):
+            r = self.api.get(SHIFT, {'node': 'K1'})
         self.assertTrue(r.data['auto_closed'])
-        self.assertEqual(r.data['work_date'], '2026-11-11')
-        # Snapshot du jour écoulé + session de continuation sur la nouvelle date, même équipe.
         self.assertEqual(
             DailyBreadStockSnapshot.objects.get(node=self.node, date=PREV, team='A').qty_at_close, 6)
-        self.assertTrue(ProductionSession.objects.filter(node=self.node, team='A', date=D, is_closed=False).exists())
-        self.assertEqual(ProductionSession.objects.filter(node=self.node, date=PREV, is_closed=False).count(), 0)

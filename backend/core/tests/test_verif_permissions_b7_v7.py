@@ -36,7 +36,7 @@ class V891(b5.B5):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.k3 = Node.objects.create(code='PR8', name='Perm K3')
+        cls.k3 = Node.objects.create(code='PR8', name='Perm K3', team_rotation_enabled=False)
         _, cls.raw3 = NodeAuthToken.issue_for_node(cls.k3)
 
     def _create(self, raw, src, dst, status, **kw):

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { treasuryApi, LocalExpense } from '@/api/services';
 import { Modal } from '@/components/shared/Modal';
+import { getWorkDate, workDateMonthYear } from '@/store/workDateStore';
 import { useProgressiveList } from '@/hooks/useProgressiveList';
 import { PAGE_SIZE, progressLabel, fmt } from '@/components/treasury/treasuryShared';
 
@@ -16,8 +17,9 @@ interface Props {
 
 /** §5.1.2 — Historique mensuel des Dépenses Locales, jour par jour (modale). */
 export const ExpenseHistoryModal: React.FC<Props> = ({ isOpen, onClose, nodeFilter, subtitle, showNode }) => {
-  const [expenseHistoryMonth, setExpenseHistoryMonth] = useState(() => new Date().getMonth() + 1);
-  const [expenseHistoryYear, setExpenseHistoryYear] = useState(() => new Date().getFullYear());
+  // BUG-1134 : mois/année par défaut = ceux de la journée de travail du serveur (midi à midi).
+  const [expenseHistoryMonth, setExpenseHistoryMonth] = useState(() => workDateMonthYear(getWorkDate()).month);
+  const [expenseHistoryYear, setExpenseHistoryYear] = useState(() => workDateMonthYear(getWorkDate()).year);
   const expenseHistoryQ = useProgressiveList<LocalExpense>({
     fetchPage: p => treasuryApi.expenses.page({
       month: String(expenseHistoryMonth), year: String(expenseHistoryYear),

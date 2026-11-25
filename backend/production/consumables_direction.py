@@ -299,7 +299,8 @@ class ConsumableInventoryViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'], url_path='today')
     def today(self, request):
-        today = timezone.localdate()
+        from core.workday import work_date_for
+        today = work_date_for(request.user.node if request.user.node_id else None)  # BUG-1130
         inv = self._base_qs(request).filter(inventory_date=today).first()
         return Response({'date': today.isoformat(), 'done': inv is not None,
                          'inventory': serialize_inventory(inv) if inv else None})
@@ -357,7 +358,8 @@ class ConsumableInventoryViewSet(viewsets.ViewSet):
                 return err(e)
             parsed.append((code, qty, str(ln.get('notes') or '').strip()[:500]))
 
-        today = timezone.localdate()
+        from core.workday import work_date_for
+        today = work_date_for(node)  # BUG-1130 : journée comptable (midi à midi)
         already = ("L'inventaire physique du jour a déjà été saisi : il n'est plus modifiable "
                    "aujourd'hui (seul le commentaire peut être ajouté). Nouvelle saisie demain.")
         try:

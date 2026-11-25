@@ -32,9 +32,9 @@ class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.siege, _ = Node.objects.get_or_create(code='SIEGE', defaults={'name': 'Siege', 'is_active': False})
-        cls.p1 = Node.objects.create(code='Q1', name='Fictive 1')
-        cls.p2 = Node.objects.create(code='Q2', name='Fictive 2')
-        cls.p9 = Node.objects.create(code='Q9', name='Fictive inactive', is_active=False)
+        cls.p1 = Node.objects.create(code='Q1', name='Fictive 1', team_rotation_enabled=False)
+        cls.p2 = Node.objects.create(code='Q2', name='Fictive 2', team_rotation_enabled=False)
+        cls.p9 = Node.objects.create(code='Q9', name='Fictive inactive', is_active=False, team_rotation_enabled=False)
         Node.objects.exclude(code__in=['SIEGE', 'Q1', 'Q2', 'Q9']).update(is_active=False)  # noeuds semes
         cls.u = {
             'ADMIN': mk('i3_admin', 'ADMIN'), 'DIRECTION': mk('i3_dir', 'DIRECTION'),

@@ -304,7 +304,7 @@ class V874(B5):
         self.assertIsNone(line.quantity_received)
 
     def test_troisieme_noeud_ne_touche_pas_au_transfert(self):
-        k3 = Node.objects.create(code='P3', name='Perm K3')
+        k3 = Node.objects.create(code='P3', name='Perm K3', team_rotation_enabled=False)
         _, raw3 = NodeAuthToken.issue_for_node(k3)
         t = self.transfer('RESPONDED')
         self.push(raw3, 'production.BreadTransfer', {'id': str(t.pk), 'transfer_status': 'CONFIRMED',
