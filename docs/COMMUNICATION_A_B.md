@@ -999,3 +999,24 @@ Les 4 premiers sont des tests périmés par la décision livreur = facturier (Q-
 7. **Hors périmètre** (inchangé) : desktop, documentation de livraison ; E2E Playwright et matériel par un humain.
 
 **Statut :** INFO
+
+### #51-A — 2026-11-25 — A → B (copie C) — Ordre du responsable : une série de tests chacun, rapports `rapport-dev-a.md` et `rapport-dev-b.md`
+
+**Ordre du responsable** : dev-a et dev-b font chacun une série de tests de leur côté et rédigent un rapport : `docs/qa/rapports/rapport-dev-a.md` (A) et `docs/qa/rapports/rapport-dev-b.md` (B). **Accès au navigateur (Chrome) autorisé.** Toujours uniquement avec les agents `dev-backend` / `dev-frontend` ; ni desktop ni documentation de livraison. Commit par chemins, jamais les captures PNG.
+
+**État de départ (dev-a, `5e12db5`)** : ta série de confirmation est relancée par A sur le code fusionné. Groupe `production` : **1 731 tests OK** (5 échecs attendus). Groupe `core clients commissions sync chat` : 28 erreurs + 2 échecs dus à un seul défaut de l'outil de test (**BUG-1302** : `kiese/testrunner.py`, `lambda` incompatible avec `SimpleRateThrottle.timer = time.time` de DRF -> 500 au login), corrigé et prouvé ; 1 échec de concurrence SQLite (« table is locked ») à rejouer seul. Groupe `sales treasury finance blockchain` : en cours. Nouveaux tickets A : **BUG-1300** (fausse alerte Q-021 quand l'appelant est un agent de la boulangerie, CORRIGÉ), **BUG-1301** (verrou de vente si la veille n'a aucune clôture, À CLARIFIER), **BUG-1302** (CORRIGÉ).
+
+**Répartition**
+
+| | dev-a | dev-b |
+|---|---|---|
+| Tests automatisés | Fin de la série complète des 3 groupes + rejeu seul des échecs (dont concurrence SQLite) ; `makemigrations --check`, `tsc`, `npm run build`, `vitest` | Vérification croisée de **BUG-1300** et **BUG-1302** (relecture + rejeu : `production.tests.test_bug1300_alerte_appelant_present_a`, `production.tests.test_dev_b_rotation_q017_021`, et les modules d'authentification `core.tests.test_bug284_password_change`, `core.tests.test_verif_permissions_b8_v8` AVANT 13:00 avec `KIESE_TEST_CLOCK_SHIFT=1`) ; puis suites `clients commissions` complètes sur `5e12db5` ou plus récent |
+| Chrome — tes tickets / mes tickets | Vérification croisée de **tes** tickets BUG-1122 à 1126, 1130, 1131, 1134 : rotation activée par défaut, libellés « Heure de clôture » / « Stock de départ du jour », bascule de la journée à midi (date de travail serveur), bannière de blocage, comptable sur « Versement » (boutons confirmer/infirmer), notification « Clôture sans personne connectée » | Vérification croisée de **mes** livraisons visibles : « Stock Pains du Jour » (stock de départ, Envoyés, Reçu, TOTAL), badge d'écart de fournée (Excédent / Équilibre / Manquant), onglet Intrants > « Statistiques » (ligne D1 en direction, sel en grammes / sacs / boîtes), modale de clôture des fournées et clôture automatique |
+| Chrome — modules | Ventes (facture, livraison, Non servi, blocage plafond, reçu), Production, Trésorerie (clôture, billetage, versement, livre de caisse) | Clients (création l.508, recherche, « Historique du client » dans les 3 thèmes l.504), Commissions (listing de paie), Finance (états N / N-1), Succursales / Paramètres, notifications |
+| Tailles | Bureau + POS 360 px (cadre `iframe` sur la même origine) | idem |
+
+**Règles communes** : instance jetable (base copiée dans ton scratchpad, ports distincts : A = 8001 / 5174, B = 8002 / 5175), jamais la base réelle ni `data_kiese/` ; comptes de test fictifs ; un défaut trouvé = ticket `BUG-NNN` (A : 1303+, B : 1140+) puis correction par l'agent `dev-backend`/`dev-frontend` avec test, vérifiée par l'autre développeur ; un ticket ne passe à `VÉRIFIÉ` que par l'autre. Pas de série qui traverse midi ou minuit sans `KIESE_TEST_CLOCK_SHIFT=1`.
+
+**Contenu attendu de chaque rapport** : version testée (commit), commandes lancées et résultat « Ran N … OK/FAILED », liste des parcours Chrome (rôle, taille, résultat OK/KO), tickets ouverts / corrigés / vérifiés, lignes de `remarque.md` cochées, points en attente du client. Pousser le rapport sur sa propre branche et annoncer la fin ici (#5x-A / #5x-B).
+
+**Statut :** ACTION (B)
